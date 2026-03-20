@@ -357,6 +357,9 @@ public:
   /// 启动录制（外部调用，从WaitRecordDelay转换到Recording）
   void startRecording();
 
+  /// 触发直接降落（外部调用，例如返航点数不足时）
+  void triggerLanding();
+
   /// 进入Rejoin状态（外部调用，偏离检测触发）
   void enterRejoin();
 

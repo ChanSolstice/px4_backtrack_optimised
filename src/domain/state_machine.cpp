@@ -134,6 +134,11 @@ void BacktrackStateMachine::startRecording() {
   }
 }
 
+void BacktrackStateMachine::triggerLanding() {
+  ROS_WARN("[StateMachine] Direct landing triggered");
+  enterState(State::LandingTransition, last_input_);
+}
+
 void BacktrackStateMachine::enterRejoin() {
   if (current_state_ == State::ReturnActive) {
     ROS_INFO("[StateMachine] Entering Rejoin mode");
@@ -349,18 +354,26 @@ void BacktrackStateMachine::tickLandingTransition(const TickInput& input) {
   current_setpoint_ = std::nullopt;
   should_publish_setpoint_ = false;
 
+  // 非OFFBOARD状态可直接请求AUTO.LAND
+  if (state_data_.landing_transition_stage == 0 && input.mode != "OFFBOARD") {
+    ROS_INFO("[StateMachine] Landing transition: requesting AUTO.LAND directly");
+    current_mode_request_ = ModeRequest::AUTO_LAND;
+    state_data_.landing_transition_stage = 2;
+    return;
+  }
+
   // 阶段0：初始化，发送POSCTL
   if (state_data_.landing_transition_stage == 0) {
     ROS_INFO("[StateMachine] Landing transition: requesting POSCTL");
     current_mode_request_ = ModeRequest::POSCTL;
-    state_data_.landing_transition_start_time = input.current_time;
+    state_data_.landing_transition_start_time = input.now;
     state_data_.landing_transition_stage = 1;
     return;
   }
 
   // 阶段1：等待1秒后发送AUTO.LAND
   if (state_data_.landing_transition_stage == 1) {
-    double elapsed = input.current_time - state_data_.landing_transition_start_time;
+    double elapsed = input.now - state_data_.landing_transition_start_time;
     if (elapsed >= 1.0) {
       ROS_INFO("[StateMachine] Landing transition: requesting AUTO.LAND");
       current_mode_request_ = ModeRequest::AUTO_LAND;

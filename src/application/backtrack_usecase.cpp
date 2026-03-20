@@ -60,7 +60,7 @@ TickOutput BacktrackUseCase::tick(double now) {
   output.should_publish_setpoint = state_machine_.shouldPublishSetpoint();
   output.mode_request = state_machine_.getModeRequest();
   output.current_state = state_machine_.getCurrentState();
-  output.rc_loss = trigger_evaluator_.checkRCLoss();
+  output.rc_loss = trigger_evaluator_.isRCLost();
 
   // 计算setpoint
   if (output.should_publish_setpoint) {
@@ -87,8 +87,6 @@ void BacktrackUseCase::onRCReceived(const std::vector<uint16_t>& channels) {
 
   // 更新最近一次收到RC消息的时间
   trigger_evaluator_.updateLastRcMsgTime(ros::Time::now().toSec());
-
-  // RC loss状态在tick()中检测并通过TickOutput发布
 }
 
 void BacktrackUseCase::onStateReceived(bool armed, const std::string& mode) {
@@ -104,6 +102,7 @@ void BacktrackUseCase::handleFlightCycleReset(bool armed) {
   // 检测DISARM
   if (!armed) {
     has_seen_disarm_ = true;
+    arm_after_disarm_detected_ = false;
   }
 
   // 检测"DISARM之后的ARM"
@@ -149,38 +148,33 @@ void BacktrackUseCase::handleRecordDelay(double now) {
 
 void BacktrackUseCase::handleTriggers(double now) {
   auto current_state = state_machine_.getCurrentState();
+  bool rc_loss_event = trigger_evaluator_.checkRCLossEvent();
 
   // 在Recording状态检测返航触发
   if (current_state == domain::State::Recording) {
-    // 检查点数是否足够
-    if (!checkMinPoints()) {
-      return;
-    }
+    bool has_min_points = checkMinPoints();
 
     // 通道7长按检测
     if (trigger_evaluator_.checkCh7LongPress()) {
-      ROS_INFO("[BacktrackUseCase] Ch7 long press detected");
-      state_machine_.lockPosition(current_position_, current_yaw_);
-      state_machine_.triggerReturn(domain::Event::Ch7LongPress);
-      trajectory_generation_requested_ = true;
+      handleReturnTrigger(domain::Event::Ch7LongPress,
+                          has_min_points,
+                          "Ch7 long press");
       return;
     }
 
     // 通道18故障确认检测
     if (trigger_evaluator_.checkCh18Failsafe()) {
-      ROS_INFO("[BacktrackUseCase] Ch18 failsafe confirmed");
-      state_machine_.lockPosition(current_position_, current_yaw_);
-      state_machine_.triggerReturn(domain::Event::Ch18FailsafeConfirmed);
-      trajectory_generation_requested_ = true;
+      handleReturnTrigger(domain::Event::Ch18FailsafeConfirmed,
+                          has_min_points,
+                          "Ch18 failsafe confirmed");
       return;
     }
 
-    // RC消息丢失检测
-    if (trigger_evaluator_.checkRCLoss()) {
-      ROS_INFO("[BacktrackUseCase] RC loss detected");
-      state_machine_.lockPosition(current_position_, current_yaw_);
-      state_machine_.triggerReturn(domain::Event::RCLossTriggered);
-      trajectory_generation_requested_ = true;
+    // RC消息丢失检测（边沿触发，仅触发一次）
+    if (rc_loss_event) {
+      handleReturnTrigger(domain::Event::RCLossTriggered,
+                          has_min_points,
+                          "RC loss");
       return;
     }
   }
@@ -201,16 +195,64 @@ void BacktrackUseCase::handleTriggers(double now) {
     }
   }
 
-  // 在Paused状态时，检测Ch7长按（恢复）
+  // 在Paused状态时，检测RC丢失和Ch7长按（恢复）
   if (current_state == domain::State::Paused) {
+    bool has_min_points = checkMinPoints();
+
+    if (rc_loss_event) {
+      if (has_min_points) {
+        ROS_WARN("[BacktrackUseCase] RC loss detected while paused, resuming return");
+        state_machine_.lockPosition(current_position_, current_yaw_);
+        state_machine_.triggerReturn(domain::Event::RCLossTriggered);
+        trajectory_session_.resumeProgress(now);
+      } else {
+        ROS_WARN("[BacktrackUseCase] RC loss detected while paused but only %zu points recorded (< %d), triggering AUTO.LAND",
+                 recording_buffer_.size(),
+                 config_.record_min_points);
+        trajectory_generation_requested_ = false;
+        trajectory_session_.reset();
+        state_machine_.triggerLanding();
+      }
+      return;
+    }
+
     if (trigger_evaluator_.checkCh7LongPress()) {
-      ROS_INFO("[BacktrackUseCase] Ch7 long press detected, resuming");
-      state_machine_.lockPosition(current_position_, current_yaw_);
-      state_machine_.triggerReturn(domain::Event::Ch7LongPress);
-      trajectory_session_.resumeProgress(now);
+      if (has_min_points) {
+        ROS_INFO("[BacktrackUseCase] Ch7 long press detected, resuming");
+        state_machine_.lockPosition(current_position_, current_yaw_);
+        state_machine_.triggerReturn(domain::Event::Ch7LongPress);
+        trajectory_session_.resumeProgress(now);
+      } else {
+        ROS_WARN("[BacktrackUseCase] Ch7 long press detected while paused but only %zu points recorded (< %d), triggering AUTO.LAND",
+                 recording_buffer_.size(),
+                 config_.record_min_points);
+        trajectory_generation_requested_ = false;
+        trajectory_session_.reset();
+        state_machine_.triggerLanding();
+      }
       return;
     }
   }
+}
+
+void BacktrackUseCase::handleReturnTrigger(domain::Event event,
+                                           bool has_min_points,
+                                           const char* trigger_name) {
+  if (has_min_points) {
+    ROS_INFO("[BacktrackUseCase] %s detected", trigger_name);
+    state_machine_.lockPosition(current_position_, current_yaw_);
+    state_machine_.triggerReturn(event);
+    trajectory_generation_requested_ = true;
+    return;
+  }
+
+  ROS_WARN("[BacktrackUseCase] %s detected but only %zu points recorded (< %d), triggering AUTO.LAND",
+           trigger_name,
+           recording_buffer_.size(),
+           config_.record_min_points);
+  trajectory_generation_requested_ = false;
+  trajectory_session_.reset();
+  state_machine_.triggerLanding();
 }
 
 void BacktrackUseCase::handleTrajectoryGeneration() {

@@ -11,8 +11,9 @@
 - 使用 `trajectory_core` 从录制点逆序生成平滑返航轨迹
 - 返航中支持偏离检测与 rejoin
 - 返航中支持暂停，再次触发后恢复
-- 返航结束后先固定点悬停，再发起 `POSCTL -> AUTO.LAND` 过渡
-- 发布内部状态与 RC 丢失相关状态，便于联调
+- 触发时若录制点数不足，自动降级为原地降落
+- 返航结束后先固定点悬停，再发起 `POSCTL -> AUTO.LAND` 过渡（非 OFFBOARD 时直接请求 `AUTO.LAND`）
+- 发布内部状态与 RC 丢失持续状态，便于联调
 
 ## 仓库现状
 
@@ -58,7 +59,7 @@
 | --- | --- | --- |
 | `/mavros/setpoint_raw/local` | `mavros_msgs/PositionTarget` | 发布悬停、返航和 rejoin setpoint |
 | `/px4_backtrack/state` | `std_msgs/String` | 发布内部状态机状态 |
-| `/status_rc_loss` | `std_msgs/Bool` | 发布 `tick()` 里 `checkRCLoss()` 的结果 |
+| `/status_rc_loss` | `std_msgs/Bool` | RC 丢失持续状态（`isRCLost()` 电平语义，丢失期间持续为 `true`） |
 
 ### 服务
 
@@ -69,7 +70,7 @@
 说明：
 
 - 坐标约定使用 ENU；`SetpointPublisher` 将 ENU 值直接填入 `FRAME_LOCAL_NED` 的 `PositionTarget`，依赖 MAVROS 完成坐标转换。
-- 当前代码里 `/status_rc_loss` 的语义更接近“RC 丢失触发判定结果”，不是旧版 Python 文档中的“CH18 健康状态”。
+- `/status_rc_loss` 是电平语义：RC 丢失期间持续为 `true`，RC 恢复后自动回到 `false`。
 
 ## 配置
 
@@ -171,5 +172,4 @@ roslaunch px4_backtrack_optimised backtrack.launch
 ## 已知注意点
 
 - `README` 与 `LLM_MAP` 以当前 C++ 代码为准，不以旧版 Python 文档为准。
-- 当前源码存在明显的开发中痕迹。例如 [`src/domain/state_machine.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/state_machine.cpp) 使用了 `input.current_time`，而 `TickInput` 实际字段名是 `now`；在真正编译前应先做一次代码自检。
 - 当前仓库未包含测试目录，修改状态机、触发器或轨迹接口后，建议至少做一次编译和联调验证。

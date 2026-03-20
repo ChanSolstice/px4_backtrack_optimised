@@ -52,7 +52,7 @@ struct TickOutput {
   std::optional<domain::SetpointTarget> setpoint;  ///< setpoint目标
   std::optional<domain::ModeRequest> mode_request; ///< 模式切换请求
   domain::State current_state;                     ///< 当前状态（用于调试）
-  bool rc_loss;                                    ///< RC丢失状态
+  bool rc_loss;                                    ///< RC丢失持续状态
 
   /// 默认构造函数
   TickOutput()
@@ -129,6 +129,11 @@ private:
 
   /// 触发检测与处理
   void handleTriggers(double now);
+
+  /// 根据点数条件执行返航或直接降落
+  void handleReturnTrigger(domain::Event event,
+                           bool has_min_points,
+                           const char* trigger_name);
 
   /// 轨迹生成处理
   void handleTrajectoryGeneration();

@@ -152,7 +152,7 @@ bool TriggerEvaluator::checkCh18Failsafe() {
   return false;
 }
 
-bool TriggerEvaluator::checkRCLoss() {
+bool TriggerEvaluator::checkRCLossEvent() {
   if (!config_.enable_rc_loss) {
     return false;
   }
@@ -162,33 +162,41 @@ bool TriggerEvaluator::checkRCLoss() {
     return false;
   }
 
+  // 已触发过，不再重复触发（边沿语义）
+  if (rc_loss_triggered_) {
+    return false;
+  }
+
   // 计算距离上次收到RC消息的时间
   double time_since_last_msg = now_ - last_rc_msg_time_;
 
   // 超时检测
   if (time_since_last_msg >= config_.rc_loss_timeout_s) {
-    if (!rc_loss_debouncing_ && !rc_loss_triggered_) {
+    if (!rc_loss_debouncing_) {
       // 开始防抖
       rc_loss_debouncing_ = true;
       rc_loss_debounce_start_time_ = now_;
     }
 
-    if (rc_loss_debouncing_ && !rc_loss_triggered_) {
-      // 检查防抖时间
-      double debounce_duration = now_ - rc_loss_debounce_start_time_;
-      if (debounce_duration >= config_.rc_loss_debounce_s) {
-        rc_loss_triggered_ = true;
-        return true;  // 触发RC丢失
-      }
+    // 检查防抖时间
+    double debounce_duration = now_ - rc_loss_debounce_start_time_;
+    if (debounce_duration >= config_.rc_loss_debounce_s) {
+      rc_loss_triggered_ = true;
+      return true;  // 触发RC丢失（仅此一次）
     }
   } else {
-    // 未超时，重置状态
-    if (rc_loss_debouncing_) {
-      rc_loss_debouncing_ = false;
-    }
+    // 未超时，重置防抖
+    rc_loss_debouncing_ = false;
   }
 
   return false;
+}
+
+bool TriggerEvaluator::isRCLost() const {
+  if (!config_.enable_rc_loss) {
+    return false;
+  }
+  return rc_loss_triggered_;
 }
 
 }  // namespace domain

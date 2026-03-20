@@ -126,11 +126,20 @@
 
 如果你改触发顺序，可能把暂停逻辑改坏。
 
-### 3. RC 丢失检测依赖双时间源
+### 3. RC 丢失检测：边沿触发与电平查询分离
+
+RC 丢失检测已拆分为两个方法：
+
+- `checkRCLossEvent()` — 边沿语义，仅在 `rc_loss_triggered_` 从 `false` 变为 `true` 的那一刻返回一次 `true`，用于 `handleTriggers()` 触发返航
+- `isRCLost()` — 电平语义，只要 `rc_loss_triggered_` 为 `true` 就持续返回 `true`，用于填充 `TickOutput.rc_loss` 并发布到 `/status_rc_loss`
+
+两者共享底层状态：
 
 - `onRCReceived()` 中调用 `updateLastRcMsgTime(ros::Time::now().toSec())`
 - `tick(now)` 中调用 `updateNow(now)`
-- `checkRCLoss()` 使用这两者的差值判定丢失与防抖
+- 超时+防抖逻辑在 `checkRCLossEvent()` 中推进，`isRCLost()` 只读 `rc_loss_triggered_`
+
+重要：`checkRCLossEvent()` 在 `handleTriggers()` 的最顶部、状态分支之前调用，确保 RC 超时的状态推进不被任何分支或 `checkMinPoints()` 挡住。
 
 如果只改其中一条链路，RC loss 会失真。
 
@@ -153,6 +162,17 @@
 `BacktrackStateMachine::tick()` 一开始就检查 `mode == "AUTO.LAND"`。如果命中，会清理 setpoint 和 mode request，并把状态退回 `Recording` 或 `IdleDisarmed`。
 
 如果你改降落逻辑，必须评估这条全局分支是否还成立。
+
+### 6. 触发时点数不足会降级为原地降落
+
+所有触发路径（CH7 长按、CH18 故障确认、RC 丢失）在 `Recording` 状态下会先检查 `checkMinPoints()`：
+
+- 点数足够 → 正常进入返航流程
+- 点数不足 → 调用 `state_machine_.triggerLanding()` 直接进入 `LandingTransition`
+
+Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而非恢复返航。
+
+`triggerLanding()` 进入的 `LandingTransition` 会判断当前模式：非 OFFBOARD 直接请求 `AUTO.LAND`，OFFBOARD 先走 `POSCTL` 过渡。
 
 ## 常见改动应该改哪里
 
@@ -189,9 +209,8 @@
 
 ## 当前容易踩坑的地方
 
-- [`src/domain/state_machine.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/state_machine.cpp) 在降落过渡里使用 `input.current_time`，但 `TickInput` 实际字段是 `now`。这说明仓库可能还没完成一次干净编译。
-- `/status_rc_loss` 的当前实现来自 `checkRCLoss()` 的返回值，而该函数在当前代码里更像“触发事件”而不是稳定状态位。不要把它自动解释成“RC 链路健康布尔量”。
-- `StateSubscriber` 和 `RCSubscriber` 在持锁状态下调用外部回调；当前 usecase 很轻，但以后若回调里再拿同一把锁或做耗时操作，容易引入问题。
+- `checkRCLossEvent()` 必须在 `handleTriggers()` 的最顶部、状态分支之前调用。如果挪到状态分支内部，`isRCLost()` 在某些状态下会失真。
+- `handleReturnTrigger()` 在点数不足时调用 `triggerLanding()`，这会跳过 `ReturnPreOffboard` 直接进 `LandingTransition`。如果你在 `LandingTransition` 之前加了新逻辑，要评估这条直达路径是否会绕过它。
 - 当前仓库没有测试目录，也没有现成的 mock 层。大改状态机时，至少要做一次编译和联调。
 
 ## 给后续 LLM 的工作建议

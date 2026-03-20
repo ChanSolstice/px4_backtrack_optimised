@@ -76,9 +76,13 @@ public:
   /// @return 是否确认故障
   bool checkCh18Failsafe();
 
-  /// 检测RC消息丢失
-  /// @return 是否检测到RC丢失
-  bool checkRCLoss();
+  /// 检测RC消息丢失（边沿触发，仅在首次确认丢失时返回true）
+  /// @return 是否刚刚确认RC丢失
+  bool checkRCLossEvent();
+
+  /// 查询RC丢失持续状态（电平语义，丢失期间持续返回true）
+  /// @return RC是否处于丢失状态
+  bool isRCLost() const;
 
 private:
   /// 配置参数

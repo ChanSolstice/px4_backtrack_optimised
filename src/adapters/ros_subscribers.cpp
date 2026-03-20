@@ -34,14 +34,23 @@ void StateSubscriber::setCallback(std::function<void(bool, const std::string&)> 
 }
 
 void StateSubscriber::stateCallback(const mavros_msgs::State::ConstPtr& msg) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  armed_ = msg->armed;
-  mode_ = msg->mode;
-  has_data_ = true;
+  std::function<void(bool, const std::string&)> cb;
+  bool armed;
+  std::string mode;
 
-  // 调用外部回调（如果设置）
-  if (external_callback_) {
-    external_callback_(armed_, mode_);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    armed_ = msg->armed;
+    mode_ = msg->mode;
+    has_data_ = true;
+
+    armed = armed_;
+    mode = mode_;
+    cb = external_callback_;
+  }
+
+  if (cb) {
+    cb(armed, mode);
   }
 }
 
@@ -134,13 +143,20 @@ void RCSubscriber::setCallback(std::function<void(const std::vector<uint16_t>&)>
 }
 
 void RCSubscriber::rcCallback(const mavros_msgs::RCIn::ConstPtr& msg) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  channels_ = msg->channels;
-  has_data_ = true;
+  std::function<void(const std::vector<uint16_t>&)> cb;
+  std::vector<uint16_t> channels;
 
-  // 调用外部回调（如果设置）
-  if (external_callback_) {
-    external_callback_(channels_);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    channels_ = msg->channels;
+    has_data_ = true;
+
+    channels = channels_;
+    cb = external_callback_;
+  }
+
+  if (cb) {
+    cb(channels);
   }
 }
 
