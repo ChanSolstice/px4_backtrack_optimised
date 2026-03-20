@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 返航节点 -->
+  <node name="backtrack_node" pkg="px4_backtrack_optimised" type="backtrack_node" output="screen">
+    <!-- 加载参数文件 -->
+    <rosparam command="load" file="$(find px4_backtrack_optimised)/config/backtrack_params.yaml" />
+
+    <!-- 可选：调试输出级别 -->
+    <!-- <env name="ROSCONSOLE_CONFIG_FILE" value="$(find px4_backtrack_optimised)/config/rosconsole.conf"/> -->
+  </node>
+
+  <!-- 可选：启动 MAVROS (如果未在其他地方启动) -->
+  <!-- <include file="$(find mavros)/launch/px4.launch">
+    <arg name="fcu_url" value="/dev/ttyACM0:921600" />
+    <arg name="gcs_url" value="" />
+    <arg name="tgt_system" value="1" />
+    <arg name="tgt_component" value="1" />
+  </include> -->
+
+</launch>

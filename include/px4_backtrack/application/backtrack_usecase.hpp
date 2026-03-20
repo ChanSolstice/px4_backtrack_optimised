@@ -1,0 +1,147 @@
+#pragma once
+
+#include "px4_backtrack/domain/state_machine.hpp"
+#include "px4_backtrack/domain/recording_buffer.hpp"
+#include "px4_backtrack/domain/trigger_evaluator.hpp"
+#include "px4_backtrack/domain/trajectory_session.hpp"
+#include "px4_backtrack/domain/rejoin_policy.hpp"
+
+#include <trajectory_core/trajectory_core.hpp>
+
+namespace px4_backtrack {
+namespace application {
+
+// ============================================================================
+// 配置参数
+// ============================================================================
+
+/// BacktrackUseCase配置参数
+struct UseCaseConfig {
+  // 录制参数
+  double record_delay_s;          ///< ARM后延时录制时间 (s)
+  double record_max_hz;           ///< 录制最大频率 (Hz)
+  int record_min_points;          ///< 触发返航所需最少录制点数
+
+  // 状态机参数
+  domain::StateMachineConfig state_machine_config;
+
+  // 触发参数
+  domain::TriggerConfig trigger_config;
+
+  // 回归参数
+  domain::RejoinConfig rejoin_config;
+
+  // trajectory_core配置
+  trajectory_core::TrajectoryConfig trajectory_config;
+
+  /// 默认构造函数
+  UseCaseConfig()
+    : record_delay_s(15.0),
+      record_max_hz(10.0),
+      record_min_points(100)
+  {}
+};
+
+// ============================================================================
+// Tick输出数据
+// ============================================================================
+
+/// UseCase tick输出数据
+struct TickOutput {
+  bool should_publish_setpoint;                    ///< 是否应发布setpoint
+  std::optional<domain::SetpointTarget> setpoint;  ///< setpoint目标
+  std::optional<domain::ModeRequest> mode_request; ///< 模式切换请求
+  domain::State current_state;                     ///< 当前状态（用于调试）
+  bool rc_loss;                                    ///< RC丢失状态
+
+  /// 默认构造函数
+  TickOutput()
+    : should_publish_setpoint(false),
+      current_state(domain::State::IdleDisarmed),
+      rc_loss(false)
+  {}
+};
+
+// ============================================================================
+// BacktrackUseCase类
+// ============================================================================
+
+/// 返航用例（应用层）
+class BacktrackUseCase {
+public:
+  /// 构造函数
+  /// @param config 配置参数
+  explicit BacktrackUseCase(const UseCaseConfig& config);
+
+  /// 每个20Hz周期调用的tick
+  /// @param now 当前时间 (s)
+  /// @return tick输出
+  TickOutput tick(double now);
+
+  /// 里程计回调
+  /// @param position 位置 (ENU, m)
+  /// @param yaw Yaw角 (rad)
+  /// @param stamp 时间戳 (s)
+  void onOdomReceived(const domain::Vec3& position, double yaw, double stamp);
+
+  /// RC回调
+  /// @param channels RC通道数组
+  void onRCReceived(const std::vector<uint16_t>& channels);
+
+  /// 飞控状态回调
+  /// @param armed 是否ARM
+  /// @param mode 当前模式
+  void onStateReceived(bool armed, const std::string& mode);
+
+private:
+  /// 配置参数
+  UseCaseConfig config_;
+
+  // Domain对象
+  domain::RecordingBuffer recording_buffer_;
+  domain::TriggerEvaluator trigger_evaluator_;
+  domain::TrajectorySession trajectory_session_;
+  domain::RejoinPolicy rejoin_policy_;
+  domain::BacktrackStateMachine state_machine_;
+
+  // 当前状态快照
+  bool current_armed_;
+  std::string current_mode_;
+  domain::Vec3 current_position_;
+  double current_yaw_;
+
+  // 飞行周期复位检测
+  bool has_seen_disarm_;
+  bool arm_after_disarm_detected_;
+
+  // 录制延时
+  double record_delay_start_time_;
+  bool record_delay_started_;
+
+  // 轨迹生成标志
+  bool trajectory_generation_requested_;
+
+  /// 飞行周期复位检测
+  void handleFlightCycleReset(bool armed);
+
+  /// 录制延时处理
+  void handleRecordDelay(double now);
+
+  /// 触发检测与处理
+  void handleTriggers(double now);
+
+  /// 轨迹生成处理
+  void handleTrajectoryGeneration();
+
+  /// 偏离检测与回归处理
+  void handleRejoin();
+
+  /// 计算setpoint输出
+  domain::SetpointTarget computeSetpoint();
+
+  /// 检查点数是否足够
+  bool checkMinPoints() const;
+};
+
+}  // namespace application
+}  // namespace px4_backtrack

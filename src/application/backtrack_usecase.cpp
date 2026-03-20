@@ -1,0 +1,342 @@
+#include "px4_backtrack/application/backtrack_usecase.hpp"
+#include <ros/console.h>
+
+namespace px4_backtrack {
+namespace application {
+
+BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config)
+  : config_(config),
+    recording_buffer_(config.record_max_hz),
+    trigger_evaluator_(config.trigger_config),
+    rejoin_policy_(config.rejoin_config),
+    state_machine_(config.state_machine_config),
+    current_armed_(false),
+    current_mode_(""),
+    current_position_(domain::Vec3::Zero()),
+    current_yaw_(0.0),
+    has_seen_disarm_(false),
+    arm_after_disarm_detected_(false),
+    record_delay_start_time_(0.0),
+    record_delay_started_(false),
+    trajectory_generation_requested_(false)
+{
+  ROS_INFO("[BacktrackUseCase] Initialized");
+}
+
+TickOutput BacktrackUseCase::tick(double now) {
+  // 更新TriggerEvaluator的当前时间（用于RC丢失检测）
+  trigger_evaluator_.updateNow(now);
+
+  // 飞行周期复位检测
+  handleFlightCycleReset(current_armed_);
+
+  // 录制延时处理
+  handleRecordDelay(now);
+
+  // 触发检测与处理
+  handleTriggers(now);
+
+  // 轨迹生成处理
+  handleTrajectoryGeneration();
+
+  // 偏离检测与回归处理
+  handleRejoin();
+
+  // 构造TickInput
+  domain::TickInput tick_input;
+  tick_input.armed = current_armed_;
+  tick_input.mode = current_mode_;
+  tick_input.now = now;
+  tick_input.current_position = current_position_;
+  tick_input.current_yaw = current_yaw_;
+  tick_input.trajectory_ready = trajectory_session_.isValid();
+  tick_input.trajectory_finished = trajectory_session_.isFinished();
+
+  // 驱动状态机
+  state_machine_.tick(tick_input);
+
+  // 构造输出
+  TickOutput output;
+  output.should_publish_setpoint = state_machine_.shouldPublishSetpoint();
+  output.mode_request = state_machine_.getModeRequest();
+  output.current_state = state_machine_.getCurrentState();
+  output.rc_loss = trigger_evaluator_.checkRCLoss();
+
+  // 计算setpoint
+  if (output.should_publish_setpoint) {
+    output.setpoint = computeSetpoint();
+  }
+
+  return output;
+}
+
+void BacktrackUseCase::onOdomReceived(const domain::Vec3& position, double yaw, double stamp) {
+  current_position_ = position;
+  current_yaw_ = yaw;
+
+  // 录制处理
+  auto current_state = state_machine_.getCurrentState();
+  if (current_state == domain::State::Recording) {
+    recording_buffer_.addPoint(position, yaw, stamp);
+  }
+}
+
+void BacktrackUseCase::onRCReceived(const std::vector<uint16_t>& channels) {
+  // 更新RC通道数据
+  trigger_evaluator_.updateRC(channels);
+
+  // 更新最近一次收到RC消息的时间
+  trigger_evaluator_.updateLastRcMsgTime(ros::Time::now().toSec());
+
+  // RC loss状态在tick()中检测并通过TickOutput发布
+}
+
+void BacktrackUseCase::onStateReceived(bool armed, const std::string& mode) {
+  current_armed_ = armed;
+  current_mode_ = mode;
+}
+
+// ============================================================================
+// 私有方法实现
+// ============================================================================
+
+void BacktrackUseCase::handleFlightCycleReset(bool armed) {
+  // 检测DISARM
+  if (!armed) {
+    has_seen_disarm_ = true;
+  }
+
+  // 检测"DISARM之后的ARM"
+  if (armed && has_seen_disarm_ && !arm_after_disarm_detected_) {
+    arm_after_disarm_detected_ = true;
+    has_seen_disarm_ = false;
+
+    // 复位所有状态
+    ROS_INFO("[BacktrackUseCase] Flight cycle reset: ARM after DISARM detected");
+    recording_buffer_.reset();
+    trajectory_session_.reset();
+    record_delay_started_ = false;
+    trajectory_generation_requested_ = false;
+
+    // 进入WaitRecordDelay状态（通过状态机处理）
+    // 状态机会在tick中检测ARM并自动转换
+  }
+}
+
+void BacktrackUseCase::handleRecordDelay(double now) {
+  auto current_state = state_machine_.getCurrentState();
+
+  // WaitRecordDelay状态：等待延时后进入Recording
+  if (current_state == domain::State::WaitRecordDelay) {
+    if (!record_delay_started_) {
+      record_delay_start_time_ = now;
+      record_delay_started_ = true;
+      ROS_INFO("[BacktrackUseCase] Record delay started: %.1f s", config_.record_delay_s);
+    }
+
+    double elapsed = now - record_delay_start_time_;
+    if (elapsed >= config_.record_delay_s) {
+      ROS_INFO("[BacktrackUseCase] Record delay elapsed, starting recording");
+      state_machine_.startRecording();
+    }
+  } else {
+    // 不在WaitRecordDelay状态，重置延时标志
+    if (record_delay_started_) {
+      record_delay_started_ = false;
+    }
+  }
+}
+
+void BacktrackUseCase::handleTriggers(double now) {
+  auto current_state = state_machine_.getCurrentState();
+
+  // 在Recording状态检测返航触发
+  if (current_state == domain::State::Recording) {
+    // 检查点数是否足够
+    if (!checkMinPoints()) {
+      return;
+    }
+
+    // 通道7长按检测
+    if (trigger_evaluator_.checkCh7LongPress()) {
+      ROS_INFO("[BacktrackUseCase] Ch7 long press detected");
+      state_machine_.lockPosition(current_position_, current_yaw_);
+      state_machine_.triggerReturn(domain::Event::Ch7LongPress);
+      trajectory_generation_requested_ = true;
+      return;
+    }
+
+    // 通道18故障确认检测
+    if (trigger_evaluator_.checkCh18Failsafe()) {
+      ROS_INFO("[BacktrackUseCase] Ch18 failsafe confirmed");
+      state_machine_.lockPosition(current_position_, current_yaw_);
+      state_machine_.triggerReturn(domain::Event::Ch18FailsafeConfirmed);
+      trajectory_generation_requested_ = true;
+      return;
+    }
+
+    // RC消息丢失检测
+    if (trigger_evaluator_.checkRCLoss()) {
+      ROS_INFO("[BacktrackUseCase] RC loss detected");
+      state_machine_.lockPosition(current_position_, current_yaw_);
+      state_machine_.triggerReturn(domain::Event::RCLossTriggered);
+      trajectory_generation_requested_ = true;
+      return;
+    }
+  }
+
+  // 在Ch18HoverWait或Return*状态时，检测Ch7按下事件（暂停）
+  if (current_state == domain::State::Ch18HoverWait ||
+      current_state == domain::State::ReturnPreOffboard ||
+      current_state == domain::State::ReturnActive ||
+      current_state == domain::State::ReturnRejoin) {
+    // 需要先调用checkCh7LongPress()以更新Ch7状态机
+    trigger_evaluator_.checkCh7LongPress();
+
+    if (trigger_evaluator_.checkCh7PressEvent()) {
+      ROS_INFO("[BacktrackUseCase] Ch7 press event detected, pausing");
+      state_machine_.triggerPause();
+      trajectory_session_.freezeProgress();
+      return;
+    }
+  }
+
+  // 在Paused状态时，检测Ch7长按（恢复）
+  if (current_state == domain::State::Paused) {
+    if (trigger_evaluator_.checkCh7LongPress()) {
+      ROS_INFO("[BacktrackUseCase] Ch7 long press detected, resuming");
+      state_machine_.lockPosition(current_position_, current_yaw_);
+      state_machine_.triggerReturn(domain::Event::Ch7LongPress);
+      trajectory_session_.resumeProgress(now);
+      return;
+    }
+  }
+}
+
+void BacktrackUseCase::handleTrajectoryGeneration() {
+  // 在ReturnPreOffboard状态且轨迹生成被请求时，执行轨迹生成
+  auto current_state = state_machine_.getCurrentState();
+
+  if (current_state == domain::State::ReturnPreOffboard &&
+      trajectory_generation_requested_ &&
+      !trajectory_session_.isValid()) {
+
+    ROS_INFO("[BacktrackUseCase] Generating trajectory from %zu points",
+             recording_buffer_.size());
+
+    // 生成轨迹
+    bool success = trajectory_session_.generate(
+        recording_buffer_.getPoints(),
+        config_.trajectory_config,
+        config_.record_max_hz);
+
+    if (success) {
+      trajectory_generation_requested_ = false;
+      ROS_INFO("[BacktrackUseCase] Trajectory generation successful");
+    } else {
+      ROS_ERROR("[BacktrackUseCase] Trajectory generation failed");
+      // 保持在ReturnPreOffboard状态，继续发送固定点setpoint
+    }
+  }
+}
+
+void BacktrackUseCase::handleRejoin() {
+  auto current_state = state_machine_.getCurrentState();
+
+  // 在ReturnActive状态检测偏离
+  if (current_state == domain::State::ReturnActive) {
+    if (!trajectory_session_.isValid()) {
+      return;
+    }
+
+    // 获取轨迹上的当前进度位置
+    auto traj_state = trajectory_session_.evaluate(ros::Time::now().toSec());
+
+    // 检查是否偏离
+    if (rejoin_policy_.shouldTriggerRejoin(current_position_, traj_state.position)) {
+      ROS_WARN("[BacktrackUseCase] Deviation detected, entering rejoin mode");
+      state_machine_.enterRejoin();
+    }
+  }
+
+  // 在ReturnRejoin状态检测回归成功
+  if (current_state == domain::State::ReturnRejoin) {
+    if (!trajectory_session_.isValid()) {
+      return;
+    }
+
+    // 获取轨迹上的当前进度位置
+    auto traj_state = trajectory_session_.evaluate(ros::Time::now().toSec());
+
+    // 检查是否回归成功
+    if (rejoin_policy_.shouldExitRejoin(current_position_, traj_state.position)) {
+      ROS_INFO("[BacktrackUseCase] Rejoin successful, returning to active mode");
+      state_machine_.exitRejoin();
+    }
+  }
+}
+
+domain::SetpointTarget BacktrackUseCase::computeSetpoint() {
+  auto current_state = state_machine_.getCurrentState();
+
+  // 优先使用状态机提供的setpoint（固定点悬停）
+  auto state_machine_setpoint = state_machine_.getSetpointTarget();
+  if (state_machine_setpoint.has_value()) {
+    return state_machine_setpoint.value();
+  }
+
+  // ReturnActive状态：从轨迹评估
+  if (current_state == domain::State::ReturnActive) {
+    if (trajectory_session_.isValid()) {
+      auto traj_state = trajectory_session_.evaluate(ros::Time::now().toSec());
+
+      domain::SetpointTarget target;
+      target.position = traj_state.position;
+      target.velocity = traj_state.velocity;
+      target.yaw = traj_state.yaw;
+      target.yaw_rate = traj_state.yaw_rate;
+      target.acceleration = traj_state.acceleration;
+      target.type_mask = traj_state.acceleration.has_value() ? 0x0000 : 0x0038;
+      target.coordinate_frame = 1;  // FRAME_LOCAL_NED
+
+      return target;
+    }
+  }
+
+  // ReturnRejoin状态：从回归策略计算
+  if (current_state == domain::State::ReturnRejoin) {
+    if (trajectory_session_.isValid()) {
+      double t_nearest = rejoin_policy_.findNearestTime(
+          current_position_, trajectory_session_.getTrajectory());
+      auto rejoin_state = rejoin_policy_.computeRejoinTarget(
+          current_position_, trajectory_session_.getTrajectory(), t_nearest);
+
+      domain::SetpointTarget target;
+      target.position = rejoin_state.position;
+      target.velocity = rejoin_state.velocity;
+      target.yaw = rejoin_state.yaw;
+      target.yaw_rate = rejoin_state.yaw_rate;
+      target.acceleration = std::nullopt;
+      target.type_mask = 0x0038;  // IGNORE_AFX/AFY/AFZ
+      target.coordinate_frame = 1;  // FRAME_LOCAL_NED
+
+      return target;
+    }
+  }
+
+  // 默认：零setpoint
+  return domain::SetpointTarget();
+}
+
+bool BacktrackUseCase::checkMinPoints() const {
+  size_t point_count = recording_buffer_.size();
+  if (point_count < static_cast<size_t>(config_.record_min_points)) {
+    ROS_WARN_THROTTLE(5.0, "[BacktrackUseCase] Insufficient points for return: %zu < %d",
+                      point_count, config_.record_min_points);
+    return false;
+  }
+  return true;
+}
+
+}  // namespace application
+}  // namespace px4_backtrack

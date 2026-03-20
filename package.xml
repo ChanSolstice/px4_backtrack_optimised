@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>px4_backtrack_optimised</name>
+  <version>0.1.0</version>
+  <description>
+    基于DDD架构的PX4无人机返航程序，集成trajectory_core轨迹生成库，
+    支持通道触发、RC丢失检测、固定点悬停、轨迹回归等功能。
+  </description>
+
+  <maintainer email="user@example.com">PX4 Backtrack Team</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <!-- ROS core dependencies -->
+  <depend>roscpp</depend>
+  <depend>std_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+
+  <!-- MAVROS dependencies -->
+  <depend>mavros_msgs</depend>
+
+  <!-- Trajectory generation library -->
+  <depend>trajectory_core</depend>
+
+  <!-- Build dependencies -->
+  <build_depend>roslib</build_depend>
+
+  <!-- Export settings -->
+  <export>
+  </export>
+</package>
