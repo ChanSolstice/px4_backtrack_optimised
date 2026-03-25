@@ -269,8 +269,7 @@ void BacktrackUseCase::handleTrajectoryGeneration() {
     // 生成轨迹
     bool success = trajectory_session_.generate(
         recording_buffer_.getPoints(),
-        config_.trajectory_config,
-        config_.record_max_hz);
+        config_.trajectory_config);
 
     if (success) {
       trajectory_generation_requested_ = false;

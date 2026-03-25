@@ -10,7 +10,7 @@
 4. 真正的编排核心在 [`src/application/backtrack_usecase.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/application/backtrack_usecase.cpp)。
 5. 返航轨迹由 `trajectory_core` 生成，配置来自 [`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)。
 6. 坐标语义按 ENU 处理，但 setpoint 通过 `mavros_msgs/PositionTarget` 发到 `/mavros/setpoint_raw/local`。
-7. 录制点保留相对时间戳，但生成轨迹时会按 `record_max_hz` 重建时间轴。
+7. 录制点保留相对时间戳；生成轨迹时会在逆序后把时间戳镜像成新的单调递增序列，以保留原始 dt 间隔用于 `trajectory_core` 的时间质量诊断。
 8. `doc/TECHNICAL_DOCUMENTATION.md` 和 [`doc/backtrack_node.py`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/backtrack_node.py) 是旧版 Python 基线，不要把它们当成当前代码的直接事实来源。
 9. 需要判断“行为真相”时，优先级是：`src/*.cpp` + `include/*.hpp` > `config/*.yaml` > `launch/` > `doc/返航实现技术文档.md` > 旧版 Python 文档。
 10. 当前代码有开发中痕迹，写说明或补丁前要先检查接口是否自洽。
@@ -117,8 +117,8 @@
 ### 1. 录制和轨迹生成不是一回事
 
 - `RecordingBuffer` 保存录制点与相对时间戳。
-- `TrajectorySession::generate()` 会把点序逆转后重建一套新的时间轴：`t_new = i * (1 / record_max_hz)`。
-- 也就是说，录制时间戳主要用于录制阶段的单调性约束，不是返航执行时的真实时间轴。
+- `TrajectorySession::generate()` 会把点序逆转，并把时间戳映射为 `t_new = t_last - t_rev`，从而在保持单调递增的同时保留原始采样间隔信息。
+- `trajectory_core` 最终执行的轨迹时间轴仍由库内部速度剖面生成；录制时间戳主要用于时间质量检查与 warning，而不是直接决定返航执行时序。
 
 ### 2. `CH7` 的“按下事件”和“长按事件”共享一套内部状态
 
@@ -204,13 +204,15 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 2. [`include/px4_backtrack/**`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack)
 3. [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml) 与 [`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)
 4. [`doc/返航实现技术文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/返航实现技术文档.md)
-5. [`doc/实现任务清单.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/实现任务清单.md)
-6. [`doc/TECHNICAL_DOCUMENTATION.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/TECHNICAL_DOCUMENTATION.md) 与 [`doc/backtrack_node.py`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/backtrack_node.py)
+5. [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md)
+6. [`doc/实现任务清单.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/实现任务清单.md)
+7. [`doc/TECHNICAL_DOCUMENTATION.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/TECHNICAL_DOCUMENTATION.md) 与 [`doc/backtrack_node.py`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/backtrack_node.py)
 
 ## 当前容易踩坑的地方
 
 - `checkRCLossEvent()` 必须在 `handleTriggers()` 的最顶部、状态分支之前调用。如果挪到状态分支内部，`isRCLost()` 在某些状态下会失真。
 - `handleReturnTrigger()` 在点数不足时调用 `triggerLanding()`，这会跳过 `ReturnPreOffboard` 直接进 `LandingTransition`。如果你在 `LandingTransition` 之前加了新逻辑，要评估这条直达路径是否会绕过它。
+- [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp) 为准。
 - 当前仓库没有测试目录，也没有现成的 mock 层。大改状态机时，至少要做一次编译和联调。
 
 ## 给后续 LLM 的工作建议

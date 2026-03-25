@@ -9,7 +9,6 @@
 - [主要接口类](#主要接口类)
 - [完整使用流程](#完整使用流程)
 - [错误处理](#错误处理)
-- [MAVROS 对接](#mavros-对接)
 - [高级用法](#高级用法)
 - [完整示例代码](#完整示例代码)
 - [常见问题](#常见问题)
@@ -136,12 +135,8 @@ struct TrajectoryConfig {
     double corner_blend_ratio = 0.4;            // 拐角混合比例（安全系数，避免跨越相邻段）
     double corner_tangent_factor = 1.0;         // Hermite 拐角过渡切向量系数
 
-    // 样条拟合（部分为预留/高级参数：当前实现为 MVP，未必全部生效）
-    int fit_max_iters = 10;                 // 自适应拟合最大迭代次数
-    double lambda_init = 1.0;               // 初始平滑强度
-    double lambda_min = 0.001;              // 最小平滑强度
-    int n_ctrl_max = 200;                   // 最大控制点数
-    double ds_check_m = 0.075;              // 走廊检查采样间距 (m)
+    // 走廊检查
+    double ds_check_m = 0.075;              // 走廊检查采样间距 (m)，通常为 ds_m / 2
 
     // Yaw 处理
     bool enable_yaw_smooth = true;              // 启用 yaw 平滑
@@ -171,7 +166,6 @@ struct TrajectoryConfig {
     // 起止速度
     double v_start_m_s = 0.0;                   // 起始速度 (m/s)
     double v_end_m_s = 0.0;                     // 终止速度 (m/s)
-    bool v_start_auto = false;                  // 自动估计起始速度（预留/高级）
 
     // 输出选项
     bool enable_output_acc = false;             // 启用加速度输出
@@ -187,8 +181,11 @@ struct TrajectoryConfig {
 
 **重要说明**：
 - `dt_sample_s` 是内部过程使用的采样步长（例如 yaw rate limiter 的离散步长兜底），与 `Trajectory::sample(dt)` 的输出采样频率无直接绑定关系。
-- `loadFromYaml()/saveToYaml()` 当前实现为“简易 YAML”（一行一个 `key: value`，可带 `#` 注释），不支持嵌套结构/数组；未知 key 会被忽略；未出现的字段保持默认值。并且当前实现只会读写部分字段（其余字段仍将保持默认值）。
-- 当前 `loadFromYaml()/saveToYaml()` 覆盖的 key（其余字段保持默认值）：`ds_m`, `max_deviation_m`, `dt_sample_s`, `min_point_dist_m`, `max_dt_gap_s`, `corner_angle_threshold_deg`, `corner_blend_len_m`, `corner_blend_ratio`, `enable_yaw_smooth`, `max_yaw_deviation_rad`, `yaw_rate_max`, `enable_yaw_rate_constraint_on_velocity`, `enable_end_converge`, `s_stop_m`, `r_stop_m`, `v_end_max`, `r_yaw_hold_m`, `v_max`, `vz_max`, `a_tan_max`, `a_lat_max`, `az_up_max`, `az_down_max`, `v_start_m_s`, `v_end_m_s`, `enable_output_acc`。
+- `loadFromYaml()/saveToYaml()` 当前实现为”简易 YAML”（一行一个 `key: value`，可带 `#` 注释），不支持嵌套结构/数组；未知 key 会被忽略；未出现的字段保持默认值。
+- **YAML 读写仅覆盖以下字段的子集**，其余字段 round-trip 后会静默回退到 C++ 默认值：
+  - 已覆盖（可被 YAML 读写）：`ds_m`、`max_deviation_m`、`dt_sample_s`、`min_point_dist_m`、`max_dt_gap_s`、`corner_angle_threshold_deg`、`corner_blend_len_m`、`corner_blend_ratio`、`enable_yaw_smooth`、`max_yaw_deviation_rad`、`yaw_rate_max`、`enable_yaw_rate_constraint_on_velocity`、`enable_end_converge`、`s_stop_m`、`r_stop_m`、`v_end_max`、`r_yaw_hold_m`、`v_max`、`vz_max`、`a_tan_max`、`a_lat_max`、`az_up_max`、`az_down_max`、`v_start_m_s`、`v_end_m_s`、`enable_output_acc`
+  - **未覆盖（不会被 YAML 读写，始终使用 C++ 默认值）**：`corner_tangent_factor`、`ds_check_m`、`max_expected_error_rad`、`k_yaw_rate_limiter`、`v_yaw_min_warn`、`end_mode_latch`、`v_time_eps`
+  - 如果需要持久化上述未覆盖字段，请通过代码直接赋值。
 
 **使用示例**:
 ```cpp
@@ -254,14 +251,17 @@ if (state.acceleration.has_value()) {
 
 ```cpp
 struct Result {
-    StatusCode code;                    // 状态码
-    std::unique_ptr<Trajectory> traj;   // 生成的轨迹（可能为部分轨迹）
+    StatusCode code;                    // 主结果状态码
+    std::unique_ptr<Trajectory> traj;   // 生成的轨迹（失败时为 nullptr）
     Report report;                      // 详细报告
     std::string message;                // 人类可读的消息
+    uint32_t warning_flags;             // 非致命告警位域
 
     // 方法
-    bool isSuccess() const;             // 是否成功生成
+    bool isSuccess() const;             // 主结果是否成功
     bool isUsable() const;              // 轨迹是否可用
+    bool hasTimeFallback() const;       // 是否触发时间戳回退 warning
+    bool isCorridorExceeded() const;    // 是否触发走廊超限 warning
 };
 ```
 
@@ -269,27 +269,36 @@ struct Result {
 ```cpp
 enum class StatusCode {
     SUCCESS,                    // 成功生成轨迹
-    INVALID_INPUT,              // 输入无效（点数不足、重合等）
-    TIME_INVALID_FALLBACK,      // 时间戳异常，使用回退模式生成
-    FIT_FAILED,                 // 几何拟合失败（数值失败/内部失败等）
+    INVALID_INPUT,              // 输入无效（点数不足、配置非法等）
+    FIT_FAILED,                 // 几何插值/内部拟合步骤失败
     PROFILE_INFEASIBLE,         // 无法在速度/加速度约束下生成速度剖面
     INTERNAL_ERROR              // 内部错误
 };
+
+enum class ResultWarning {
+    NONE = 0,
+    TIME_FALLBACK = 1,          // 时间戳异常，回退到内部时间参数化
+    CORRIDOR_EXCEEDED = 2       // 轨迹可用，但超过 max_deviation_m
+};
 ```
 
-> 注意：走廊约束 `max_deviation_m` 是否满足，应以 `result.report.fit.max_deviation_m` 与 `config.max_deviation_m` 的对比为准；同时可关注 `result.report.fit.fit_converged`（是否满足约束/是否收敛）。
+> 注意：`StatusCode` 只表示主结果；时间戳回退、走廊超限等非致命信息通过 `warning_flags` 暴露。走廊约束是否满足，应以 `result.isCorridorExceeded()` 或 `result.report.fit.fit_converged` 为准。
+
+> **关于 `traj` 的空值语义**：当前实现中，所有非 `SUCCESS` 的路径都直接返回 `traj = nullptr`；只有生成流程完整走到末尾才会构造 `Trajectory` 对象。因此，**不要依赖"失败但部分可用"的轨迹**——如果 `!result.isSuccess()`，则 `result.traj` 一定为空。使用前务必检查 `result.isSuccess()` 或 `result.isUsable()`。
 
 **使用示例**:
 ```cpp
 auto result = generator.generate(waypoints, config);
 
-// 检查是否成功
+// 检查主结果是否成功
 if (result.isSuccess()) {
     std::cout << "Trajectory generated successfully!" << std::endl;
 
-    // 检查是否有警告
-    if (result.code == StatusCode::TIME_INVALID_FALLBACK) {
-        std::cout << "Warning: " << result.message << std::endl;
+    if (result.hasTimeFallback()) {
+        std::cout << "Warning: timestamp fallback active" << std::endl;
+    }
+    if (result.isCorridorExceeded()) {
+        std::cout << "Warning: corridor constraint exceeded" << std::endl;
     }
 
     // 使用轨迹
@@ -324,7 +333,7 @@ struct FitReport {
     int n_input;                    // 输入点数
     int n_preprocessed;             // 预处理后点数
     int n_resampled;                // 重采样后点数
-    int n_control;                  // 样条控制点数
+    int n_control;                  // 预处理后路径点数（参考折线顶点数）
     int n_segments;                 // 轨迹段数
     int n_corners;                  // 检测到的拐角数
 
@@ -352,10 +361,14 @@ struct FitReport {
     double z_range;
 
     // 拟合过程
-    int fit_iterations;             // 实际迭代次数
-    bool fit_converged;             // 是否收敛/是否满足约束
+    int fit_iterations;             // 实际迭代次数（当前实现始终为 1）
+    bool fit_converged;             // 走廊约束是否满足
 
-    // ...（还有 per-iteration 记录等字段）
+    // Phase 2: 分段几何统计
+    int n_linear;                   // LINEAR 直线段数量
+    int n_hermite;                  // HERMITE_BLEND 过渡段数量
+    double max_blend_corridor_deviation;  // blend 段最大走廊偏差
+    int n_overlaps_resolved;        // blend 重叠规范化次数
 };
 ```
 
@@ -369,6 +382,8 @@ struct TimeReport {
     std::string fallback_reason;    // 回退原因
 };
 ```
+
+> **时间语义澄清**：`TimeReport` 和 `TimeMode` 是纯诊断信息，仅反映输入时间戳的质量检查结果。**无论时间戳是否正常（`USE_STAMP` 还是 `FALLBACK_*`），输出轨迹的时间轴都由内部"速度剖面 + `integrateTime()`"重新生成**，不会复现输入时间戳。`time_mode` 的实际影响仅限于 `TimeReport` 标记和 `warning_flags` 中的 `TIME_FALLBACK` 位。
 
 **ProfileReport - 速度剖面报告**:
 ```cpp
@@ -391,7 +406,7 @@ struct ProfileReport {
     double yaw_limited_ratio;       // yaw 约束成为主限制因素的比例
     double min_v_due_to_yaw_m_s;    // yaw 约束导致的最小速度上界
     bool yaw_limit_warning;         // Yaw 限制警告
-    bool curvature_guard_active;    // 曲率保护（当前实现为 false）
+    bool curvature_guard_active;    // 曲率保护是否激活（基于分段解析曲率真实检测）
 };
 ```
 
@@ -456,12 +471,12 @@ public:
      *
      * 处理流程：
      * 1. 预处理：时间戳检查、yaw 展开、去重点
-     * 2. 弧长重采样：生成等间距点（并计算 dyaw/ds）
-     * 3. 拐角检测和生成过渡段（Hermite blend）
-     * 4. 三次样条拟合（CubicSpline，带走廊约束检查）
+     * 2. 弧长重采样：生成等间距点
+     * 3. 拐角检测 → 角点投影 → 共线 run 长度 → blend 生成与规范化
+     * 4. 分段几何主链构建（LINEAR 直线段 + HERMITE_BLEND 角点过渡段）
      * 5. 时间参数化：生成速度剖面（受曲率/竖直/yaw-rate 约束影响）
      * 6. 末端收敛：靠近终点时对速度剖面做减速处理并重新积分时间
-     * 7. Yaw 处理：可选平滑 + 末端 yaw hold + rate limiter（使用更新后的时间序列）
+     * 7. Yaw 处理：参考折线投影 → 可选平滑 + 末端 yaw hold + 逐点 dt rate limiter
      * 8. 生成 Trajectory 对象
      */
     Result generate(const std::vector<Waypoint>& waypoints,
@@ -516,6 +531,24 @@ public:
      */
     double pathLength() const;
 
+    /// 获取起始时间（始终为 0）
+    double startTime() const;
+
+    /// 获取结束时间（== duration()）
+    double endTime() const;
+
+    /**
+     * @brief 根据弧长查询曲率
+     *
+     * 在有分段几何信息时使用解析曲率（LINEAR 段精确为 0，
+     * HERMITE_BLEND 段使用 |r'×r''|/|r'|³），
+     * 否则回退到重采样点的线性插值。
+     *
+     * @param s 从起点计的弧长 (m)
+     * @return 曲率 (1/R)，单位 rad/m
+     */
+    double curvatureFromArcLength(double s) const;
+
     /**
      * @brief 检查轨迹是否有效
      */
@@ -528,6 +561,11 @@ public:
 
     /**
      * @brief 获取目标 yaw 角
+     *
+     * 返回生成阶段保存的终点参考 yaw（来自 unwrapped yaw），
+     * 不经过 wrapToPi() 处理。当输入 yaw 跨越 ±π 时，
+     * goalYaw() 与 evaluate(endTime()).yaw（已 wrap 到 [-π, π]）
+     * 可能相差整圈。比较时建议用角度差归一化。
      */
     double goalYaw() const;
 };
@@ -557,16 +595,13 @@ std::cout << "  Position: " << state.position.transpose() << std::endl;
 std::cout << "  Velocity: " << state.velocity.transpose() << std::endl;
 std::cout << "  Yaw: " << state.yaw << " rad" << std::endl;
 
-// 3. 采样整条轨迹（用于发布控制指令）
+// 3. 采样整条轨迹（用于离线分析或导出）
 auto states = traj->sample(0.05);  // 20Hz 采样
 
 std::cout << "Sampled " << states.size() << " states" << std::endl;
 
 for (const auto& state : states) {
-    // 将 state 转换为控制指令并发送
-    publishSetpoint(state);
-
-    // 或保存到文件/数据库
+    // 保存到文件/数据库，或交给上层系统进一步处理
     saveState(state);
 }
 
@@ -578,6 +613,14 @@ auto states_50hz = traj->sample(0.02);  // 50Hz
 for (double t = 0.0; t <= traj->duration(); t += 0.05) {
     auto state = traj->evaluate(t);
     // 处理 state
+}
+
+// 6. 查询指定弧长处的曲率
+double s = 2.0;  // 弧长 2m 处
+double kappa = traj->curvatureFromArcLength(s);
+std::cout << "Curvature at s=" << s << "m: " << kappa << " rad/m" << std::endl;
+if (kappa > 1e-6) {
+    std::cout << "Turning radius: " << 1.0 / kappa << " m" << std::endl;
 }
 ```
 
@@ -613,37 +656,6 @@ while (std::getline(file, line)) {
     waypoints.emplace_back(x, y, z, yaw, t);
 }
 
-// 方法 3: 从 ROS 消息转换
-void pathCallback(const nav_msgs::Path::ConstPtr& msg) {
-    std::vector<trajectory_core::Waypoint> waypoints;
-
-    for (size_t i = 0; i < msg->poses.size(); ++i) {
-        const auto& pose = msg->poses[i].pose;
-
-        // 提取位置
-        double x = pose.position.x;
-        double y = pose.position.y;
-        double z = pose.position.z;
-
-        // 从四元数提取 yaw
-        tf2::Quaternion q(
-            pose.orientation.x,
-            pose.orientation.y,
-            pose.orientation.z,
-            pose.orientation.w
-        );
-        double roll, pitch, yaw;
-        tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
-
-        // 时间戳
-        double t = msg->poses[i].header.stamp.toSec();
-
-        waypoints.emplace_back(x, y, z, yaw, t);
-    }
-
-    // 生成轨迹
-    generateAndPublishTrajectory(waypoints);
-}
 ```
 
 **输入数据要求**:
@@ -689,17 +701,17 @@ config.v_end_max = 0.5;          // 收敛段最大速度 0.5 m/s
 
 // 验证配置
 if (!config.validate()) {
-    ROS_ERROR("Invalid trajectory configuration!");
+    std::cerr << "Invalid trajectory configuration!" << std::endl;
     return;
 }
 
 // 或者从文件加载
 try {
     auto config = trajectory_core::TrajectoryConfig::loadFromYaml(
-        ros::package::getPath("my_package") + "/config/trajectory.yaml"
+        "config/trajectory.yaml"
     );
 } catch (const std::exception& e) {
-    ROS_ERROR("Failed to load config: %s", e.what());
+    std::cerr << "Failed to load config: " << e.what() << std::endl;
 }
 ```
 
@@ -714,20 +726,20 @@ auto result = generator.generate(waypoints, config);
 
 // 检查结果
 if (!result.isSuccess()) {
-    ROS_ERROR("Trajectory generation failed: %s", result.message.c_str());
-    ROS_ERROR("Status code: %s",
-              trajectory_core::statusCodeToString(result.code).c_str());
+    std::cerr << "Trajectory generation failed: " << result.message << std::endl;
+    std::cerr << "Status code: "
+              << trajectory_core::statusCodeToString(result.code) << std::endl;
 
     // 根据不同错误类型处理
     switch (result.code) {
         case trajectory_core::StatusCode::INVALID_INPUT:
-            ROS_ERROR("Input waypoints are invalid");
+            std::cerr << "Input waypoints are invalid" << std::endl;
             break;
         case trajectory_core::StatusCode::FIT_FAILED:
-            ROS_ERROR("Spline fitting failed, check input data and configuration");
+            std::cerr << "Geometry fitting failed, check input data and configuration" << std::endl;
             break;
         case trajectory_core::StatusCode::PROFILE_INFEASIBLE:
-            ROS_ERROR("Cannot generate velocity profile, try reducing v_max or increasing a_tan_max");
+            std::cerr << "Cannot generate velocity profile, try reducing v_max or increasing a_tan_max" << std::endl;
             break;
         default:
             break;
@@ -737,26 +749,25 @@ if (!result.isSuccess()) {
 }
 
 // 检查警告
-if (result.code == trajectory_core::StatusCode::TIME_INVALID_FALLBACK) {
-    ROS_WARN("Timestamp anomaly detected, using fallback mode: %s",
-             result.message.c_str());
+if (result.hasTimeFallback()) {
+    std::cerr << "Warning: timestamp anomaly detected, internal time fallback is active: "
+              << result.message << std::endl;
 }
 
-// 走廊约束检查（即便 StatusCode 为 SUCCESS，也建议检查）
-if (result.isSuccess() && !result.report.fit.fit_converged) {
-    ROS_WARN("Corridor constraint may be violated: max_deviation=%.3f m > allowed=%.3f m",
-             result.report.fit.max_deviation_m, config.max_deviation_m);
+// 走廊约束检查（即便主结果 SUCCESS，也建议检查）
+if (result.isCorridorExceeded()) {
+    std::cerr << "Warning: corridor constraint may be violated: max_deviation="
+              << result.report.fit.max_deviation_m
+              << " m > allowed=" << config.max_deviation_m << " m" << std::endl;
 }
 
 // 打印报告
-ROS_INFO("Trajectory generated successfully!");
-ROS_INFO("Duration: %.2f s", result.report.profile.total_duration_s);
-ROS_INFO("Path length: %.2f m", result.report.profile.path_length_m);
-ROS_INFO("Max speed: %.2f m/s", result.report.profile.max_speed_m_s);
-ROS_INFO("Max yaw rate: %.2f rad/s", result.report.yaw.max_yaw_rate_rad_s);
-
-// 详细报告（用于调试）
-ROS_DEBUG_STREAM(result.report.toString());
+std::cout << "Trajectory generated successfully!" << std::endl;
+std::cout << "Duration: " << result.report.profile.total_duration_s << " s" << std::endl;
+std::cout << "Path length: " << result.report.profile.path_length_m << " m" << std::endl;
+std::cout << "Max speed: " << result.report.profile.max_speed_m_s << " m/s" << std::endl;
+std::cout << "Max yaw rate: " << result.report.yaw.max_yaw_rate_rad_s << " rad/s" << std::endl;
+std::cout << result.report.toString() << std::endl;
 ```
 
 ### 4. 使用轨迹
@@ -776,31 +787,6 @@ for (const auto& state : all_states) {
         << state.velocity.x() << "," << state.velocity.y() << "," << state.velocity.z() << ","
         << state.yaw << "," << state.yaw_rate << "\n";
 }
-
-// 方法 2: 在线实时跟踪（适合实时控制）
-ros::Rate rate(20);  // 20Hz
-double t_start = ros::Time::now().toSec();
-
-while (ros::ok()) {
-    double t_elapsed = ros::Time::now().toSec() - t_start;
-
-    // 检查是否完成
-    if (t_elapsed >= traj->duration()) {
-        ROS_INFO("Trajectory completed!");
-        break;
-    }
-
-    // 评估当前时刻的状态
-    auto state = traj->evaluate(t_elapsed);
-
-    // 发布控制指令
-    publishPositionTarget(state);
-
-    rate.sleep();
-}
-
-// 方法 3: 预先发布整条轨迹（适合某些控制器）
-publishFullTrajectory(all_states);
 ```
 
 ---
@@ -814,21 +800,13 @@ auto result = generator.generate(waypoints, config);
 
 switch (result.code) {
     case trajectory_core::StatusCode::SUCCESS:
-        // 成功生成（仍建议结合 Report 检查质量/约束是否满足）
+        // 成功生成（仍建议结合 warning/report 检查质量/约束是否满足）
         processTrajectory(result.traj);
-        break;
-
-    case trajectory_core::StatusCode::TIME_INVALID_FALLBACK:
-        // 时间戳异常，但轨迹仍可用
-        ROS_WARN("Using fallback time mode: %s", result.message.c_str());
-        if (result.isUsable()) {
-            processTrajectory(result.traj);
-        }
         break;
 
     case trajectory_core::StatusCode::INVALID_INPUT:
         // 输入数据无效
-        ROS_ERROR("Invalid input: %s", result.message.c_str());
+        std::cerr << "Invalid input: " << result.message << std::endl;
         // 检查输入数据，可能需要：
         // - 增加路径点数量（至少 2 个）
         // - 检查点之间距离（不要过近）
@@ -837,7 +815,7 @@ switch (result.code) {
 
     case trajectory_core::StatusCode::FIT_FAILED:
         // 几何拟合失败（数值失败/内部失败）
-        ROS_ERROR("Fitting failed: %s", result.message.c_str());
+        std::cerr << "Fitting failed: " << result.message << std::endl;
         // 可能的解决方案：
         // - 检查输入点是否退化（大量重合/总长度过小）
         // - 适当增大 ds_m（减少噪声）或放宽 max_deviation_m
@@ -846,7 +824,7 @@ switch (result.code) {
 
     case trajectory_core::StatusCode::PROFILE_INFEASIBLE:
         // 无法生成速度剖面
-        ROS_ERROR("Velocity profile infeasible: %s", result.message.c_str());
+        std::cerr << "Velocity profile infeasible: " << result.message << std::endl;
         // 可能的解决方案：
         // - 降低 config.v_max
         // - 增大 config.a_tan_max
@@ -856,62 +834,8 @@ switch (result.code) {
 
     case trajectory_core::StatusCode::INTERNAL_ERROR:
         // 内部错误（不应该发生）
-        ROS_ERROR("Internal error: %s", result.message.c_str());
+        std::cerr << "Internal error: " << result.message << std::endl;
         break;
-}
-```
-
-### Ch18HoverWait 进入失败回退（强制）
-
-当状态机从 `Ch18HoverWait` 进入且轨迹生成失败/不可用（`result.isUsable() == false`）时，退化为最简单的位置控制回退：
-
-1. 发布 `/mavros/setpoint_position/local`（仅位置字段）。
-2. 将**记录的原始路径**按弧长重采样为每 `0.3m` 一个点。
-3. 重采样必须沿原始折线**分段线性插值**，端点保持，确保路径与原始路径一致（不做拟合/平滑）。
-
-**参考实现（伪代码）**：
-
-```cpp
-std::vector<Eigen::Vector3d> resamplePolylineByArcLength(
-    const std::vector<trajectory_core::Waypoint>& wps, double ds) {
-    std::vector<Eigen::Vector3d> out;
-    if (wps.size() < 2) return out;
-    std::vector<double> s(wps.size(), 0.0);
-    for (size_t i = 1; i < wps.size(); ++i) {
-        s[i] = s[i - 1] + (wps[i].position - wps[i - 1].position).norm();
-    }
-    const double total = s.back();
-    for (double cur = 0.0; cur <= total; cur += ds) {
-        size_t idx = 0;
-        while (idx + 1 < s.size() && s[idx + 1] < cur) ++idx;
-        const double seg = s[idx + 1] - s[idx];
-        const double ratio = (seg > 1e-6) ? (cur - s[idx]) / seg : 0.0;
-        const auto p = wps[idx].position + ratio * (wps[idx + 1].position - wps[idx].position);
-        out.push_back(p);
-    }
-    if ((out.back() - wps.back().position).norm() > 1e-3) {
-        out.push_back(wps.back().position);  // 端点保持
-    }
-    return out;
-}
-
-if (state == Ch18HoverWait && !result.isUsable()) {
-    const double ds = 0.3;
-    auto pts = resamplePolylineByArcLength(waypoints, ds);
-
-    ros::Publisher sp_pub = nh.advertise<geometry_msgs::PoseStamped>(
-        "/mavros/setpoint_position/local", 10);
-    ros::Rate rate(20);
-    for (const auto& p : pts) {
-        geometry_msgs::PoseStamped msg;
-        msg.header.stamp = ros::Time::now();
-        msg.header.frame_id = "map";
-        msg.pose.position.x = p.x();
-        msg.pose.position.y = p.y();
-        msg.pose.position.z = p.z();
-        sp_pub.publish(msg);
-        rate.sleep();
-    }
 }
 ```
 
@@ -924,22 +848,22 @@ trajectory_core::TrajectoryConfig config;
 
 // 验证前检查
 if (!config.validate()) {
-    ROS_ERROR("Configuration validation failed!");
+    std::cerr << "Configuration validation failed!" << std::endl;
 
     // 常见错误检查
     if (config.corner_blend_len_m < 2.0 * config.ds_m) {
-        ROS_ERROR("corner_blend_len_m (%.3f) < 2 * ds_m (%.3f)",
-                  config.corner_blend_len_m, 2.0 * config.ds_m);
+        std::cerr << "corner_blend_len_m (" << config.corner_blend_len_m
+                  << ") < 2 * ds_m (" << 2.0 * config.ds_m << ")" << std::endl;
     }
 
     if (config.v_end_max > config.v_max) {
-        ROS_ERROR("v_end_max (%.2f) > v_max (%.2f)",
-                  config.v_end_max, config.v_max);
+        std::cerr << "v_end_max (" << config.v_end_max
+                  << ") > v_max (" << config.v_max << ")" << std::endl;
     }
 
     if (config.max_deviation_m < config.ds_m * 0.5) {
-        ROS_ERROR("max_deviation_m (%.3f) too small relative to ds_m (%.3f)",
-                  config.max_deviation_m, config.ds_m);
+        std::cerr << "max_deviation_m (" << config.max_deviation_m
+                  << ") too small relative to ds_m (" << config.ds_m << ")" << std::endl;
     }
 
     return;
@@ -962,210 +886,14 @@ try {
     }
 
 } catch (const std::runtime_error& e) {
-    ROS_ERROR("Runtime error: %s", e.what());
+    std::cerr << "Runtime error: " << e.what() << std::endl;
     // 文件读取错误、内存分配失败等
 
 } catch (const std::exception& e) {
-    ROS_ERROR("Exception: %s", e.what());
+    std::cerr << "Exception: " << e.what() << std::endl;
 
 } catch (...) {
-    ROS_ERROR("Unknown exception");
-}
-```
-
----
-
-## MAVROS 对接
-
-### 将 TrajectoryState 转换为 PositionTarget
-
-```cpp
-#include <mavros_msgs/PositionTarget.h>
-#include <trajectory_core/trajectory_core.hpp>
-
-mavros_msgs::PositionTarget toPositionTarget(
-    const trajectory_core::TrajectoryState& state,
-    const std::string& frame_id = "map") {
-
-    mavros_msgs::PositionTarget target;
-
-    // 设置时间戳
-    target.header.stamp = ros::Time::now();
-    target.header.frame_id = frame_id;
-
-    // 坐标系：LOCAL_NED 或 LOCAL_OFFSET_NED（注意：要用“非 body”的 frame）
-    //
-    // 重要：
-    // - ROS 中的位姿/速度/加速度通常使用 ENU（trajectory_core 也是 ENU）。
-    // - mavros 的 setpoint_raw 插件在发送 MAVLink 前会把你提供的 ENU 数据自动转换为 NED，
-    //   前提是 coordinate_frame 不是 FRAME_BODY_NED / FRAME_BODY_OFFSET_NED。
-    // - 因此这里直接填 ENU 值，避免重复做 ENU->NED 导致“二次转换”。
-    target.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
-
-    // Type mask: 指定使用哪些字段
-    // 启用：position, velocity, yaw, yaw_rate
-    // 禁用：acceleration, force
-    target.type_mask = mavros_msgs::PositionTarget::IGNORE_AFX |
-                       mavros_msgs::PositionTarget::IGNORE_AFY |
-                       mavros_msgs::PositionTarget::IGNORE_AFZ;
-
-    // 直接填 ENU（mavros 会处理 ENU->NED）
-    target.position.x = state.position.x();
-    target.position.y = state.position.y();
-    target.position.z = state.position.z();
-
-    target.velocity.x = state.velocity.x();
-    target.velocity.y = state.velocity.y();
-    target.velocity.z = state.velocity.z();
-
-    // yaw / yaw_rate：通常也按 ENU 直接填（避免二次转换）。
-    // 若你发现 yaw 存在 90° 偏置/方向相反，优先检查 TF/frame_id 与飞控期望；必要时再按系统约定做转换。
-    target.yaw = state.yaw;
-    target.yaw_rate = state.yaw_rate;
-
-    // 如果启用了加速度输出
-    if (state.acceleration.has_value()) {
-        target.type_mask &= ~(mavros_msgs::PositionTarget::IGNORE_AFX |
-                             mavros_msgs::PositionTarget::IGNORE_AFY |
-                             mavros_msgs::PositionTarget::IGNORE_AFZ);
-
-        target.acceleration_or_force.x = state.acceleration->x();
-        target.acceleration_or_force.y = state.acceleration->y();
-        target.acceleration_or_force.z = state.acceleration->z();
-    }
-
-    return target;
-}
-```
-
-### 完整的 ROS 节点示例
-
-```cpp
-#include <ros/ros.h>
-#include <nav_msgs/Path.h>
-#include <mavros_msgs/PositionTarget.h>
-#include <mavros_msgs/State.h>
-#include <trajectory_core/trajectory_core.hpp>
-
-class TrajectoryPublisher {
-public:
-    TrajectoryPublisher(ros::NodeHandle& nh) : nh_(nh) {
-        // 订阅录制的路径
-        path_sub_ = nh_.subscribe("recorded_path", 1,
-                                  &TrajectoryPublisher::pathCallback, this);
-
-        // 发布控制指令
-        setpoint_pub_ = nh_.advertise<mavros_msgs::PositionTarget>(
-            "mavros/setpoint_raw/local", 10);
-
-        // 订阅飞控状态
-        state_sub_ = nh_.subscribe("mavros/state", 10,
-                                   &TrajectoryPublisher::stateCallback, this);
-
-        // 加载配置
-        loadConfig();
-    }
-
-    void loadConfig() {
-        nh_.param("v_max", config_.v_max, 2.0);
-        nh_.param("yaw_rate_max", config_.yaw_rate_max, 0.6);
-        nh_.param("enable_end_converge", config_.enable_end_converge, true);
-        nh_.param("s_stop_m", config_.s_stop_m, 3.0);
-        nh_.param("r_stop_m", config_.r_stop_m, 2.0);
-
-        if (!config_.validate()) {
-            ROS_ERROR("Invalid configuration!");
-        }
-    }
-
-    void pathCallback(const nav_msgs::Path::ConstPtr& msg) {
-        if (msg->poses.size() < 2) {
-            ROS_WARN("Path has less than 2 points, ignoring");
-            return;
-        }
-
-        // 转换为 Waypoint
-        std::vector<trajectory_core::Waypoint> waypoints;
-        for (const auto& pose_stamped : msg->poses) {
-            waypoints.push_back(poseToWaypoint(pose_stamped));
-        }
-
-        // 生成轨迹
-        auto result = generator_.generate(waypoints, config_);
-
-        if (!result.isSuccess()) {
-            ROS_ERROR("Failed to generate trajectory: %s", result.message.c_str());
-            return;
-        }
-
-        ROS_INFO("Trajectory generated: %.2f s, %.2f m",
-                 result.report.profile.total_duration_s,
-                 result.report.profile.path_length_m);
-
-        // 保存轨迹
-        current_trajectory_ = std::move(result.traj);
-        trajectory_start_time_ = ros::Time::now();
-        executing_ = true;
-    }
-
-    void stateCallback(const mavros_msgs::State::ConstPtr& msg) {
-        current_state_ = *msg;
-    }
-
-    void run() {
-        ros::Rate rate(20);  // 20Hz
-
-        while (ros::ok()) {
-            if (executing_ && current_trajectory_ &&
-                current_state_.mode == "OFFBOARD" && current_state_.armed) {
-
-                double t = (ros::Time::now() - trajectory_start_time_).toSec();
-
-                if (t >= current_trajectory_->duration()) {
-                    ROS_INFO("Trajectory completed!");
-                    executing_ = false;
-                } else {
-                    auto state = current_trajectory_->evaluate(t);
-                    auto target = toPositionTarget(state);
-                    setpoint_pub_.publish(target);
-                }
-            }
-
-            ros::spinOnce();
-            rate.sleep();
-        }
-    }
-
-private:
-    trajectory_core::Waypoint poseToWaypoint(
-        const geometry_msgs::PoseStamped& pose_stamped) {
-        // 提取位置和 yaw
-        // (实现细节省略，参见前面示例)
-        // ...
-    }
-
-    ros::NodeHandle nh_;
-    ros::Subscriber path_sub_;
-    ros::Subscriber state_sub_;
-    ros::Publisher setpoint_pub_;
-
-    trajectory_core::TrajectoryGenerator generator_;
-    trajectory_core::TrajectoryConfig config_;
-    std::unique_ptr<trajectory_core::Trajectory> current_trajectory_;
-
-    ros::Time trajectory_start_time_;
-    bool executing_ = false;
-    mavros_msgs::State current_state_;
-};
-
-int main(int argc, char** argv) {
-    ros::init(argc, argv, "trajectory_publisher");
-    ros::NodeHandle nh("~");
-
-    TrajectoryPublisher publisher(nh);
-    publisher.run();
-
-    return 0;
+    std::cerr << "Unknown exception" << std::endl;
 }
 ```
 
@@ -1183,7 +911,8 @@ void processMultiplePaths(
     trajectory_core::TrajectoryGenerator generator;
 
     for (size_t i = 0; i < paths.size(); ++i) {
-        ROS_INFO("Processing path %zu/%zu", i + 1, paths.size());
+        std::cout << "Processing path " << (i + 1)
+                  << "/" << paths.size() << std::endl;
 
         auto result = generator.generate(paths[i], config);
 
@@ -1192,10 +921,12 @@ void processMultiplePaths(
             saveTrajectory(result.traj, "trajectory_" + std::to_string(i) + ".csv");
 
             // 记录统计信息
-            ROS_INFO("  Duration: %.2f s", result.report.profile.total_duration_s);
-            ROS_INFO("  Length: %.2f m", result.report.profile.path_length_m);
+            std::cout << "  Duration: " << result.report.profile.total_duration_s
+                      << " s" << std::endl;
+            std::cout << "  Length: " << result.report.profile.path_length_m
+                      << " m" << std::endl;
         } else {
-            ROS_WARN("  Failed: %s", result.message.c_str());
+            std::cerr << "  Failed: " << result.message << std::endl;
         }
     }
 }
@@ -1335,37 +1066,6 @@ void saveTrajectory(const std::unique_ptr<trajectory_core::Trajectory>& traj,
         file << state.yaw << "," << state.yaw_rate << "," << state.speed() << "\n";
     }
 }
-
-// 可视化（使用 rviz_visual_tools 或类似库）
-void visualizeTrajectory(const std::unique_ptr<trajectory_core::Trajectory>& traj,
-                        ros::Publisher& marker_pub) {
-    visualization_msgs::Marker line_strip;
-    line_strip.header.frame_id = "map";
-    line_strip.header.stamp = ros::Time::now();
-    line_strip.ns = "trajectory";
-    line_strip.action = visualization_msgs::Marker::ADD;
-    line_strip.pose.orientation.w = 1.0;
-    line_strip.id = 0;
-    line_strip.type = visualization_msgs::Marker::LINE_STRIP;
-    line_strip.scale.x = 0.05;  // 线宽
-    line_strip.color.r = 0.0;
-    line_strip.color.g = 1.0;
-    line_strip.color.b = 0.0;
-    line_strip.color.a = 1.0;
-
-    // 采样轨迹点
-    auto states = traj->sample(0.1);  // 10Hz 足够用于可视化
-
-    for (const auto& state : states) {
-        geometry_msgs::Point p;
-        p.x = state.position.x();
-        p.y = state.position.y();
-        p.z = state.position.z();
-        line_strip.points.push_back(p);
-    }
-
-    marker_pub.publish(line_strip);
-}
 ```
 
 ---
@@ -1430,209 +1130,6 @@ int main() {
 }
 ```
 
-### 示例 2: ROS 节点完整实现
-
-```cpp
-// trajectory_node.cpp
-#include <ros/ros.h>
-#include <nav_msgs/Path.h>
-#include <geometry_msgs/PoseStamped.h>
-#include <mavros_msgs/PositionTarget.h>
-#include <mavros_msgs/State.h>
-#include <tf2/LinearMath/Quaternion.h>
-#include <tf2/LinearMath/Matrix3x3.h>
-#include <trajectory_core/trajectory_core.hpp>
-
-class TrajectoryExecutor {
-public:
-    TrajectoryExecutor() : nh_("~"), executing_(false) {
-        // 加载参数
-        loadParameters();
-
-        // 订阅和发布
-        path_sub_ = nh_.subscribe("/recorded_path", 1,
-                                  &TrajectoryExecutor::pathCallback, this);
-        setpoint_pub_ = nh_.advertise<mavros_msgs::PositionTarget>(
-            "/mavros/setpoint_raw/local", 10);
-        state_sub_ = nh_.subscribe("/mavros/state", 10,
-                                   &TrajectoryExecutor::stateCallback, this);
-
-        ROS_INFO("Trajectory executor initialized");
-    }
-
-    void loadParameters() {
-        nh_.param("v_max", config_.v_max, 2.0);
-        nh_.param("vz_max", config_.vz_max, 0.8);
-        nh_.param("yaw_rate_max", config_.yaw_rate_max, 0.6);
-        nh_.param("a_tan_max", config_.a_tan_max, 1.0);
-        nh_.param("a_lat_max", config_.a_lat_max, 1.0);
-        nh_.param("enable_end_converge", config_.enable_end_converge, true);
-        nh_.param("s_stop_m", config_.s_stop_m, 3.0);
-        nh_.param("r_stop_m", config_.r_stop_m, 2.0);
-        nh_.param("v_end_max", config_.v_end_max, 0.8);
-        nh_.param("control_rate", control_rate_, 20.0);
-
-        if (!config_.validate()) {
-            ROS_ERROR("Configuration validation failed!");
-        } else {
-            ROS_INFO("Configuration loaded successfully");
-        }
-    }
-
-    void pathCallback(const nav_msgs::Path::ConstPtr& msg) {
-        if (msg->poses.size() < 2) {
-            ROS_WARN("Received path with less than 2 points");
-            return;
-        }
-
-        ROS_INFO("Received path with %zu points", msg->poses.size());
-
-        // 转换为 Waypoint
-        std::vector<trajectory_core::Waypoint> waypoints;
-        for (const auto& pose_stamped : msg->poses) {
-            waypoints.push_back(poseToWaypoint(pose_stamped));
-        }
-
-        // 生成轨迹
-        auto result = generator_.generate(waypoints, config_);
-
-        if (!result.isSuccess()) {
-            ROS_ERROR("Failed to generate trajectory: %s", result.message.c_str());
-            return;
-        }
-
-        if (result.code == trajectory_core::StatusCode::TIME_INVALID_FALLBACK) {
-            ROS_WARN("Timestamp fallback: %s", result.message.c_str());
-        }
-
-        // 打印报告
-        ROS_INFO("Trajectory generated:");
-        ROS_INFO("  Duration: %.2f s", result.report.profile.total_duration_s);
-        ROS_INFO("  Length: %.2f m", result.report.profile.path_length_m);
-        ROS_INFO("  Max speed: %.2f m/s", result.report.profile.max_speed_m_s);
-        ROS_INFO("  Max yaw rate: %.2f rad/s", result.report.yaw.max_yaw_rate_rad_s);
-
-        // 保存轨迹
-        current_trajectory_ = std::move(result.traj);
-        trajectory_start_time_ = ros::Time::now();
-        executing_ = true;
-
-        ROS_INFO("Starting trajectory execution");
-    }
-
-    void stateCallback(const mavros_msgs::State::ConstPtr& msg) {
-        current_state_ = *msg;
-    }
-
-    void spin() {
-        ros::Rate rate(control_rate_);
-
-        while (ros::ok()) {
-            if (executing_ && current_trajectory_) {
-                // 检查飞控状态
-                if (!current_state_.armed || current_state_.mode != "OFFBOARD") {
-                    ROS_WARN_THROTTLE(1.0, "Waiting for OFFBOARD mode and armed");
-                } else {
-                    // 计算当前时间
-                    double t = (ros::Time::now() - trajectory_start_time_).toSec();
-
-                    if (t >= current_trajectory_->duration()) {
-                        ROS_INFO("Trajectory execution completed!");
-                        executing_ = false;
-                    } else {
-                        // 评估轨迹状态
-                        auto state = current_trajectory_->evaluate(t);
-
-                        // 发布控制指令
-                        auto target = stateToPositionTarget(state);
-                        setpoint_pub_.publish(target);
-                    }
-                }
-            }
-
-            ros::spinOnce();
-            rate.sleep();
-        }
-    }
-
-private:
-    trajectory_core::Waypoint poseToWaypoint(
-        const geometry_msgs::PoseStamped& pose_stamped) {
-
-        double x = pose_stamped.pose.position.x;
-        double y = pose_stamped.pose.position.y;
-        double z = pose_stamped.pose.position.z;
-
-        // 从四元数提取 yaw
-        tf2::Quaternion q(
-            pose_stamped.pose.orientation.x,
-            pose_stamped.pose.orientation.y,
-            pose_stamped.pose.orientation.z,
-            pose_stamped.pose.orientation.w
-        );
-        double roll, pitch, yaw;
-        tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
-
-        double t = pose_stamped.header.stamp.toSec();
-
-        return trajectory_core::Waypoint(x, y, z, yaw, t);
-    }
-
-    mavros_msgs::PositionTarget stateToPositionTarget(
-        const trajectory_core::TrajectoryState& state) {
-
-        mavros_msgs::PositionTarget target;
-        target.header.stamp = ros::Time::now();
-        target.header.frame_id = "map";
-        target.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
-
-        target.type_mask = mavros_msgs::PositionTarget::IGNORE_AFX |
-                          mavros_msgs::PositionTarget::IGNORE_AFY |
-                          mavros_msgs::PositionTarget::IGNORE_AFZ;
-
-        // 直接填 ENU（mavros 会处理 ENU->NED；不要手动转换避免二次转换）
-        target.position.x = state.position.x();
-        target.position.y = state.position.y();
-        target.position.z = state.position.z();
-
-        target.velocity.x = state.velocity.x();
-        target.velocity.y = state.velocity.y();
-        target.velocity.z = state.velocity.z();
-
-        // yaw / yaw_rate：通常也按 ENU 直接填（避免二次转换）。
-        target.yaw = state.yaw;
-        target.yaw_rate = state.yaw_rate;
-
-        return target;
-    }
-
-    ros::NodeHandle nh_;
-    ros::Subscriber path_sub_;
-    ros::Subscriber state_sub_;
-    ros::Publisher setpoint_pub_;
-
-    trajectory_core::TrajectoryGenerator generator_;
-    trajectory_core::TrajectoryConfig config_;
-    std::unique_ptr<trajectory_core::Trajectory> current_trajectory_;
-
-    ros::Time trajectory_start_time_;
-    bool executing_;
-    mavros_msgs::State current_state_;
-    double control_rate_;
-};
-
-int main(int argc, char** argv) {
-    ros::init(argc, argv, "trajectory_executor");
-
-    TrajectoryExecutor executor;
-    executor.spin();
-
-    return 0;
-}
-```
-
----
-
 ## 常见问题
 
 ### Q1: 如何选择合适的参数？
@@ -1653,8 +1150,7 @@ int main(int argc, char** argv) {
 
 **A**:
 - 输入给库：使用 ENU 坐标
-- 发给 MAVROS（`mavros/setpoint_raw/*`）：如果你发布的是 ROS 常见的 ENU 数据（通常就是这样），那么 `mavros_msgs::PositionTarget` / `GlobalPositionTarget` 应选择“非 body”的 `coordinate_frame`（例如 `FRAME_LOCAL_NED` / `FRAME_LOCAL_OFFSET_NED`），并**直接填 ENU**；mavros 插件会在发送 MAVLink 前自动做 ENU→NED。只有当你的量确实是在机体系（base_link/body）时，才用 `FRAME_BODY_NED` / `FRAME_BODY_OFFSET_NED`。
-- 只有在你绕过 mavros（直接发 MAVLink/飞控接口）时，才需要自己做 ENU→NED/角度方向的转换。
+- 库本身不处理外部飞控/中间件的坐标系转换；与 ROS、MAVROS、MAVLink 或其他系统的坐标映射，请以对应系统的官方文档和实际链路测试为准。
 
 ### Q4: 轨迹可以重复使用吗？
 
@@ -1664,15 +1160,15 @@ int main(int argc, char** argv) {
 
 **A**:
 1. 打印 `Result::message` 查看错误信息
-2. 查看 `Report` 中的详细统计信息
-3. 将轨迹导出为 CSV，使用 Python 可视化（参见 `tools/plot_trajectory.py`）
-4. 检查 `Report::yaw::yaw_rate_compliant` 等标志
+2. 查看 `Report` 中的详细统计信息（含分段几何统计 `n_linear`/`n_hermite`）
+3. 使用 `trajectory_case_tool` 一键生成/导出/绘图（参见 README 可视化章节）
+4. 将轨迹导出为 CSV，使用 `tools/plot_trajectory.py` 可视化（含曲率剖面、速度约束分解等）
+5. 检查 `Report::yaw::yaw_rate_compliant` 等标志
 
 ### Q6: 如何提高实时性能？
 
 **A**:
-- 增大 `ds_m`（减少采样点）
-- 减少 `fit_max_iters`
+- 增大 `ds_m`（减少采样点数量）
 - 使用更粗的 `dt_sample_s`
 - 离线预先生成轨迹，不要在控制循环中生成
 
@@ -1725,13 +1221,6 @@ int main(int argc, char** argv) {
   - Z 轴：上 (Up)
   - Yaw: 从 +X 轴开始，逆时针为正
 
-- **NED (North-East-Down)**（MAVLink/飞控内部）
-  - X 轴：北 (North)
-  - Y 轴：东 (East)
-  - Z 轴：下 (Down)
-  - Yaw: 从 +X 轴开始，顺时针为正
-  - 说明：在 ROS 侧（mavros topic）通常仍以 ENU 表达；NED 是 MAVLink/飞控内部约定。mavros 会根据 `coordinate_frame` 等信息自动完成 ENU↔NED/机体系之间的转换。
-
 ### C. 单位约定
 
 - 长度: 米 (m)
@@ -1754,7 +1243,7 @@ enum class TimeMode {
 
 enum class CurvatureMethod {
     DISCRETE_3PT,
-    SPLINE_DERIV,
+    SEGMENT_ANALYTIC,
     BOTH
 };
 
@@ -1783,4 +1272,4 @@ std::string timeModeToString(TimeMode mode);
 
 ---
 
-**文档版本**: v1.0 (2026-01-28)
+**文档版本**: v2.0 (2026-03-24)

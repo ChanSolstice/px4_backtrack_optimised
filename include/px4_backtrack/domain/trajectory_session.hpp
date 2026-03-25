@@ -23,11 +23,9 @@ public:
   /// 生成轨迹（从录制点）
   /// @param points 录制点序列
   /// @param config trajectory_core配置
-  /// @param record_max_hz 录制频率（用于重建时间轴）
   /// @return 是否生成成功
   bool generate(const std::vector<RecordPoint>& points,
-                const trajectory_core::TrajectoryConfig& config,
-                double record_max_hz);
+                const trajectory_core::TrajectoryConfig& config);
 
   /// 评估当前时刻的轨迹状态
   /// @param current_walltime 当前wall time (s)

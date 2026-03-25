@@ -25,8 +25,7 @@ void TrajectorySession::reset() {
 }
 
 bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
-                                  const trajectory_core::TrajectoryConfig& config,
-                                  double record_max_hz) {
+                                  const trajectory_core::TrajectoryConfig& config) {
   // 检查输入点数
   if (points.size() < 2) {
     ROS_ERROR("[TrajectorySession] Not enough points to generate trajectory: %zu", points.size());
@@ -36,26 +35,29 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
   // 记录开始时间
   auto start_time = std::chrono::high_resolution_clock::now();
 
-  // 构造轨迹输入waypoints（逆序+重建时间轴）
+  // 构造轨迹输入waypoints（逆序 + 保留原始采样间隔的相对关系）
   std::vector<trajectory_core::Waypoint> waypoints;
   waypoints.reserve(points.size());
 
   const size_t n = points.size();
-  const double dt = 1.0 / record_max_hz;
+  const double t_end = points.back().timestamp;
 
   for (size_t i = 0; i < n; ++i) {
     // 逆序索引
     size_t reverse_idx = n - 1 - i;
     const auto& pt = points[reverse_idx];
 
-    // 重建单调递增的时间戳
-    double t_new = i * dt;
+    // 逆序后重新映射到从 0 开始的单调递增时间轴。
+    // 这样既满足 trajectory_core 对 timestamp 单调性的要求，
+    // 又保留原始录制 dt 间隔用于时间质量诊断。
+    double t_new = t_end - pt.timestamp;
 
     // 构造Waypoint
     waypoints.emplace_back(pt.position, pt.yaw, t_new);
   }
 
-  ROS_INFO("[TrajectorySession] Generating trajectory from %zu waypoints (reversed)", waypoints.size());
+  ROS_INFO("[TrajectorySession] Generating trajectory from %zu waypoints (reversed, mirrored timestamps)",
+           waypoints.size());
 
   // 调用trajectory_core生成轨迹
   auto result = generator_.generate(waypoints, config);
@@ -74,8 +76,11 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
   }
 
   // 检查警告
-  if (result.code == trajectory_core::StatusCode::TIME_INVALID_FALLBACK) {
+  if (result.hasTimeFallback()) {
     ROS_WARN("[TrajectorySession] Timestamp fallback: %s", result.message.c_str());
+  }
+  if (result.isCorridorExceeded()) {
+    ROS_WARN("[TrajectorySession] Corridor constraint exceeded");
   }
 
   // 保存轨迹
@@ -93,6 +98,8 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
   ROS_INFO("[TrajectorySession]   Path length: %.2f m", result.report.profile.path_length_m);
   ROS_INFO("[TrajectorySession]   Max speed: %.2f m/s", result.report.profile.max_speed_m_s);
   ROS_INFO("[TrajectorySession]   Max yaw rate: %.2f rad/s", result.report.yaw.max_yaw_rate_rad_s);
+  ROS_INFO("[TrajectorySession]   Time mode: %s",
+           trajectory_core::timeModeToString(result.report.time.time_mode).c_str());
 
   // 检查走廊约束
   if (!result.report.fit.fit_converged) {
