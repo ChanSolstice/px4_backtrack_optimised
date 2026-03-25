@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-03-25 — 新增 Debug 可视化功能
+
+新增可选的 debug 输出能力：轨迹生成成功后自动导出录制航点与返航轨迹数据，支持离线 CSV 分析和 rviz 实时可视化。
+
+### 新增
+
+- **feat(debug):** 新增 `DebugDumper` (infrastructure 层)，轨迹生成成功后将录制航点和采样轨迹写入带时间戳的 CSV 文件，输出目录可配置
+- **feat(debug):** 新增 `DebugPublisher` (adapters 层)，发布录制航点 (`MarkerArray`) 和返航轨迹 (`nav_msgs/Path`) 到 latched debug 话题，供 rviz 实时查看
+- **feat(debug):** 新增 Python 可视化脚本 `scripts/plot_debug_csv.py`，支持 3D 路径对比、俯视图、高度剖面和偏航剖面绘制
+- **feat(config):** `backtrack_params.yaml` 新增 4 个 debug 参数：`debug_enable_csv_dump`、`debug_csv_output_dir`、`debug_trajectory_sample_dt`、`debug_enable_rviz_publish`
+
+### 修改
+
+- **refactor(usecase):** `BacktrackUseCase` 新增 `setDebugDumper()` / `setDebugPublisher()` setter 注入和 `performDebugDump()` 方法，在轨迹生成成功后自动调用
+- **build:** `CMakeLists.txt` 和 `package.xml` 新增 `visualization_msgs` 依赖，新增 `debug_dumper.cpp` 和 `debug_publishers.cpp` 编译目标
+
+### 涉及文件
+
+- `include/px4_backtrack/infrastructure/debug_dumper.hpp` (新增)
+- `src/infrastructure/debug_dumper.cpp` (新增)
+- `include/px4_backtrack/adapters/debug_publishers.hpp` (新增)
+- `src/adapters/debug_publishers.cpp` (新增)
+- `scripts/plot_debug_csv.py` (新增)
+- `include/px4_backtrack/application/backtrack_usecase.hpp`
+- `src/application/backtrack_usecase.cpp`
+- `src/backtrack_node.cpp`
+- `include/px4_backtrack/infrastructure/config_loader.hpp`
+- `src/infrastructure/config_loader.cpp`
+- `config/backtrack_params.yaml`
+- `CMakeLists.txt`
+- `package.xml`
+
 ## 2026-03-25 — 新增核心领域层单元测试
 
 为当前 C++ 实现补充第一批 `gtest` 单元测试，并把测试目标接入 `catkin` 构建链路。

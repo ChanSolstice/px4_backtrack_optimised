@@ -17,6 +17,7 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   loadOffboardParams(nh, config);
   loadRejoinParams(nh, config);
   loadLandingParams(nh, config);
+  loadDebugParams(nh, config);
 
   // 加载trajectory_core配置路径
   std::string trajectory_config_path;
@@ -121,6 +122,20 @@ void ConfigLoader::loadLandingParams(ros::NodeHandle& nh, application::UseCaseCo
 
   ROS_INFO("[ConfigLoader] Landing params:");
   ROS_INFO("  landing_hover_s: %.1f", config.state_machine_config.landing_hover_s);
+}
+
+void ConfigLoader::loadDebugParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
+  nh.param("debug_enable_csv_dump", config.debug_enable_csv_dump, false);
+  nh.param<std::string>("debug_csv_output_dir", config.debug_csv_output_dir, std::string(""));
+  nh.param("debug_trajectory_sample_dt", config.debug_trajectory_sample_dt, 0.05);
+  nh.param("debug_enable_rviz_publish", config.debug_enable_rviz_publish, false);
+
+  ROS_INFO("[ConfigLoader] Debug params:");
+  ROS_INFO("  debug_enable_csv_dump: %s", config.debug_enable_csv_dump ? "true" : "false");
+  ROS_INFO("  debug_csv_output_dir: %s",
+           config.debug_csv_output_dir.empty() ? "(default: ~/.ros/backtrack_debug/)" : config.debug_csv_output_dir.c_str());
+  ROS_INFO("  debug_trajectory_sample_dt: %.3f", config.debug_trajectory_sample_dt);
+  ROS_INFO("  debug_enable_rviz_publish: %s", config.debug_enable_rviz_publish ? "true" : "false");
 }
 
 }  // namespace infrastructure

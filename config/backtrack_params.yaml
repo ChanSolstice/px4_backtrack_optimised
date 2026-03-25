@@ -97,3 +97,19 @@ landing_hover_s: 5.0
 
 # 轨迹生成库配置文件路径（必填）
 trajectory_config_path: "$(find px4_backtrack_optimised)/config/trajectory_config.yaml"
+
+# ============================
+# Debug/可视化参数
+# ============================
+
+# 是否启用CSV文件导出（轨迹生成成功后自动导出录制点和生成轨迹）
+debug_enable_csv_dump: true
+
+# CSV导出目录路径（留空则默认 ~/.ros/backtrack_debug/）
+debug_csv_output_dir: ""
+
+# 轨迹采样步长 (s) - 用于CSV导出和ROS可视化
+debug_trajectory_sample_dt: 0.1
+
+# 是否启用ROS可视化话题发布（录制航迹点+返航轨迹）
+debug_enable_rviz_publish: true

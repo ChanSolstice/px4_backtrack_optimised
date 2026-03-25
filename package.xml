@@ -21,6 +21,9 @@
   <!-- MAVROS dependencies -->
   <depend>mavros_msgs</depend>
 
+  <!-- Visualization -->
+  <depend>visualization_msgs</depend>
+
   <!-- Trajectory generation library -->
   <depend>trajectory_core</depend>
 

@@ -16,6 +16,7 @@ find_package(catkin REQUIRED COMPONENTS
   nav_msgs
   geometry_msgs
   mavros_msgs
+  visualization_msgs
   trajectory_core
 )
 
@@ -34,6 +35,7 @@ catkin_package(
     nav_msgs
     geometry_msgs
     mavros_msgs
+    visualization_msgs
     trajectory_core
   DEPENDS
     EIGEN3
@@ -69,11 +71,13 @@ set(ADAPTERS_SOURCES
   src/adapters/ros_subscribers.cpp
   src/adapters/ros_publishers.cpp
   src/adapters/ros_services.cpp
+  src/adapters/debug_publishers.cpp
 )
 
 ## Infrastructure层源文件
 set(INFRASTRUCTURE_SOURCES
   src/infrastructure/config_loader.cpp
+  src/infrastructure/debug_dumper.cpp
 )
 
 ## 所有库源文件
@@ -96,6 +100,7 @@ add_dependencies(${PROJECT_NAME}_lib
 
 target_link_libraries(${PROJECT_NAME}_lib
   ${catkin_LIBRARIES}
+  stdc++fs
 )
 
 ## 构建主节点可执行文件

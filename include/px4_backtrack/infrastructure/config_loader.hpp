@@ -45,6 +45,9 @@ private:
 
   /// 加载降落参数
   static void loadLandingParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
+
+  /// 加载Debug/可视化参数
+  static void loadDebugParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
 };
 
 }  // namespace infrastructure

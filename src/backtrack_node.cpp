@@ -1,8 +1,10 @@
 #include "px4_backtrack/application/backtrack_usecase.hpp"
 #include "px4_backtrack/infrastructure/config_loader.hpp"
+#include "px4_backtrack/infrastructure/debug_dumper.hpp"
 #include "px4_backtrack/adapters/ros_subscribers.hpp"
 #include "px4_backtrack/adapters/ros_publishers.hpp"
 #include "px4_backtrack/adapters/ros_services.hpp"
+#include "px4_backtrack/adapters/debug_publishers.hpp"
 #include <ros/ros.h>
 #include <memory>
 
@@ -81,7 +83,19 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
   ROS_INFO("[BacktrackNode] Creating BacktrackUseCase...");
   usecase_ = std::make_unique<application::BacktrackUseCase>(config);
 
-  // 4. 设置订阅者回调（可选，用于实时数据传递）
+  // 4. 配置 debug 功能（可选）
+  if (config.debug_enable_csv_dump) {
+    auto dumper = std::make_shared<infrastructure::DebugDumper>(config.debug_csv_output_dir);
+    usecase_->setDebugDumper(dumper);
+    ROS_INFO("[BacktrackNode] CSV debug dump enabled");
+  }
+  if (config.debug_enable_rviz_publish) {
+    auto debug_pub = std::make_shared<adapters::DebugPublisher>(nh_);
+    usecase_->setDebugPublisher(debug_pub);
+    ROS_INFO("[BacktrackNode] RViz debug publish enabled");
+  }
+
+  // 5. 设置订阅者回调（可选，用于实时数据传递）
   odom_sub_->setCallback([this](const domain::Vec3& position, double yaw, double stamp) {
     usecase_->onOdomReceived(position, yaw, stamp);
   });
@@ -94,7 +108,7 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
     usecase_->onStateReceived(armed, mode);
   });
 
-  // 5. 创建定时器
+  // 6. 创建定时器
   ROS_INFO("[BacktrackNode] Starting %.1f Hz timer...", publish_hz);
   timer_ = nh_.createTimer(ros::Duration(1.0 / publish_hz),
                            &BacktrackNode::timerCallback,

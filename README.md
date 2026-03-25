@@ -14,6 +14,7 @@
 - 触发时若录制点数不足，自动降级为原地降落
 - 返航结束后先固定点悬停，再发起 `POSCTL -> AUTO.LAND` 过渡（非 OFFBOARD 时直接请求 `AUTO.LAND`）
 - 发布内部状态与 RC 丢失持续状态，便于联调
+- 可选 debug 模式：轨迹生成后自动导出录制航点与返航轨迹 CSV，并可在 rviz 中实时查看
 
 ## 仓库现状
 
@@ -60,6 +61,8 @@
 | `/mavros/setpoint_raw/local` | `mavros_msgs/PositionTarget` | 发布悬停、返航和 rejoin setpoint |
 | `/px4_backtrack/state` | `std_msgs/String` | 发布内部状态机状态 |
 | `/status_rc_loss` | `std_msgs/Bool` | RC 丢失持续状态（`isRCLost()` 电平语义，丢失期间持续为 `true`） |
+| `/px4_backtrack/debug/waypoints` | `visualization_msgs/MarkerArray` | 录制航点可视化（latched，需启用 `debug_enable_rviz_publish`） |
+| `/px4_backtrack/debug/trajectory` | `nav_msgs/Path` | 返航轨迹可视化（latched，需启用 `debug_enable_rviz_publish`） |
 
 ### 服务
 
@@ -88,6 +91,7 @@
 - Rejoin 参数：`rejoin_trigger_dist_m`、`rejoin_success_dist_m`、`rejoin_v_max_m_s`、`rejoin_lookahead_time_s`
 - 降落参数：`landing_hover_s`
 - 轨迹配置路径：`trajectory_config_path`
+- Debug 参数：`debug_enable_csv_dump`、`debug_csv_output_dir`、`debug_trajectory_sample_dt`、`debug_enable_rviz_publish`
 
 ### `trajectory_core` 参数
 
@@ -107,6 +111,7 @@
 - `nav_msgs`
 - `geometry_msgs`
 - `mavros_msgs`
+- `visualization_msgs`
 - `trajectory_core`
 - `Eigen3`
 
@@ -129,6 +134,39 @@ roslaunch px4_backtrack_optimised backtrack.launch
 
 `launch/backtrack.launch` 会加载 [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml)。
 
+## Debug 可视化
+
+节点支持两种可选的 debug 输出，均通过 `backtrack_params.yaml` 开关控制，默认关闭。
+
+### CSV 文件导出
+
+设置 `debug_enable_csv_dump: true` 后，轨迹生成成功时自动将录制航点和采样轨迹写入 CSV：
+
+- 输出目录默认为 `~/.ros/backtrack_debug/`，可通过 `debug_csv_output_dir` 指定
+- 文件名带时间戳：`waypoints_YYYYMMDD_HHMMSS.csv`、`trajectory_YYYYMMDD_HHMMSS.csv`
+- 采样步长由 `debug_trajectory_sample_dt` 控制（默认 0.05s）
+
+使用 Python 脚本查看：
+
+```bash
+# 自动选取最新一组文件
+python3 scripts/plot_debug_csv.py --latest
+
+# 指定文件
+python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
+```
+
+脚本依赖 `matplotlib` 和 `numpy`，绘制 3D 路径对比、俯视图、高度剖面和偏航剖面。
+
+### rviz 实时可视化
+
+设置 `debug_enable_rviz_publish: true` 后，轨迹生成成功时发布：
+
+- `/px4_backtrack/debug/waypoints`（`visualization_msgs/MarkerArray`）— 绿色球体标记 + 连线，起止点分别用红/蓝大球标注
+- `/px4_backtrack/debug/trajectory`（`nav_msgs/Path`）— 返航轨迹路径
+
+两个话题均为 latched，rviz 连接后即可看到最新数据。
+
 ## 目录速览
 
 ```text
@@ -144,6 +182,8 @@ roslaunch px4_backtrack_optimised backtrack.launch
 │   ├── application/
 │   ├── domain/
 │   └── infrastructure/
+├── scripts/
+│   └── plot_debug_csv.py
 ├── src/
 │   ├── adapters/
 │   ├── application/

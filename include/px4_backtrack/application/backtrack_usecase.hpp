@@ -7,8 +7,15 @@
 #include "px4_backtrack/domain/rejoin_policy.hpp"
 
 #include <trajectory_core/trajectory_core.hpp>
+#include <memory>
+#include <string>
 
 namespace px4_backtrack {
+
+// Forward declarations for debug helpers
+namespace infrastructure { class DebugDumper; }
+namespace adapters { class DebugPublisher; }
+
 namespace application {
 
 // ============================================================================
@@ -34,11 +41,21 @@ struct UseCaseConfig {
   // trajectory_core配置
   trajectory_core::TrajectoryConfig trajectory_config;
 
+  // Debug/可视化参数
+  bool debug_enable_csv_dump;           ///< 启用CSV文件导出
+  std::string debug_csv_output_dir;     ///< CSV导出目录
+  double debug_trajectory_sample_dt;    ///< 轨迹采样步长 (s)
+  bool debug_enable_rviz_publish;       ///< 启用ROS可视化发布
+
   /// 默认构造函数
   UseCaseConfig()
     : record_delay_s(15.0),
       record_max_hz(10.0),
-      record_min_points(100)
+      record_min_points(100),
+      debug_enable_csv_dump(false),
+      debug_csv_output_dir(""),
+      debug_trajectory_sample_dt(0.05),
+      debug_enable_rviz_publish(false)
   {}
 };
 
@@ -93,6 +110,12 @@ public:
   /// @param mode 当前模式
   void onStateReceived(bool armed, const std::string& mode);
 
+  /// 设置 CSV debug dumper（可选）
+  void setDebugDumper(std::shared_ptr<infrastructure::DebugDumper> dumper);
+
+  /// 设置 ROS debug publisher（可选）
+  void setDebugPublisher(std::shared_ptr<adapters::DebugPublisher> publisher);
+
 private:
   /// 配置参数
   UseCaseConfig config_;
@@ -146,6 +169,13 @@ private:
 
   /// 检查点数是否足够
   bool checkMinPoints() const;
+
+  /// 执行 debug 数据导出（轨迹生成成功后调用）
+  void performDebugDump();
+
+  // Debug helpers（可选，nullptr 表示禁用）
+  std::shared_ptr<infrastructure::DebugDumper> debug_dumper_;
+  std::shared_ptr<adapters::DebugPublisher> debug_publisher_;
 };
 
 }  // namespace application

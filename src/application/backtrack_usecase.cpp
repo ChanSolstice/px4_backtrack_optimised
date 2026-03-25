@@ -1,4 +1,6 @@
 #include "px4_backtrack/application/backtrack_usecase.hpp"
+#include "px4_backtrack/infrastructure/debug_dumper.hpp"
+#include "px4_backtrack/adapters/debug_publishers.hpp"
 #include <ros/console.h>
 
 namespace px4_backtrack {
@@ -274,6 +276,7 @@ void BacktrackUseCase::handleTrajectoryGeneration() {
     if (success) {
       trajectory_generation_requested_ = false;
       ROS_INFO("[BacktrackUseCase] Trajectory generation successful");
+      performDebugDump();
     } else {
       ROS_ERROR("[BacktrackUseCase] Trajectory generation failed");
       // 保持在ReturnPreOffboard状态，继续发送固定点setpoint
@@ -377,6 +380,36 @@ bool BacktrackUseCase::checkMinPoints() const {
     return false;
   }
   return true;
+}
+
+void BacktrackUseCase::setDebugDumper(
+    std::shared_ptr<infrastructure::DebugDumper> dumper) {
+  debug_dumper_ = std::move(dumper);
+}
+
+void BacktrackUseCase::setDebugPublisher(
+    std::shared_ptr<adapters::DebugPublisher> publisher) {
+  debug_publisher_ = std::move(publisher);
+}
+
+void BacktrackUseCase::performDebugDump() {
+  if (!debug_dumper_ && !debug_publisher_) return;
+
+  const auto* traj = trajectory_session_.getTrajectory();
+  if (!traj || !traj->isValid()) return;
+
+  auto states = traj->sample(config_.debug_trajectory_sample_dt);
+  const auto& waypoints = recording_buffer_.getPoints();
+
+  if (debug_dumper_) {
+    debug_dumper_->dumpWaypoints(waypoints);
+    debug_dumper_->dumpTrajectory(states);
+  }
+
+  if (debug_publisher_) {
+    debug_publisher_->publishWaypoints(waypoints);
+    debug_publisher_->publishTrajectory(states);
+  }
 }
 
 }  // namespace application

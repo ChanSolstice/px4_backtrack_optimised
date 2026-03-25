@@ -29,12 +29,13 @@
    - `StatusPublisher`
    - `SetModeClient`
 3. 构造 `application::BacktrackUseCase`。
-4. 将 3 个订阅回调直接转发到 usecase：
+4. 根据 `debug_enable_csv_dump` / `debug_enable_rviz_publish` 配置，可选创建 `DebugDumper` 和 `DebugPublisher` 并通过 setter 注入 usecase。
+5. 将 3 个订阅回调直接转发到 usecase：
    - `onOdomReceived()`
    - `onRCReceived()`
    - `onStateReceived()`
-5. 20Hz 定时器调用 `BacktrackUseCase::tick(now)`。
-6. `tick()` 返回 `TickOutput`，入口层再决定：
+6. 20Hz 定时器调用 `BacktrackUseCase::tick(now)`。
+7. `tick()` 返回 `TickOutput`，入口层再决定：
    - 是否发布 setpoint
    - 是否请求 `set_mode`
    - 发布当前状态和 RC 丢失相关输出
@@ -62,8 +63,9 @@
 - 请求轨迹生成
 - 检测偏离并进入/退出 rejoin
 - 根据状态机输出决定 setpoint 与 mode request
+- 轨迹生成成功后可选调用 `performDebugDump()`，将航点和轨迹导出 CSV 并发布 rviz 话题
 
-如果需求是“改变返航流程”，先看这里。
+如果需求是”改变返航流程”，先看这里。
 
 ### Domain 层
 
@@ -101,10 +103,18 @@
 - [`src/adapters/ros_services.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/adapters/ros_services.cpp)
   封装 `/mavros/set_mode`，带 1s 节流。
 
+- [`include/px4_backtrack/adapters/debug_publishers.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/adapters/debug_publishers.hpp)
+- [`src/adapters/debug_publishers.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/adapters/debug_publishers.cpp)
+  可选的 debug 可视化发布器，发布录制航点 `MarkerArray` 和返航轨迹 `nav_msgs/Path` 到 latched 话题，由 config 开关控制。
+
 ### Infrastructure 层
 
 - [`include/px4_backtrack/infrastructure/config_loader.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/infrastructure/config_loader.hpp)
 - [`src/infrastructure/config_loader.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/infrastructure/config_loader.cpp)
+
+- [`include/px4_backtrack/infrastructure/debug_dumper.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/infrastructure/debug_dumper.hpp)
+- [`src/infrastructure/debug_dumper.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/infrastructure/debug_dumper.cpp)
+  可选的 CSV debug 导出器，将录制航点和采样轨迹写入带时间戳的 CSV 文件，由 config 开关控制。
 
 修改参数字段时，通常必须同时改：
 
@@ -112,6 +122,11 @@
 - `ConfigLoader`
 - [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml)
 - `README.md`
+
+### Scripts
+
+- [`scripts/plot_debug_csv.py`](/home/channing/Drone/Projects/px4_backtrack_optimised/scripts/plot_debug_csv.py)
+  Python 可视化脚本，读取 `DebugDumper` 导出的 CSV，绘制 3D 路径对比、俯视图、高度剖面和偏航剖面。`python3 scripts/plot_debug_csv.py --latest` 自动选取最新文件。
 
 ## 行为语义上的关键点
 
@@ -175,6 +190,10 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 
 `triggerLanding()` 进入的 `LandingTransition` 会判断当前模式：非 OFFBOARD 直接请求 `AUTO.LAND`，OFFBOARD 先走 `POSCTL` 过渡。
 
+### 7. Debug 输出是 setter 注入的可选能力
+
+`DebugDumper` 和 `DebugPublisher` 通过 `setDebugDumper()` / `setDebugPublisher()` 注入 `BacktrackUseCase`，默认为 `nullptr`（不启用）。`performDebugDump()` 在 `handleTrajectoryGeneration()` 成功后调用，内部先判空再执行。这意味着 debug 功能对正常飞行路径零侵入——不启用时没有任何额外开销。
+
 ## 常见改动应该改哪里
 
 | 目标 | 必看文件 |
@@ -187,11 +206,12 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 | 改话题名或消息类型 | `ros_subscribers.hpp/.cpp`、`ros_publishers.hpp/.cpp`、`launch/backtrack.launch` |
 | 改参数加载方式 | `config_loader.hpp/.cpp`、`backtrack_params.yaml` |
 | 改启动频率 | `backtrack_params.yaml`、`src/backtrack_node.cpp` |
+| 改 debug 输出或可视化 | `debug_dumper.hpp/.cpp`、`debug_publishers.hpp/.cpp`、`backtrack_usecase.cpp`、`backtrack_params.yaml` |
 
 ## 配置文件地图
 
 - [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml)
-  返航节点参数，按录制、触发、OFFBOARD、rejoin、降落分组
+  返航节点参数，按录制、触发、OFFBOARD、rejoin、降落、debug 分组
 - [`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)
   直接传给 `trajectory_core::TrajectoryConfig::loadFromYaml()`
 - [`launch/backtrack.launch`](/home/channing/Drone/Projects/px4_backtrack_optimised/launch/backtrack.launch)
