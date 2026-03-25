@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-03-25 — 新增核心领域层单元测试
+
+为当前 C++ 实现补充第一批 `gtest` 单元测试，并把测试目标接入 `catkin` 构建链路。
+
+### 新增
+
+- **test(recording):** 新增 `RecordingBuffer` 单元测试，覆盖首点时间戳、录制节流、非单调时间戳拒收、`reset()` 复位
+- **test(trigger):** 新增 `TriggerEvaluator` 单元测试，覆盖 `CH7` 按下/长按、`CH18` 故障确认、RC loss 的边沿/电平语义
+- **test(state_machine):** 新增 `BacktrackStateMachine` 单元测试，覆盖 ARM 进入录制、`ReturnPreOffboard -> ReturnActive`、`AUTO.LAND` 全局优先级、直接降落路径
+- **test(rejoin):** 新增 `RejoinPolicy` 单元测试，覆盖偏离/回归阈值、最近点搜索、预瞄目标与速度限幅
+- **test(trajectory):** 新增 `TrajectorySession` 单元测试，覆盖点数不足、逆序轨迹生成、暂停恢复进度、完成态判断
+
+### 构建
+
+- **build(test):** `CMakeLists.txt` 新增 `catkin_add_gtest` 测试目标，并为当前工作空间显式提供共享 `test_main.cpp`，修复测试目标缺失 `main()` 的链接问题
+
+### 文档
+
+- **docs(system):** `doc/SYSTEM_OVERVIEW.md` 补充状态机主状态迁移图、全局覆盖规则与 `LandingTransition` 内部阶段图
+- **docs(llm):** `LLM_MAP.md` 更新测试现状说明，明确仓库已具备基础领域层单元测试
+- **docs(readme):** `README.md` 补充测试目录、测试命令与 `SYSTEM_OVERVIEW` 文档入口
+
+### 涉及文件
+
+- `CMakeLists.txt`
+- `doc/SYSTEM_OVERVIEW.md`
+- `tests/unit/test_main.cpp`
+- `tests/unit/test_recording_buffer.cpp`
+- `tests/unit/test_trigger_evaluator.cpp`
+- `tests/unit/test_state_machine.cpp`
+- `tests/unit/test_rejoin_policy.cpp`
+- `tests/unit/test_trajectory_session.cpp`
+
 ## 2026-03-25 — trajectory_core API 对齐与文档刷新
 
 对齐新版 `trajectory_core` API 文档，并同步更新返航侧时间戳接入语义与仓库文档。

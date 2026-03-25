@@ -150,7 +150,16 @@ roslaunch px4_backtrack_optimised backtrack.launch
 │   ├── domain/
 │   ├── infrastructure/
 │   └── backtrack_node.cpp
+├── tests/
+│   └── unit/
+│       ├── test_main.cpp
+│       ├── test_recording_buffer.cpp
+│       ├── test_trigger_evaluator.cpp
+│       ├── test_state_machine.cpp
+│       ├── test_rejoin_policy.cpp
+│       └── test_trajectory_session.cpp
 └── doc/
+    ├── SYSTEM_OVERVIEW.md
     ├── 返航实现技术文档.md
     ├── 实现任务清单.md
     ├── TECHNICAL_DOCUMENTATION.md
@@ -158,8 +167,30 @@ roslaunch px4_backtrack_optimised backtrack.launch
     └── backtrack_node.py
 ```
 
+## 测试
+
+当前仓库已包含一组基础 `gtest` 单元测试，重点覆盖领域层与 `trajectory_core` 接入层：
+
+- `RecordingBuffer`
+- `TriggerEvaluator`
+- `BacktrackStateMachine`
+- `RejoinPolicy`
+- `TrajectorySession`
+
+在 catkin 工作空间根目录执行：
+
+```bash
+catkin_make --pkg trajectory_core px4_backtrack_optimised
+catkin_make run_tests_px4_backtrack_optimised
+catkin_test_results
+```
+
+如果只想手动运行单个测试二进制，可在 `devel/lib/px4_backtrack_optimised/` 下执行对应测试程序。
+
 ## 相关文档
 
+- [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md)
+  基于当前 C++ 代码整理的系统级总览，含状态机迁移图与主要处理流程
 - [`doc/返航实现技术文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/返航实现技术文档.md)
   当前 C++ 方案的设计说明，最接近本仓库目标结构
 - [`doc/实现任务清单.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/实现任务清单.md)
@@ -172,4 +203,4 @@ roslaunch px4_backtrack_optimised backtrack.launch
 ## 已知注意点
 
 - `README` 与 `LLM_MAP` 以当前 C++ 代码为准，不以旧版 Python 文档为准。
-- 当前仓库未包含测试目录，修改状态机、触发器或轨迹接口后，建议至少做一次编译和联调验证。
+- 当前仓库已有基础单元测试，但尚未覆盖 ROS adapters 和 launch 级联调；修改状态机、触发器、轨迹接口或参数装配后，仍建议至少做一次编译和联调验证。

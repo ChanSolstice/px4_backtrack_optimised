@@ -147,3 +147,64 @@ install(DIRECTORY config/
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config
   FILES_MATCHING PATTERN "*.yaml"
 )
+
+#############
+## Testing ##
+#############
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_recording_buffer
+    tests/unit/test_main.cpp
+    tests/unit/test_recording_buffer.cpp
+  )
+  if(TARGET test_recording_buffer)
+    target_link_libraries(test_recording_buffer
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
+  catkin_add_gtest(test_trigger_evaluator
+    tests/unit/test_main.cpp
+    tests/unit/test_trigger_evaluator.cpp
+  )
+  if(TARGET test_trigger_evaluator)
+    target_link_libraries(test_trigger_evaluator
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
+  catkin_add_gtest(test_state_machine
+    tests/unit/test_main.cpp
+    tests/unit/test_state_machine.cpp
+  )
+  if(TARGET test_state_machine)
+    target_link_libraries(test_state_machine
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
+  catkin_add_gtest(test_rejoin_policy
+    tests/unit/test_main.cpp
+    tests/unit/test_rejoin_policy.cpp
+  )
+  if(TARGET test_rejoin_policy)
+    target_link_libraries(test_rejoin_policy
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
+  catkin_add_gtest(test_trajectory_session
+    tests/unit/test_main.cpp
+    tests/unit/test_trajectory_session.cpp
+  )
+  if(TARGET test_trajectory_session)
+    target_link_libraries(test_trajectory_session
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+endif()

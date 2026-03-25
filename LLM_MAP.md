@@ -14,6 +14,7 @@
 8. `doc/TECHNICAL_DOCUMENTATION.md` 和 [`doc/backtrack_node.py`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/backtrack_node.py) 是旧版 Python 基线，不要把它们当成当前代码的直接事实来源。
 9. 需要判断“行为真相”时，优先级是：`src/*.cpp` + `include/*.hpp` > `config/*.yaml` > `launch/` > `doc/返航实现技术文档.md` > 旧版 Python 文档。
 10. 当前代码有开发中痕迹，写说明或补丁前要先检查接口是否自洽。
+11. 仓库现在已经有基础 `gtest` 单元测试，优先先跑 `RecordingBuffer` / `TriggerEvaluator` / `StateMachine` / `RejoinPolicy` / `TrajectorySession`，不要再默认“完全没有测试”。
 
 ## 真正的入口与控制流
 
@@ -213,7 +214,26 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 - `checkRCLossEvent()` 必须在 `handleTriggers()` 的最顶部、状态分支之前调用。如果挪到状态分支内部，`isRCLost()` 在某些状态下会失真。
 - `handleReturnTrigger()` 在点数不足时调用 `triggerLanding()`，这会跳过 `ReturnPreOffboard` 直接进 `LandingTransition`。如果你在 `LandingTransition` 之前加了新逻辑，要评估这条直达路径是否会绕过它。
 - [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp) 为准。
-- 当前仓库没有测试目录，也没有现成的 mock 层。大改状态机时，至少要做一次编译和联调。
+- 仓库已有 `tests/unit/`，但目前主要覆盖领域层和轻集成逻辑，还没有 ROS topic 级 mock/rostest。涉及 adapters、launch、参数装配时，仍然要做一次编译和联调。
+
+## 测试地图
+
+- [`tests/unit/test_recording_buffer.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_recording_buffer.cpp)
+  覆盖录制节流、时间戳单调性和 `reset()`
+- [`tests/unit/test_trigger_evaluator.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_trigger_evaluator.cpp)
+  覆盖 `CH7` / `CH18` / RC loss 触发语义
+- [`tests/unit/test_state_machine.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_state_machine.cpp)
+  覆盖主状态迁移和 `AUTO.LAND` 高优先级
+- [`tests/unit/test_rejoin_policy.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_rejoin_policy.cpp)
+  覆盖最近点搜索、预瞄和速度限幅
+- [`tests/unit/test_trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_trajectory_session.cpp)
+  覆盖轨迹生成、逆序语义和暂停恢复进度
+
+运行方式：
+
+- 在 catkin 工作空间根目录先执行 `catkin_make --pkg trajectory_core px4_backtrack_optimised`
+- 再执行 `catkin_make run_tests_px4_backtrack_optimised`
+- 最后执行 `catkin_test_results`
 
 ## 给后续 LLM 的工作建议
 

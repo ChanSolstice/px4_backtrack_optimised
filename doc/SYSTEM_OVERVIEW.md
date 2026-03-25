@@ -458,7 +458,92 @@
 4. 通过 MAVROS 进入 `OFFBOARD` 并沿轨迹执行
 5. 在偏离、暂停、恢复、结束等情况下通过状态机维持完整控制流程
 
-如果后续需要继续扩展系统文档，建议下一步补充两类内容：
+如果后续需要继续扩展系统文档，建议下一步补充 `trajectory_core` 外部配置项与飞行行为的对应关系表。
 
-1. 状态机状态转移图
-2. `trajectory_core` 外部配置项与飞行行为的对应关系表
+## 8. 状态机状态转移图
+
+以下状态图依据 `src/domain/state_machine.cpp` 与 `src/application/backtrack_usecase.cpp` 整理。
+
+### 8.1 主状态迁移
+
+```mermaid
+stateDiagram-v2
+    [*] --> IdleDisarmed
+
+    IdleDisarmed --> WaitRecordDelay: ARM 上升沿
+    WaitRecordDelay --> Recording: record_delay_s 到期 / startRecording()
+
+    Recording --> Ch18HoverWait: CH18 确认 && points >= record_min_points
+    Recording --> ReturnPreOffboard: CH7 长按 && points >= record_min_points
+    Recording --> ReturnPreOffboard: RC loss && points >= record_min_points
+    Recording --> LandingTransition: 触发返航但 points < record_min_points
+
+    Ch18HoverWait --> ReturnPreOffboard: ch18_hover_wait_s 到期
+    Ch18HoverWait --> Paused: CH7 按下事件 / triggerPause()
+
+    ReturnPreOffboard --> ReturnActive: mode == OFFBOARD && trajectory_ready
+    ReturnPreOffboard --> Paused: CH7 按下事件 / triggerPause()
+
+    ReturnActive --> ReturnRejoin: 偏离距离 > rejoin_trigger_dist_m
+    ReturnActive --> LandingHover: trajectory_finished
+    ReturnActive --> Paused: CH7 按下事件 / triggerPause()
+
+    ReturnRejoin --> ReturnActive: 偏离距离 < rejoin_success_dist_m
+    ReturnRejoin --> Paused: CH7 按下事件 / triggerPause()
+
+    Paused --> ReturnPreOffboard: CH7 长按 && points >= record_min_points
+    Paused --> ReturnPreOffboard: RC loss && points >= record_min_points
+    Paused --> LandingTransition: CH7 长按 && points < record_min_points
+    Paused --> LandingTransition: RC loss && points < record_min_points
+
+    LandingHover --> LandingTransition: landing_hover_s 到期
+
+    WaitRecordDelay --> IdleDisarmed: DISARM
+    Recording --> IdleDisarmed: DISARM
+    Ch18HoverWait --> IdleDisarmed: DISARM
+    ReturnPreOffboard --> IdleDisarmed: DISARM
+    ReturnActive --> IdleDisarmed: DISARM
+    ReturnRejoin --> IdleDisarmed: DISARM
+    Paused --> IdleDisarmed: DISARM
+    LandingHover --> IdleDisarmed: DISARM
+    LandingTransition --> IdleDisarmed: DISARM
+```
+
+### 8.2 全局覆盖规则
+
+`BacktrackStateMachine::tick()` 在正常状态逻辑之前，还会先处理两类“全局覆盖”条件。
+
+```mermaid
+flowchart TD
+    A[任意运行中状态] -->|检测到 DISARM| B[IdleDisarmed]
+
+    C[Ch18HoverWait / ReturnPreOffboard / ReturnActive / ReturnRejoin / Paused / LandingHover / LandingTransition]
+    C -->|mode == AUTO.LAND 且 armed == true| D[Recording]
+    C -->|mode == AUTO.LAND 且 armed == false| B
+```
+
+说明：
+
+- `AUTO.LAND` 的这条全局覆盖规则不会作用于 `IdleDisarmed`、`WaitRecordDelay`、`Recording`。
+- 一旦命中 `AUTO.LAND`，状态机会清空 setpoint 与 mode request，把控制权让渡给飞控。
+
+### 8.3 `LandingTransition` 内部阶段
+
+`LandingTransition` 虽然在状态图里是一个状态，但内部还包含 3 个阶段：
+
+```mermaid
+flowchart TD
+    S0[stage 0]
+    S1[stage 1]
+    S2[stage 2]
+
+    S0 -->|当前 mode != OFFBOARD\n直接请求 AUTO.LAND| S2
+    S0 -->|当前 mode == OFFBOARD\n请求 POSCTL| S1
+    S1 -->|等待 1 秒后请求 AUTO.LAND| S2
+    S2 -->|不再发送新请求| S2
+```
+
+说明：
+
+- 这部分不是状态机枚举层面的独立状态，而是 `LandingTransition` 内部的子阶段变量 `landing_transition_stage`。
+- 对应实现位于 `src/domain/state_machine.cpp` 的 `tickLandingTransition()`。
