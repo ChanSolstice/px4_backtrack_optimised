@@ -5,6 +5,10 @@
     <!-- 加载参数文件 -->
     <rosparam command="load" file="$(find px4_backtrack_optimised)/config/backtrack_params.yaml" />
 
+    <!-- 覆盖 trajectory_core 配置路径，确保 $(find ...) 在 launch 阶段展开 -->
+    <param name="trajectory_config_path"
+           value="$(find px4_backtrack_optimised)/config/trajectory_config.yaml" />
+
     <!-- 可选：调试输出级别 -->
     <!-- <env name="ROSCONSOLE_CONFIG_FILE" value="$(find px4_backtrack_optimised)/config/rosconsole.conf"/> -->
   </node>
