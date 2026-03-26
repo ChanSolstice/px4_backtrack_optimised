@@ -12,33 +12,22 @@ namespace domain {
 
 /// TriggerEvaluator配置参数
 struct TriggerConfig {
+  // 运行时参数由 ConfigLoader 从 backtrack_params.yaml 注入。
+
   // 通道7参数
-  bool enable_ch7;               ///< 是否启用通道7触发
-  int ch7_pressed_threshold;     ///< 通道7按下阈值（< 此值视为按下）
-  double ch7_hold_s;             ///< 长按持续时间 (s)
+  bool enable_ch7{};             ///< 是否启用通道7触发
+  int ch7_pressed_threshold{};   ///< 通道7按下阈值（< 此值视为按下）
+  double ch7_hold_s{};           ///< 长按持续时间 (s)
 
   // 通道18参数
-  bool enable_ch18;              ///< 是否启用通道18触发
-  int ch18_failsafe_threshold;   ///< 通道18故障阈值（< 此值视为失控）
-  double ch18_confirm_s;         ///< 故障确认时间 (s)
+  bool enable_ch18{};            ///< 是否启用通道18触发
+  int ch18_failsafe_threshold{}; ///< 通道18故障阈值（< 此值视为失控）
+  double ch18_confirm_s{};       ///< 故障确认时间 (s)
 
   // RC丢失参数
-  bool enable_rc_loss;           ///< 是否启用RC丢失触发
-  double rc_loss_timeout_s;      ///< RC消息超时时间 (s)
-  double rc_loss_debounce_s;     ///< RC丢失防抖时间 (s)
-
-  /// 默认构造函数
-  TriggerConfig()
-    : enable_ch7(true),
-      ch7_pressed_threshold(1500),
-      ch7_hold_s(2.0),
-      enable_ch18(true),
-      ch18_failsafe_threshold(900),
-      ch18_confirm_s(1.0),
-      enable_rc_loss(true),
-      rc_loss_timeout_s(0.15),
-      rc_loss_debounce_s(0.1)
-  {}
+  bool enable_rc_loss{};         ///< 是否启用RC丢失触发
+  double rc_loss_timeout_s{};    ///< RC消息超时时间 (s)
+  double rc_loss_debounce_s{};   ///< RC丢失防抖时间 (s)
 };
 
 // ============================================================================

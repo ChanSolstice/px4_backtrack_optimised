@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-26 — 触发参数配置来源收口到 YAML
+
+清理 `TriggerEvaluator` 触发参数的双重默认来源，避免头文件默认构造值与 `backtrack_params.yaml` 同时存在导致行为漂移。
+
+### 修改
+
+- **refactor(config):** `TriggerConfig` 移除 `CH7` / `CH18` / `RC loss` 业务默认值，改为仅承载配置数据
+- **refactor(config):** `ConfigLoader` 对触发参数改为必填读取；参数服务器缺失时直接报错，不再静默回退到代码默认值
+- **test(trigger):** `TriggerEvaluator` 单测改为显式构造触发配置，避免测试继续依赖头文件隐式默认值
+
+### 文档
+
+- **docs(readme):** 明确 `backtrack_params.yaml` 是触发参数的唯一运行时来源
+- **docs(llm):** 补充触发参数加载链路与“不要恢复头文件默认值”的约束
+
+### 涉及文件
+
+- `include/px4_backtrack/domain/trigger_evaluator.hpp`
+- `src/infrastructure/config_loader.cpp`
+- `tests/unit/test_trigger_evaluator.cpp`
+- `README.md`
+- `LLM_MAP.md`
+
 ## 2026-03-25 — 新增 Debug 可视化功能
 
 新增可选的 debug 输出能力：轨迹生成成功后自动导出录制航点与返航轨迹数据，支持离线 CSV 分析和 rviz 实时可视化。

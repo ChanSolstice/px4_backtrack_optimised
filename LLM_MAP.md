@@ -21,6 +21,7 @@
 控制流从 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp) 开始：
 
 1. `ConfigLoader::loadFromROS()` 读取 ROS 参数和 `trajectory_core` 配置。
+   其中 `CH7` / `CH18` / `RC loss` 触发参数是必填参数，缺失会直接抛异常，不会回退到 `TriggerConfig` 头文件默认值。
 2. 构造 ROS adapters：
    - `StateSubscriber`
    - `OdomSubscriber`
@@ -79,7 +80,7 @@
 
 - [`include/px4_backtrack/domain/trigger_evaluator.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/trigger_evaluator.hpp)
 - [`src/domain/trigger_evaluator.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trigger_evaluator.cpp)
-  处理 `CH7`、`CH18` 和 RC 消息丢失。
+  处理 `CH7`、`CH18` 和 RC 消息丢失。`TriggerConfig` 现在只是承载值的 struct，运行时参数来源是 `ConfigLoader + backtrack_params.yaml`，不是头文件默认构造。
 
 - [`include/px4_backtrack/domain/trajectory_session.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/trajectory_session.hpp)
 - [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp)
@@ -122,6 +123,11 @@
 - `ConfigLoader`
 - [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml)
 - `README.md`
+
+如果改的是触发参数，额外注意：
+
+- 不能只改 `TriggerConfig` 字段定义，还要同步 `ConfigLoader` 的必填读取逻辑
+- 不要把运行默认值重新塞回 `trigger_evaluator.hpp`，否则会重新出现“双重默认来源”
 
 ### Scripts
 
@@ -259,5 +265,6 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 
 - 先从 `src/backtrack_node.cpp -> src/application/backtrack_usecase.cpp -> src/domain/state_machine.cpp` 读一遍，再决定改动面。
 - 需要改参数时，不要只改 YAML，`ConfigLoader` 和 config struct 往往也要同步改。
+- 触发参数这条链路现在是 `backtrack_params.yaml -> launch/backtrack.launch -> ROS 参数服务器 -> ConfigLoader -> TriggerConfig`；排查参数不生效时沿这条链路查，不要先怀疑 `TriggerEvaluator` 自己有隐藏默认值。
 - 需要改状态名、话题名、接口语义时，记得同步更新 `README.md` 和本文件。
 - 遇到“文档和代码不一致”时，优先相信代码，并把不一致显式写出来，不要擅自脑补。

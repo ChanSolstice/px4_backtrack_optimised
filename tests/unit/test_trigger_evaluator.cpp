@@ -9,8 +9,22 @@ std::vector<uint16_t> makeChannels(uint16_t default_value = 1500) {
   return std::vector<uint16_t>(18, default_value);
 }
 
+TriggerConfig makeTriggerConfig() {
+  TriggerConfig config{};
+  config.enable_ch7 = true;
+  config.ch7_pressed_threshold = 1500;
+  config.ch7_hold_s = 2.0;
+  config.enable_ch18 = true;
+  config.ch18_failsafe_threshold = 900;
+  config.ch18_confirm_s = 1.0;
+  config.enable_rc_loss = true;
+  config.rc_loss_timeout_s = 0.15;
+  config.rc_loss_debounce_s = 0.1;
+  return config;
+}
+
 TEST(TriggerEvaluatorTest, Ch7PressEventRequiresStateUpdateAndLongPressTriggersOnce) {
-  TriggerConfig config;
+  TriggerConfig config = makeTriggerConfig();
   config.ch7_hold_s = 1.0;
   TriggerEvaluator evaluator(config);
 
@@ -34,7 +48,7 @@ TEST(TriggerEvaluatorTest, Ch7PressEventRequiresStateUpdateAndLongPressTriggersO
 }
 
 TEST(TriggerEvaluatorTest, Ch18FailsafeConfirmsAfterConfiguredDurationAndResets) {
-  TriggerConfig config;
+  TriggerConfig config = makeTriggerConfig();
   config.ch18_confirm_s = 1.0;
   TriggerEvaluator evaluator(config);
 
@@ -68,7 +82,7 @@ TEST(TriggerEvaluatorTest, Ch18FailsafeConfirmsAfterConfiguredDurationAndResets)
 }
 
 TEST(TriggerEvaluatorTest, RCLossEventHasEdgeSemanticsWhileLevelRemainsLatched) {
-  TriggerConfig config;
+  TriggerConfig config = makeTriggerConfig();
   config.rc_loss_timeout_s = 0.15;
   config.rc_loss_debounce_s = 0.1;
   TriggerEvaluator evaluator(config);

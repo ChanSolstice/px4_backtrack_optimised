@@ -1,8 +1,23 @@
 #include "px4_backtrack/infrastructure/config_loader.hpp"
 #include <ros/package.h>
+#include <stdexcept>
 
 namespace px4_backtrack {
 namespace infrastructure {
+
+namespace {
+
+template <typename T>
+void requireParam(ros::NodeHandle& nh, const char* name, T& value) {
+  if (nh.getParam(name, value)) {
+    return;
+  }
+
+  ROS_ERROR("[ConfigLoader] Required parameter '%s' is not set", name);
+  throw std::runtime_error(std::string("required parameter missing: ") + name);
+}
+
+}  // namespace
 
 application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   application::UseCaseConfig config;
@@ -61,9 +76,9 @@ void ConfigLoader::loadRecordingParams(ros::NodeHandle& nh, application::UseCase
 }
 
 void ConfigLoader::loadCh7Params(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  nh.param("enable_trigger_ch7", config.trigger_config.enable_ch7, true);
-  nh.param("ch7_pressed_threshold", config.trigger_config.ch7_pressed_threshold, 1500);
-  nh.param("ch7_hold_s", config.trigger_config.ch7_hold_s, 2.0);
+  requireParam(nh, "enable_trigger_ch7", config.trigger_config.enable_ch7);
+  requireParam(nh, "ch7_pressed_threshold", config.trigger_config.ch7_pressed_threshold);
+  requireParam(nh, "ch7_hold_s", config.trigger_config.ch7_hold_s);
 
   ROS_INFO("[ConfigLoader] Ch7 params:");
   ROS_INFO("  enable_trigger_ch7: %s", config.trigger_config.enable_ch7 ? "true" : "false");
@@ -72,9 +87,9 @@ void ConfigLoader::loadCh7Params(ros::NodeHandle& nh, application::UseCaseConfig
 }
 
 void ConfigLoader::loadCh18Params(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  nh.param("enable_trigger_ch18", config.trigger_config.enable_ch18, true);
-  nh.param("ch18_failsafe_threshold", config.trigger_config.ch18_failsafe_threshold, 900);
-  nh.param("ch18_confirm_s", config.trigger_config.ch18_confirm_s, 1.0);
+  requireParam(nh, "enable_trigger_ch18", config.trigger_config.enable_ch18);
+  requireParam(nh, "ch18_failsafe_threshold", config.trigger_config.ch18_failsafe_threshold);
+  requireParam(nh, "ch18_confirm_s", config.trigger_config.ch18_confirm_s);
   nh.param("ch18_hover_wait_s", config.state_machine_config.ch18_hover_wait_s, 15.0);
 
   ROS_INFO("[ConfigLoader] Ch18 params:");
@@ -85,9 +100,9 @@ void ConfigLoader::loadCh18Params(ros::NodeHandle& nh, application::UseCaseConfi
 }
 
 void ConfigLoader::loadRCLossParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  nh.param("enable_trigger_rc_loss", config.trigger_config.enable_rc_loss, true);
-  nh.param("rc_loss_timeout_s", config.trigger_config.rc_loss_timeout_s, 0.15);
-  nh.param("rc_loss_debounce_s", config.trigger_config.rc_loss_debounce_s, 0.1);
+  requireParam(nh, "enable_trigger_rc_loss", config.trigger_config.enable_rc_loss);
+  requireParam(nh, "rc_loss_timeout_s", config.trigger_config.rc_loss_timeout_s);
+  requireParam(nh, "rc_loss_debounce_s", config.trigger_config.rc_loss_debounce_s);
 
   ROS_INFO("[ConfigLoader] RC loss params:");
   ROS_INFO("  enable_trigger_rc_loss: %s", config.trigger_config.enable_rc_loss ? "true" : "false");

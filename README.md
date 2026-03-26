@@ -81,6 +81,12 @@
 
 文件：[`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml)
 
+说明：
+
+- `CH7` / `CH18` / `RC loss` 触发参数现在以 `backtrack_params.yaml` 为唯一运行时来源
+- `ConfigLoader` 会从 ROS 参数服务器强制读取这些触发参数；如果 launch 没有把它们加载进来，节点会在启动时报错退出
+- `TriggerConfig` 头文件不再提供业务默认值，避免“头文件默认值”和 YAML 配置并存导致行为不一致
+
 主要分组：
 
 - 基础录制参数：`publish_hz`、`record_delay_s`、`record_min_points`、`record_max_hz`
@@ -133,6 +139,7 @@ roslaunch px4_backtrack_optimised backtrack.launch
 ```
 
 `launch/backtrack.launch` 会加载 [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml)。
+如果你调整触发阈值，应直接修改该 YAML，而不是依赖代码侧默认构造值。
 
 ## Debug 可视化
 
