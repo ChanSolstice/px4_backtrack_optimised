@@ -207,6 +207,7 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 │       └── test_trajectory_session.cpp
 └── doc/
     ├── SYSTEM_OVERVIEW.md
+    ├── 单元测试文档.md
     ├── 返航实现技术文档.md
     ├── 实现任务清单.md
     ├── TECHNICAL_DOCUMENTATION.md
@@ -238,6 +239,8 @@ catkin_test_results
 
 - [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md)
   基于当前 C++ 代码整理的系统级总览，含状态机迁移图与主要处理流程
+- [`doc/单元测试文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/单元测试文档.md)
+  当前单元测试范围、运行方式、结果判读和扩展建议
 - [`doc/返航实现技术文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/返航实现技术文档.md)
   当前 C++ 方案的设计说明，最接近本仓库目标结构
 - [`doc/实现任务清单.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/实现任务清单.md)
