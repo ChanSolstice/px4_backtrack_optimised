@@ -295,6 +295,7 @@ void BacktrackStateMachine::tickReturnActive(const TickInput& input) {
   // ReturnActive状态：沿轨迹执行
   // setpoint由UseCase层从轨迹评估结果填充
 
+  current_setpoint_ = std::nullopt;  // 清除固定点，让UseCase层从轨迹计算setpoint
   should_publish_setpoint_ = true;
   current_mode_request_ = std::nullopt;
 
@@ -314,6 +315,7 @@ void BacktrackStateMachine::tickReturnRejoin(const TickInput& input) {
   // ReturnRejoin状态：回归到轨迹
   // setpoint由UseCase层从回归策略计算
 
+  current_setpoint_ = std::nullopt;  // 清除固定点，让UseCase层从回归策略计算setpoint
   should_publish_setpoint_ = true;
   current_mode_request_ = std::nullopt;
 
