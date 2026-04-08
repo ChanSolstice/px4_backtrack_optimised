@@ -63,6 +63,32 @@ TEST(StateMachineTest, ReturnPreOffboardRequestsOffboardAndEntersReturnActive) {
   machine.tick(makeInput(true, "OFFBOARD", 0.4, true));
   EXPECT_EQ(machine.getCurrentState(), State::ReturnActive);
   EXPECT_TRUE(machine.shouldPublishSetpoint());
+  EXPECT_FALSE(machine.getSetpointTarget().has_value());
+  EXPECT_FALSE(machine.getModeRequest().has_value());
+}
+
+TEST(StateMachineTest, EnterRejoinClearsFixedHoldSetpoint) {
+  StateMachineConfig config;
+  config.pre_offboard_setpoint_count = 0;
+
+  BacktrackStateMachine machine(config);
+
+  machine.tick(makeInput(true, "", 0.0));
+  machine.startRecording();
+  machine.lockPosition(Vec3(3.0, 4.0, 5.0), 1.2);
+  machine.triggerReturn(Event::Ch7LongPress);
+
+  machine.tick(makeInput(true, "OFFBOARD", 0.1, true));
+  ASSERT_EQ(machine.getCurrentState(), State::ReturnActive);
+  ASSERT_FALSE(machine.getSetpointTarget().has_value());
+
+  machine.enterRejoin();
+  machine.tick(makeInput(true, "OFFBOARD", 0.2, true));
+
+  EXPECT_EQ(machine.getCurrentState(), State::ReturnRejoin);
+  EXPECT_TRUE(machine.shouldPublishSetpoint());
+  EXPECT_FALSE(machine.getSetpointTarget().has_value());
+  EXPECT_FALSE(machine.getModeRequest().has_value());
 }
 
 TEST(StateMachineTest, AutoLandHasGlobalPriorityAndYieldsControl) {

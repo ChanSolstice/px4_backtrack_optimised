@@ -299,6 +299,7 @@ void BacktrackUseCase::handleRejoin() {
     // 检查是否偏离
     if (rejoin_policy_.shouldTriggerRejoin(current_position_, traj_state.position)) {
       ROS_WARN("[BacktrackUseCase] Deviation detected, entering rejoin mode");
+      trajectory_session_.freezeProgress();  // 冻结轨迹进度，防止退出条件目标持续漂移
       state_machine_.enterRejoin();
     }
   }
@@ -315,6 +316,7 @@ void BacktrackUseCase::handleRejoin() {
     // 检查是否回归成功
     if (rejoin_policy_.shouldExitRejoin(current_position_, traj_state.position)) {
       ROS_INFO("[BacktrackUseCase] Rejoin successful, returning to active mode");
+      trajectory_session_.resumeProgress(ros::Time::now().toSec());  // 恢复轨迹进度，从冻结点继续
       state_machine_.exitRejoin();
     }
   }
