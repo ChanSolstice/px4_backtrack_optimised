@@ -14,10 +14,10 @@ publish_hz: 20.0
 record_delay_s: 15.0
 
 # 触发返航所需最少录制点数
-record_min_points: 100
+record_min_points: 30
 
 # 录制最大频率 (Hz) - 超过此频率的odom消息会被节流
-record_max_hz: 10.0
+record_max_hz: 15.0
 
 # ============================
 # 通道7触发参数（启动/暂停）
@@ -76,7 +76,7 @@ pre_offboard_setpoint_count: 20
 rejoin_trigger_dist_m: 0.5
 
 # 成功回归的距离阈值 (m)
-rejoin_success_dist_m: 0.1
+rejoin_success_dist_m: 0.2
 
 # 回归时的最大速度 (m/s)
 rejoin_v_max_m_s: 0.3
