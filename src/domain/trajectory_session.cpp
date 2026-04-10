@@ -6,6 +6,44 @@
 namespace px4_backtrack {
 namespace domain {
 
+namespace {
+
+std::vector<RecordPoint> thinRecordedPointsForGeneration(
+    const std::vector<RecordPoint>& points,
+    double min_spacing_m) {
+  if (points.size() <= 2 || min_spacing_m <= 0.0) {
+    return points;
+  }
+
+  std::vector<RecordPoint> reduced;
+  reduced.reserve(points.size());
+  reduced.push_back(points.front());
+
+  for (size_t i = 1; i + 1 < points.size(); ++i) {
+    const auto& point = points[i];
+    double dist = (point.position - reduced.back().position).norm();
+
+    if (dist >= min_spacing_m) {
+      reduced.push_back(point);
+      continue;
+    }
+
+    // 录制点只用于描述几何路径；这里保留较新的样本，
+    // 等价于把过密悬停/低速点压缩成更稀疏的折线。
+    reduced.back() = point;
+  }
+
+  if ((points.back().position - reduced.back().position).norm() > 1e-9) {
+    reduced.push_back(points.back());
+  } else {
+    reduced.back() = points.back();
+  }
+
+  return reduced;
+}
+
+}  // namespace
+
 TrajectorySession::TrajectorySession()
   : traj_(nullptr),
     t_progress_(0.0),
@@ -35,17 +73,32 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
   // 记录开始时间
   auto start_time = std::chrono::high_resolution_clock::now();
 
+  const double min_spacing_m = std::max(config.min_point_dist_m, config.ds_m * 0.5);
+  auto reduced_points = thinRecordedPointsForGeneration(points, min_spacing_m);
+
+  if (reduced_points.size() < 2) {
+    ROS_ERROR("[TrajectorySession] Too few points after thinning: %zu", reduced_points.size());
+    return false;
+  }
+
+  if (reduced_points.size() != points.size()) {
+    ROS_INFO("[TrajectorySession] Thinned recorded points: %zu -> %zu (min_spacing=%.3f m)",
+             points.size(),
+             reduced_points.size(),
+             min_spacing_m);
+  }
+
   // 构造轨迹输入waypoints（逆序 + 保留原始采样间隔的相对关系）
   std::vector<trajectory_core::Waypoint> waypoints;
-  waypoints.reserve(points.size());
+  waypoints.reserve(reduced_points.size());
 
-  const size_t n = points.size();
-  const double t_end = points.back().timestamp;
+  const size_t n = reduced_points.size();
+  const double t_end = reduced_points.back().timestamp;
 
   for (size_t i = 0; i < n; ++i) {
     // 逆序索引
     size_t reverse_idx = n - 1 - i;
-    const auto& pt = points[reverse_idx];
+    const auto& pt = reduced_points[reverse_idx];
 
     // 逆序后重新映射到从 0 开始的单调递增时间轴。
     // 这样既满足 trajectory_core 对 timestamp 单调性的要求，

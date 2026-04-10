@@ -144,6 +144,10 @@ private:
   // 轨迹生成标志
   bool trajectory_generation_requested_;
 
+  // Rejoin持续判定计时
+  double rejoin_trigger_candidate_start_time_;
+  double rejoin_success_candidate_start_time_;
+
   /// 飞行周期复位检测
   void handleFlightCycleReset(bool armed);
 
@@ -162,10 +166,10 @@ private:
   void handleTrajectoryGeneration();
 
   /// 偏离检测与回归处理
-  void handleRejoin();
+  void handleRejoin(double now);
 
   /// 计算setpoint输出
-  domain::SetpointTarget computeSetpoint();
+  domain::SetpointTarget computeSetpoint(double now);
 
   /// 检查点数是否足够
   bool checkMinPoints() const;

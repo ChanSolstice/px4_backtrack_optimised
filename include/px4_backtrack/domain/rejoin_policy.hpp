@@ -16,13 +16,17 @@ struct RejoinConfig {
   double success_dist_m;      ///< 成功回归的距离阈值 (m)
   double v_max_m_s;           ///< 回归时的最大速度 (m/s)
   double lookahead_time_s;    ///< 预瞄时间 (s)
+  double trigger_hold_s;      ///< 偏离持续超阈值多久后进入rejoin (s)
+  double success_hold_s;      ///< 回归持续满足阈值多久后退出rejoin (s)
 
   /// 默认构造函数
   RejoinConfig()
     : trigger_dist_m(0.5),
       success_dist_m(0.1),
       v_max_m_s(0.3),
-      lookahead_time_s(0.5)
+      lookahead_time_s(0.5),
+      trigger_hold_s(0.25),
+      success_hold_s(0.10)
   {}
 };
 

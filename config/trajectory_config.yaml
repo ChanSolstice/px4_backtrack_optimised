@@ -18,7 +18,8 @@ max_deviation_m: 0.15
 dt_sample_s: 0.05
 
 # 去重点最小距离 (m)
-min_point_dist_m: 0.01
+# 停顿悬停时会录到一团高密度点，过小会在返航停顿处形成局部抖动
+min_point_dist_m: 0.08
 
 # 时间间隙异常阈值 (s)
 max_dt_gap_s: 0.5

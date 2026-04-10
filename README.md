@@ -10,7 +10,9 @@
 - 支持 3 类返航触发：`CH7` 长按、`CH18` 故障确认、RC 消息丢失
 - 使用 `trajectory_core` 从录制点逆序生成平滑返航轨迹
 - 返航中支持偏离检测与 rejoin
+- 轨迹生成前会对停顿/悬停形成的高密度录制点做空间抽稀，减小停顿点附近抽动
 - 返航中支持暂停，再次触发后恢复
+- rejoin 进入/退出支持持续判定，避免单帧误差导致状态来回切换
 - 触发时若录制点数不足，自动降级为原地降落
 - 返航结束后先固定点悬停，再发起 `POSCTL -> AUTO.LAND` 过渡（非 OFFBOARD 时直接请求 `AUTO.LAND`）
 - 发布内部状态与 RC 丢失持续状态，便于联调
@@ -86,6 +88,7 @@
 - `CH7` / `CH18` / `RC loss` 触发参数现在以 `backtrack_params.yaml` 为唯一运行时来源
 - `ConfigLoader` 会从 ROS 参数服务器强制读取这些触发参数；如果 launch 没有把它们加载进来，节点会在启动时报错退出
 - `TriggerConfig` 头文件不再提供业务默认值，避免“头文件默认值”和 YAML 配置并存导致行为不一致
+- rejoin 进入/退出除距离阈值外，还支持持续时间阈值；调试“频繁 rejoin”时不要只盯距离参数
 
 主要分组：
 
@@ -94,7 +97,7 @@
 - `CH18` 参数：`enable_trigger_ch18`、`ch18_failsafe_threshold`、`ch18_confirm_s`、`ch18_hover_wait_s`
 - RC 丢失参数：`enable_trigger_rc_loss`、`rc_loss_timeout_s`、`rc_loss_debounce_s`
 - OFFBOARD 参数：`pre_offboard_setpoint_count`
-- Rejoin 参数：`rejoin_trigger_dist_m`、`rejoin_success_dist_m`、`rejoin_v_max_m_s`、`rejoin_lookahead_time_s`
+- Rejoin 参数：`rejoin_trigger_dist_m`、`rejoin_success_dist_m`、`rejoin_v_max_m_s`、`rejoin_lookahead_time_s`、`rejoin_trigger_hold_s`、`rejoin_success_hold_s`
 - 降落参数：`landing_hover_s`
 - 轨迹配置路径：`trajectory_config_path`
 - Debug 参数：`debug_enable_csv_dump`、`debug_csv_output_dir`、`debug_trajectory_sample_dt`、`debug_enable_rviz_publish`
@@ -104,6 +107,8 @@
 文件：[`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)
 
 该文件控制平滑轨迹生成的采样、走廊约束、拐角处理、yaw 平滑、末端收敛以及速度加速度限制。
+
+当前返航侧在调用 `trajectory_core` 之前，还会基于 `max(min_point_dist_m, ds_m * 0.5)` 对录制点做一次额外空间抽稀，用于压缩停顿/悬停阶段形成的高密度点云团。
 
 ## 构建与启动
 

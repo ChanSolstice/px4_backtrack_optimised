@@ -84,6 +84,12 @@ rejoin_v_max_m_s: 0.3
 # 回归预瞄时间 (s)
 rejoin_lookahead_time_s: 0.5
 
+# 偏离持续超阈值多久后进入回归 (s)
+rejoin_trigger_hold_s: 0.25
+
+# 回归持续满足阈值多久后退出回归 (s)
+rejoin_success_hold_s: 0.10
+
 # ============================
 # 降落过渡参数
 # ============================

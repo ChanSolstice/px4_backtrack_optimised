@@ -13,6 +13,29 @@ std::vector<RecordPoint> makeRecordPoints() {
   };
 }
 
+std::vector<RecordPoint> makeDensePauseClusterPoints() {
+  std::vector<RecordPoint> points;
+
+  double stamp = 0.0;
+  for (int i = 0; i <= 50; ++i) {
+    points.emplace_back(Vec3(i * 0.02, 0.0, 1.0), 0.0, stamp);
+    stamp += 0.1;
+  }
+
+  for (int i = 0; i < 20; ++i) {
+    double y = (i % 2 == 0) ? 0.02 : -0.02;
+    points.emplace_back(Vec3(1.0 + 0.01 * (i % 3), y, 1.0), 0.0, stamp);
+    stamp += 0.1;
+  }
+
+  for (int i = 1; i <= 50; ++i) {
+    points.emplace_back(Vec3(1.0 + i * 0.02, 0.0, 1.0), 0.0, stamp);
+    stamp += 0.1;
+  }
+
+  return points;
+}
+
 TEST(TrajectorySessionTest, RejectsInsufficientPoints) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
@@ -60,6 +83,21 @@ TEST(TrajectorySessionTest, FreezeAndResumeKeepProgressContinuous) {
   session.resumeProgress(20.0);
   session.evaluate(20.5);
   EXPECT_NEAR(session.getProgress(), 1.0, 1e-6);
+}
+
+TEST(TrajectorySessionTest, DensePauseClusterDoesNotBlowUpPathLength) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  config.ds_m = 0.15;
+  config.min_point_dist_m = 0.01;
+
+  ASSERT_TRUE(session.generate(makeDensePauseClusterPoints(), config));
+  ASSERT_TRUE(session.isValid());
+  ASSERT_NE(session.getTrajectory(), nullptr);
+
+  double path_length = session.getTrajectory()->pathLength();
+  EXPECT_GT(path_length, 1.8);
+  EXPECT_LT(path_length, 2.4);
 }
 
 TEST(TrajectorySessionTest, SetProgressControlsFinishedState) {

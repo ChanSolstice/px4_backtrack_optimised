@@ -20,7 +20,9 @@ BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config)
     arm_after_disarm_detected_(false),
     record_delay_start_time_(0.0),
     record_delay_started_(false),
-    trajectory_generation_requested_(false)
+    trajectory_generation_requested_(false),
+    rejoin_trigger_candidate_start_time_(-1.0),
+    rejoin_success_candidate_start_time_(-1.0)
 {
   ROS_INFO("[BacktrackUseCase] Initialized");
 }
@@ -42,7 +44,7 @@ TickOutput BacktrackUseCase::tick(double now) {
   handleTrajectoryGeneration();
 
   // 偏离检测与回归处理
-  handleRejoin();
+  handleRejoin(now);
 
   // 构造TickInput
   domain::TickInput tick_input;
@@ -66,7 +68,7 @@ TickOutput BacktrackUseCase::tick(double now) {
 
   // 计算setpoint
   if (output.should_publish_setpoint) {
-    output.setpoint = computeSetpoint();
+    output.setpoint = computeSetpoint(now);
   }
 
   return output;
@@ -118,6 +120,8 @@ void BacktrackUseCase::handleFlightCycleReset(bool armed) {
     trajectory_session_.reset();
     record_delay_started_ = false;
     trajectory_generation_requested_ = false;
+    rejoin_trigger_candidate_start_time_ = -1.0;
+    rejoin_success_candidate_start_time_ = -1.0;
 
     // 进入WaitRecordDelay状态（通过状态机处理）
     // 状态机会在tick中检测ARM并自动转换
@@ -275,6 +279,8 @@ void BacktrackUseCase::handleTrajectoryGeneration() {
 
     if (success) {
       trajectory_generation_requested_ = false;
+      rejoin_trigger_candidate_start_time_ = -1.0;
+      rejoin_success_candidate_start_time_ = -1.0;
       ROS_INFO("[BacktrackUseCase] Trajectory generation successful");
       performDebugDump();
     } else {
@@ -284,45 +290,74 @@ void BacktrackUseCase::handleTrajectoryGeneration() {
   }
 }
 
-void BacktrackUseCase::handleRejoin() {
+void BacktrackUseCase::handleRejoin(double now) {
   auto current_state = state_machine_.getCurrentState();
 
   // 在ReturnActive状态检测偏离
   if (current_state == domain::State::ReturnActive) {
+    rejoin_success_candidate_start_time_ = -1.0;
     if (!trajectory_session_.isValid()) {
       return;
     }
 
     // 获取轨迹上的当前进度位置
-    auto traj_state = trajectory_session_.evaluate(ros::Time::now().toSec());
+    auto traj_state = trajectory_session_.evaluate(now);
 
     // 检查是否偏离
     if (rejoin_policy_.shouldTriggerRejoin(current_position_, traj_state.position)) {
-      ROS_WARN("[BacktrackUseCase] Deviation detected, entering rejoin mode");
-      trajectory_session_.freezeProgress();  // 冻结轨迹进度，防止退出条件目标持续漂移
-      state_machine_.enterRejoin();
+      if (rejoin_trigger_candidate_start_time_ < 0.0) {
+        rejoin_trigger_candidate_start_time_ = now;
+      }
+
+      double hold_duration = now - rejoin_trigger_candidate_start_time_;
+      if (hold_duration >= config_.rejoin_config.trigger_hold_s) {
+        ROS_WARN("[BacktrackUseCase] Deviation detected for %.2f s, entering rejoin mode",
+                 hold_duration);
+        trajectory_session_.freezeProgress();  // 冻结轨迹进度，防止退出条件目标持续漂移
+        state_machine_.enterRejoin();
+        rejoin_trigger_candidate_start_time_ = -1.0;
+      }
+    } else {
+      rejoin_trigger_candidate_start_time_ = -1.0;
     }
+    return;
   }
 
   // 在ReturnRejoin状态检测回归成功
   if (current_state == domain::State::ReturnRejoin) {
+    rejoin_trigger_candidate_start_time_ = -1.0;
     if (!trajectory_session_.isValid()) {
       return;
     }
 
     // 获取轨迹上的当前进度位置
-    auto traj_state = trajectory_session_.evaluate(ros::Time::now().toSec());
+    auto traj_state = trajectory_session_.evaluate(now);
 
     // 检查是否回归成功
     if (rejoin_policy_.shouldExitRejoin(current_position_, traj_state.position)) {
-      ROS_INFO("[BacktrackUseCase] Rejoin successful, returning to active mode");
-      trajectory_session_.resumeProgress(ros::Time::now().toSec());  // 恢复轨迹进度，从冻结点继续
-      state_machine_.exitRejoin();
+      if (rejoin_success_candidate_start_time_ < 0.0) {
+        rejoin_success_candidate_start_time_ = now;
+      }
+
+      double hold_duration = now - rejoin_success_candidate_start_time_;
+      if (hold_duration >= config_.rejoin_config.success_hold_s) {
+        ROS_INFO("[BacktrackUseCase] Rejoin successful for %.2f s, returning to active mode",
+                 hold_duration);
+        trajectory_session_.resumeProgress(now);  // 恢复轨迹进度，从冻结点继续
+        state_machine_.exitRejoin();
+        rejoin_success_candidate_start_time_ = -1.0;
+      }
+    } else {
+      rejoin_success_candidate_start_time_ = -1.0;
     }
+    return;
   }
+
+  rejoin_trigger_candidate_start_time_ = -1.0;
+  rejoin_success_candidate_start_time_ = -1.0;
 }
 
-domain::SetpointTarget BacktrackUseCase::computeSetpoint() {
+domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
   auto current_state = state_machine_.getCurrentState();
 
   // 优先使用状态机提供的setpoint（固定点悬停）
@@ -334,7 +369,7 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint() {
   // ReturnActive状态：从轨迹评估
   if (current_state == domain::State::ReturnActive) {
     if (trajectory_session_.isValid()) {
-      auto traj_state = trajectory_session_.evaluate(ros::Time::now().toSec());
+      auto traj_state = trajectory_session_.evaluate(now);
 
       domain::SetpointTarget target;
       target.position = traj_state.position;
