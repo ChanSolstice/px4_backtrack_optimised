@@ -1,5 +1,108 @@
 # Changelog
 
+## 2026-04-10 — 抑制停顿点抽动与 rejoin 抖动
+
+针对“直线分段飞行、段间短暂停顿”场景补强返航稳定性，降低停顿点附近的抽动和 `ReturnActive -> ReturnRejoin` 反复切换。
+
+### 修复
+
+- **fix(trajectory):** `TrajectorySession::generate()` 在真正调用 `trajectory_core` 前先对录制点做空间抽稀，使用 `max(min_point_dist_m, ds_m * 0.5)` 压缩停顿悬停形成的高密度点云团，减少停顿点附近的局部折返和抽动
+- **fix(rejoin):** `BacktrackUseCase::handleRejoin()` 为进入/退出 rejoin 增加持续判定，新增 `rejoin_trigger_hold_s` / `rejoin_success_hold_s`，避免单帧越阈值导致 `ReturnActive` 与 `ReturnRejoin` 反复切换
+- **fix(config):** `trajectory_config.yaml` 将 `min_point_dist_m` 从 `0.01` 提高到 `0.05`，并在 `backtrack_params.yaml` 中新增 rejoin 持续判定参数
+
+### 测试与文档
+
+- **test(trajectory):** `test_trajectory_session.cpp` 新增高密度停顿点云团场景，验证轨迹长度不会因停顿漂移而明显膨胀
+- **docs(bug):** 新增两份 bug report，分别记录“停顿点高密度录制导致返航抽动”和“rejoin 单帧越阈值导致状态反复切换”
+- **docs(readme/llm):** README 和 LLM_MAP 同步补充“生成前抽稀”和“rejoin 持续判定”的当前行为语义
+
+### 涉及文件
+
+- `src/domain/trajectory_session.cpp`
+- `src/application/backtrack_usecase.cpp`
+- `include/px4_backtrack/application/backtrack_usecase.hpp`
+- `include/px4_backtrack/domain/rejoin_policy.hpp`
+- `src/infrastructure/config_loader.cpp`
+- `config/trajectory_config.yaml`
+- `config/backtrack_params.yaml`
+- `tests/unit/test_trajectory_session.cpp`
+- `doc/BUG_REPORT_停顿点高密度录制导致返航抽动.md`
+- `doc/BUG_REPORT_rejoin单帧越阈值导致状态反复切换.md`
+
+## 2026-04-08 — 参数与测试文档同步调整
+
+结合实飞联调结果回调返航与轨迹参数，并同步刷新返航功能测试文档中的基线参数表与测试项。
+
+### 修改
+
+- **update(config):** `record_min_points` 从 `100` 调整为 `30`，降低返航触发所需录制点数门槛
+- **update(config):** `record_max_hz` 从 `10.0` 调整为 `15.0`，提高录制频率上限
+- **update(config):** `rejoin_success_dist_m` 从 `0.1` 调整为 `0.2`，放宽回归成功阈值
+- **update(config):** `trajectory_config.yaml` 中 `v_max` 从 `2.0` 调整为 `1.0`，`vz_max` 从 `0.8` 调整为 `0.6`
+
+### 文档
+
+- **docs(test):** `doc/返航功能测试文档.md` 参数基线改为与当前 YAML 保持一致，并补充 `trajectory_core` 参数表
+
+### 涉及文件
+
+- `config/backtrack_params.yaml`
+- `config/trajectory_config.yaml`
+- `doc/返航功能测试文档.md`
+
+## 2026-04-08 — 修复 ReturnRejoin 期间进度未冻结
+
+修复进入 `ReturnRejoin` 后轨迹进度仍按 wall time 推进，导致回归目标漂移到轨迹末端、无人机无法自主回归的问题。
+
+### 修复
+
+- **fix(rejoin):** 在 `BacktrackUseCase::handleRejoin()` 中，进入 rejoin 时调用 `trajectory_session_.freezeProgress()`，退出 rejoin 时调用 `trajectory_session_.resumeProgress(now)`，使 rejoin 与 pause 语义保持对称
+
+### 测试与文档
+
+- **test(state_machine):** 补充状态机相关测试覆盖，验证进入 rejoin 后不会再残留固定点 setpoint
+- **docs(bug):** 新增两份 bug report，分别记录 `ReturnRejoin` 期间进度未冻结问题和 `current_setpoint_` 残留导致返航悬停问题
+- **docs(test):** `doc/返航功能测试文档.md` 补充实飞问题记录与用例结果
+
+### 涉及文件
+
+- `src/application/backtrack_usecase.cpp`
+- `tests/unit/test_state_machine.cpp`
+- `doc/BUG_REPORT_rejoin进度未冻结导致轨迹跟踪失败.md`
+- `doc/BUG_REPORT_setpoint残留导致返航悬停.md`
+- `doc/返航功能测试文档.md`
+
+## 2026-04-01 — 修复固定点 setpoint 残留导致返航悬停
+
+修复 `ReturnPreOffboard` 写入的固定点 setpoint 在进入 `ReturnActive` / `ReturnRejoin` 后未清除，导致 `computeSetpoint()` 一直被短路到悬停点的问题。
+
+### 修复
+
+- **fix(state_machine):** `tickReturnActive()` 和 `tickReturnRejoin()` 显式将 `current_setpoint_` 置为 `std::nullopt`，让 usecase 可以正确从轨迹评估和 rejoin 策略计算 setpoint
+
+### 涉及文件
+
+- `src/domain/state_machine.cpp`
+
+## 2026-03-30 — 补充测试文档
+
+补齐仓库的单元测试说明文档和返航功能测试文档，便于后续联调、验收与缺陷回归追踪。
+
+### 新增
+
+- **docs(test):** 新增 `doc/单元测试文档.md`，说明当前 `gtest` 覆盖范围、运行方式、结果判读与扩展建议
+- **docs(test):** 新增 `doc/返航功能测试文档.md`，定义返航主流程、触发、rejoin、降落和 `AUTO.LAND` 让步等测试项
+
+### 文档
+
+- **docs(readme):** `README.md` 新增测试文档入口与目录索引
+
+### 涉及文件
+
+- `doc/单元测试文档.md`
+- `doc/返航功能测试文档.md`
+- `README.md`
+
 ## 2026-03-26 — 触发参数配置来源收口到 YAML
 
 清理 `TriggerEvaluator` 触发参数的双重默认来源，避免头文件默认构造值与 `backtrack_params.yaml` 同时存在导致行为漂移。

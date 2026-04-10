@@ -139,8 +139,9 @@
 ### 1. 录制和轨迹生成不是一回事
 
 - `RecordingBuffer` 保存录制点与相对时间戳。
-- `TrajectorySession::generate()` 会把点序逆转，并把时间戳映射为 `t_new = t_last - t_rev`，从而在保持单调递增的同时保留原始采样间隔信息。
+- `TrajectorySession::generate()` 会先基于 `max(min_point_dist_m, ds_m * 0.5)` 对录制点做一次空间抽稀，再把点序逆转，并把时间戳映射为 `t_new = t_last - t_rev`，从而在保持单调递增的同时保留原始采样间隔信息。
 - `trajectory_core` 最终执行的轨迹时间轴仍由库内部速度剖面生成；录制时间戳主要用于时间质量检查与 warning，而不是直接决定返航执行时序。
+- 这层抽稀的主要目的不是“减少点数”，而是压缩停顿/悬停阶段形成的高密度点云团，降低停顿点附近的局部折返和抽动。
 
 ### 2. `CH7` 的“按下事件”和“长按事件”共享一套内部状态
 
@@ -200,6 +201,15 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 
 `DebugDumper` 和 `DebugPublisher` 通过 `setDebugDumper()` / `setDebugPublisher()` 注入 `BacktrackUseCase`，默认为 `nullptr`（不启用）。`performDebugDump()` 在 `handleTrajectoryGeneration()` 成功后调用，内部先判空再执行。这意味着 debug 功能对正常飞行路径零侵入——不启用时没有任何额外开销。
 
+### 8. rejoin 现在不再是“单帧越阈值立即切换”
+
+当前实现里，rejoin 的进入/退出除了距离阈值，还带持续时间判定：
+
+- 进入：`dist > rejoin_trigger_dist_m` 持续达到 `rejoin_trigger_hold_s`
+- 退出：`dist < rejoin_success_dist_m` 持续达到 `rejoin_success_hold_s`
+
+如果你看到日志里频繁刷 `ReturnActive -> ReturnRejoin`，先检查这两个 hold 参数是否和 YAML 对齐，而不是只调距离阈值。
+
 ## 常见改动应该改哪里
 
 | 目标 | 必看文件 |
@@ -239,6 +249,7 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 
 - `checkRCLossEvent()` 必须在 `handleTriggers()` 的最顶部、状态分支之前调用。如果挪到状态分支内部，`isRCLost()` 在某些状态下会失真。
 - `handleReturnTrigger()` 在点数不足时调用 `triggerLanding()`，这会跳过 `ReturnPreOffboard` 直接进 `LandingTransition`。如果你在 `LandingTransition` 之前加了新逻辑，要评估这条直达路径是否会绕过它。
+- 当前代码只在“点数不足”时直接降落；如果点数足够但几何路径退化到无法生成有效轨迹（例如原地悬停积累了很多近重复点），`handleTrajectoryGeneration()` 目前仍只会报错并停留在 `ReturnPreOffboard`，不会自动降级降落。
 - [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp) 为准。
 - 仓库已有 `tests/unit/`，但目前主要覆盖领域层和轻集成逻辑，还没有 ROS topic 级 mock/rostest。涉及 adapters、launch、参数装配时，仍然要做一次编译和联调。
 
@@ -253,7 +264,7 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 - [`tests/unit/test_rejoin_policy.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_rejoin_policy.cpp)
   覆盖最近点搜索、预瞄和速度限幅
 - [`tests/unit/test_trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_trajectory_session.cpp)
-  覆盖轨迹生成、逆序语义和暂停恢复进度
+  覆盖轨迹生成、逆序语义、暂停恢复进度，以及高密度停顿点云团不会把路径长度拉爆
 
 运行方式：
 
