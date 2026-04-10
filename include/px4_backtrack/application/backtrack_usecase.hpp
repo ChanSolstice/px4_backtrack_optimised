@@ -4,6 +4,7 @@
 #include "px4_backtrack/domain/recording_buffer.hpp"
 #include "px4_backtrack/domain/trigger_evaluator.hpp"
 #include "px4_backtrack/domain/trajectory_session.hpp"
+#include "px4_backtrack/domain/waypoint_fallback_session.hpp"
 #include "px4_backtrack/domain/rejoin_policy.hpp"
 
 #include <trajectory_core/trajectory_core.hpp>
@@ -124,6 +125,7 @@ private:
   domain::RecordingBuffer recording_buffer_;
   domain::TriggerEvaluator trigger_evaluator_;
   domain::TrajectorySession trajectory_session_;
+  domain::WaypointFallbackSession waypoint_fallback_session_;
   domain::RejoinPolicy rejoin_policy_;
   domain::BacktrackStateMachine state_machine_;
 
@@ -164,6 +166,9 @@ private:
 
   /// 轨迹生成处理
   void handleTrajectoryGeneration();
+
+  /// 退化 waypoint 会话执行进度处理
+  void handleWaypointFallbackProgress();
 
   /// 偏离检测与回归处理
   void handleRejoin(double now);

@@ -249,7 +249,7 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 
 - `checkRCLossEvent()` 必须在 `handleTriggers()` 的最顶部、状态分支之前调用。如果挪到状态分支内部，`isRCLost()` 在某些状态下会失真。
 - `handleReturnTrigger()` 在点数不足时调用 `triggerLanding()`，这会跳过 `ReturnPreOffboard` 直接进 `LandingTransition`。如果你在 `LandingTransition` 之前加了新逻辑，要评估这条直达路径是否会绕过它。
-- 当前代码在两类明确场景会直接降落：一类是触发时点数不足，另一类是点数足够但几何路径退化为“点过近/起终点近乎重合”并导致 `handleTrajectoryGeneration()` 失败。其它轨迹生成失败不会在这里一刀切降落。
+- 当前代码有四类“不可直接走平滑轨迹”的分支：一类是触发时点数不足，直接降落；一类是点数足够但几何路径退化为“点过近/起终点近乎重合”，轨迹生成失败后直接降落；一类是其它可恢复轨迹生成失败，会切到 waypoint 退化返航；最后一类是非法轨迹配置，这时不会走 fallback，而是停留在 `ReturnPreOffboard` 并停止重试。
 - [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp) 为准。
 - 仓库已有 `tests/unit/`，但目前主要覆盖领域层和轻集成逻辑，还没有 ROS topic 级 mock/rostest。涉及 adapters、launch、参数装配时，仍然要做一次编译和联调。
 
@@ -265,6 +265,10 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
   覆盖最近点搜索、预瞄和速度限幅
 - [`tests/unit/test_trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_trajectory_session.cpp)
   覆盖轨迹生成、逆序语义、暂停恢复进度，以及高密度停顿点云团不会把路径长度拉爆
+- [`tests/unit/test_waypoint_fallback_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_waypoint_fallback_session.cpp)
+  覆盖退化 waypoint 路径的逆序稀疏化、单步推进与 restart 语义
+- [`tests/unit/test_backtrack_usecase.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_backtrack_usecase.cpp)
+  轻集成覆盖“点过近失败直接降落”和“非法配置不进入 waypoint fallback”两条用例层分支
 
 运行方式：
 

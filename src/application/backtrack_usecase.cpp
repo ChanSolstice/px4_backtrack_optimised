@@ -43,6 +43,9 @@ TickOutput BacktrackUseCase::tick(double now) {
   // 轨迹生成处理
   handleTrajectoryGeneration();
 
+  // 退化 waypoint 会话执行进度
+  handleWaypointFallbackProgress();
+
   // 偏离检测与回归处理
   handleRejoin(now);
 
@@ -53,8 +56,10 @@ TickOutput BacktrackUseCase::tick(double now) {
   tick_input.now = now;
   tick_input.current_position = current_position_;
   tick_input.current_yaw = current_yaw_;
-  tick_input.trajectory_ready = trajectory_session_.isValid();
-  tick_input.trajectory_finished = trajectory_session_.isFinished();
+  tick_input.trajectory_ready =
+      trajectory_session_.isValid() || waypoint_fallback_session_.isValid();
+  tick_input.trajectory_finished =
+      trajectory_session_.isFinished() || waypoint_fallback_session_.isFinished();
 
   // 驱动状态机
   state_machine_.tick(tick_input);
@@ -118,6 +123,7 @@ void BacktrackUseCase::handleFlightCycleReset(bool armed) {
     ROS_INFO("[BacktrackUseCase] Flight cycle reset: ARM after DISARM detected");
     recording_buffer_.reset();
     trajectory_session_.reset();
+    waypoint_fallback_session_.reset();
     record_delay_started_ = false;
     trajectory_generation_requested_ = false;
     rejoin_trigger_candidate_start_time_ = -1.0;
@@ -196,7 +202,9 @@ void BacktrackUseCase::handleTriggers(double now) {
     if (trigger_evaluator_.checkCh7PressEvent()) {
       ROS_INFO("[BacktrackUseCase] Ch7 press event detected, pausing");
       state_machine_.triggerPause();
-      trajectory_session_.freezeProgress();
+      if (trajectory_session_.isValid()) {
+        trajectory_session_.freezeProgress();
+      }
       return;
     }
   }
@@ -210,7 +218,11 @@ void BacktrackUseCase::handleTriggers(double now) {
         ROS_WARN("[BacktrackUseCase] RC loss detected while paused, resuming return");
         state_machine_.lockPosition(current_position_, current_yaw_);
         state_machine_.triggerReturn(domain::Event::RCLossTriggered);
-        trajectory_session_.resumeProgress(now);
+        if (trajectory_session_.isValid()) {
+          trajectory_session_.resumeProgress(now);
+        } else if (waypoint_fallback_session_.isValid()) {
+          waypoint_fallback_session_.restart();
+        }
       } else {
         ROS_WARN("[BacktrackUseCase] RC loss detected while paused but only %zu points recorded (< %d), triggering AUTO.LAND",
                  recording_buffer_.size(),
@@ -225,7 +237,11 @@ void BacktrackUseCase::handleTriggers(double now) {
         ROS_INFO("[BacktrackUseCase] Ch7 long press detected, resuming");
         state_machine_.lockPosition(current_position_, current_yaw_);
         state_machine_.triggerReturn(domain::Event::Ch7LongPress);
-        trajectory_session_.resumeProgress(now);
+        if (trajectory_session_.isValid()) {
+          trajectory_session_.resumeProgress(now);
+        } else if (waypoint_fallback_session_.isValid()) {
+          waypoint_fallback_session_.restart();
+        }
       } else {
         ROS_WARN("[BacktrackUseCase] Ch7 long press detected while paused but only %zu points recorded (< %d), triggering AUTO.LAND",
                  recording_buffer_.size(),
@@ -242,6 +258,8 @@ void BacktrackUseCase::handleReturnTrigger(domain::Event event,
                                            const char* trigger_name) {
   if (has_min_points) {
     ROS_INFO("[BacktrackUseCase] %s detected", trigger_name);
+    trajectory_session_.reset();
+    waypoint_fallback_session_.reset();
     state_machine_.lockPosition(current_position_, current_yaw_);
     state_machine_.triggerReturn(event);
     trajectory_generation_requested_ = true;
@@ -261,7 +279,8 @@ void BacktrackUseCase::handleTrajectoryGeneration() {
 
   if (current_state == domain::State::ReturnPreOffboard &&
       trajectory_generation_requested_ &&
-      !trajectory_session_.isValid()) {
+      !trajectory_session_.isValid() &&
+      !waypoint_fallback_session_.isValid()) {
 
     ROS_INFO("[BacktrackUseCase] Generating trajectory from %zu points",
              recording_buffer_.size());
@@ -273,6 +292,7 @@ void BacktrackUseCase::handleTrajectoryGeneration() {
 
     if (success) {
       trajectory_generation_requested_ = false;
+      waypoint_fallback_session_.reset();
       rejoin_trigger_candidate_start_time_ = -1.0;
       rejoin_success_candidate_start_time_ = -1.0;
       ROS_INFO("[BacktrackUseCase] Trajectory generation successful");
@@ -282,12 +302,32 @@ void BacktrackUseCase::handleTrajectoryGeneration() {
           domain::TrajectorySession::FailureKind::TooCloseGeometry) {
         ROS_ERROR("[BacktrackUseCase] Trajectory generation failed due to too-close geometry, degrading to immediate landing");
         triggerImmediateLanding();
+      } else if (trajectory_session_.getLastFailureKind() ==
+                 domain::TrajectorySession::FailureKind::InvalidConfig) {
+        trajectory_generation_requested_ = false;
+        ROS_ERROR("[BacktrackUseCase] Trajectory generation failed due to invalid trajectory config");
+      } else if (waypoint_fallback_session_.build(recording_buffer_.getPoints())) {
+        trajectory_generation_requested_ = false;
+        rejoin_trigger_candidate_start_time_ = -1.0;
+        rejoin_success_candidate_start_time_ = -1.0;
+        ROS_WARN("[BacktrackUseCase] Trajectory generation failed, switching to waypoint fallback return (%zu sparse waypoints)",
+                 waypoint_fallback_session_.size());
       } else {
-        ROS_ERROR("[BacktrackUseCase] Trajectory generation failed");
-        // 保持在ReturnPreOffboard状态，留给后续非“点过近”失败分支处理
+        ROS_ERROR("[BacktrackUseCase] Trajectory generation failed and waypoint fallback construction also failed");
+        triggerImmediateLanding();
       }
     }
   }
+}
+
+void BacktrackUseCase::handleWaypointFallbackProgress() {
+  auto current_state = state_machine_.getCurrentState();
+  if (current_state != domain::State::ReturnActive ||
+      !waypoint_fallback_session_.isValid()) {
+    return;
+  }
+
+  waypoint_fallback_session_.updateProgress(current_position_);
 }
 
 void BacktrackUseCase::handleRejoin(double now) {
@@ -295,6 +335,12 @@ void BacktrackUseCase::handleRejoin(double now) {
 
   // 在ReturnActive状态检测偏离
   if (current_state == domain::State::ReturnActive) {
+    if (waypoint_fallback_session_.isValid()) {
+      rejoin_success_candidate_start_time_ = -1.0;
+      rejoin_trigger_candidate_start_time_ = -1.0;
+      return;
+    }
+
     rejoin_success_candidate_start_time_ = -1.0;
     if (!trajectory_session_.isValid()) {
       return;
@@ -368,6 +414,10 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
 
   // ReturnActive状态：从轨迹评估
   if (current_state == domain::State::ReturnActive) {
+    if (waypoint_fallback_session_.isValid()) {
+      return waypoint_fallback_session_.currentTarget();
+    }
+
     if (trajectory_session_.isValid()) {
       auto traj_state = trajectory_session_.evaluate(now);
 
@@ -422,6 +472,7 @@ bool BacktrackUseCase::checkMinPoints() const {
 void BacktrackUseCase::triggerImmediateLanding() {
   trajectory_generation_requested_ = false;
   trajectory_session_.reset();
+  waypoint_fallback_session_.reset();
   rejoin_trigger_candidate_start_time_ = -1.0;
   rejoin_success_candidate_start_time_ = -1.0;
   state_machine_.triggerLanding();

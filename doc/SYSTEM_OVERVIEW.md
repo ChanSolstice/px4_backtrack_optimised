@@ -164,9 +164,10 @@
 3. `handleRecordDelay(now)` 在 `WaitRecordDelay` 状态内等待 `record_delay_s`，到时进入 `Recording`。
 4. `handleTriggers(now)` 检测返航、暂停、恢复、RC 丢失等触发条件。
 5. `handleTrajectoryGeneration()` 在 `ReturnPreOffboard` 内请求并执行轨迹生成。
-6. `handleRejoin()` 在返航过程中检查偏离与回归成功。
-7. 组装 `TickInput` 驱动 `BacktrackStateMachine::tick()`。
-8. 根据状态机输出计算本周期 setpoint 与模式请求。
+6. `handleWaypointFallbackProgress()` 在退化 waypoint 返航期间推进当前目标索引。
+7. `handleRejoin()` 在返航过程中检查偏离与回归成功。
+8. 组装 `TickInput` 驱动 `BacktrackStateMachine::tick()`。
+9. 根据状态机输出计算本周期 setpoint 与模式请求。
 
 ### 4.4 返航触发阶段
 
@@ -193,12 +194,20 @@
 
 生成动作位于 `TrajectorySession::generate()`，核心步骤如下：
 
-1. 检查录制点数是否至少为 2。
-2. 将录制点逆序。
-3. 按 `record_max_hz` 重建时间戳。
-4. 构造 `trajectory_core::Waypoint` 数组。
-5. 调用 `trajectory_core::TrajectoryGenerator::generate()`。
-6. 若成功，保存轨迹对象并重置执行进度。
+1. 先调用 `TrajectoryConfig::validate()`，非法配置直接返回 `InvalidConfig`。
+2. 检查录制点数是否至少为 2。
+3. 基于 `max(min_point_dist_m, ds_m * 0.5)` 对录制点做空间抽稀。
+4. 将录制点逆序。
+5. 将逆序后的录制时间戳镜像映射为新的单调递增时间轴。
+6. 构造 `trajectory_core::Waypoint` 数组。
+7. 调用 `trajectory_core::TrajectoryGenerator::generate()`。
+8. 若成功，保存轨迹对象并重置执行进度。
+
+生成失败时的处理也已分流：
+
+- 点过近/起终点几何退化：直接降级为原地降落
+- 其它可恢复失败：切到 `WaypointFallbackSession` 做退化 waypoint 返航
+- 非法配置：记录错误并停留在 `ReturnPreOffboard`，不进入 fallback
 
 ### 4.6 OFFBOARD 切换与轨迹执行阶段
 
@@ -211,10 +220,11 @@
 
 进入 `ReturnActive` 后：
 
-1. `computeSetpoint()` 调用 `trajectory_session_.evaluate(now)`。
-2. 将轨迹状态转成 `SetpointTarget`。
-3. 通过 `/mavros/setpoint_raw/local` 持续下发。
-4. 当 `trajectory_session_.isFinished()` 为真时，进入 `LandingHover`。
+1. 若当前是退化返航，则直接从 `WaypointFallbackSession` 取当前位置对应的 sparse waypoint 目标。
+2. 否则，`computeSetpoint()` 调用 `trajectory_session_.evaluate(now)`。
+3. 将轨迹状态或 waypoint 目标转成 `SetpointTarget`。
+4. 通过 `/mavros/setpoint_raw/local` 持续下发。
+5. 当正常轨迹或退化 waypoint 会话完成时，进入 `LandingHover`。
 
 ### 4.7 偏离检测与回归阶段
 

@@ -58,6 +58,7 @@ set(DOMAIN_SOURCES
   src/domain/recording_buffer.cpp
   src/domain/trigger_evaluator.cpp
   src/domain/trajectory_session.cpp
+  src/domain/waypoint_fallback_session.cpp
   src/domain/rejoin_policy.cpp
 )
 
@@ -208,6 +209,17 @@ if(CATKIN_ENABLE_TESTING)
   )
   if(TARGET test_trajectory_session)
     target_link_libraries(test_trajectory_session
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
+  catkin_add_gtest(test_waypoint_fallback_session
+    tests/unit/test_main.cpp
+    tests/unit/test_waypoint_fallback_session.cpp
+  )
+  if(TARGET test_waypoint_fallback_session)
+    target_link_libraries(test_waypoint_fallback_session
       ${PROJECT_NAME}_lib
       ${catkin_LIBRARIES}
     )

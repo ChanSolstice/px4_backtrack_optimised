@@ -66,6 +66,16 @@ TEST(TrajectorySessionTest, MarksTooCloseGeometryFailure) {
   EXPECT_EQ(session.getLastFailureKind(), TrajectorySession::FailureKind::TooCloseGeometry);
 }
 
+TEST(TrajectorySessionTest, MarksInvalidConfigFailure) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  config.v_end_max = config.v_max + 1.0;
+
+  EXPECT_FALSE(session.generate(makeRecordPoints(), config));
+  EXPECT_FALSE(session.isValid());
+  EXPECT_EQ(session.getLastFailureKind(), TrajectorySession::FailureKind::InvalidConfig);
+}
+
 TEST(TrajectorySessionTest, GenerateProducesValidTrajectoryInReverseOrder) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;

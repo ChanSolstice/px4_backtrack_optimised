@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-04-10 — 轨迹失败退化为 waypoint 返航
+
+为 `trajectory_core` 的可恢复非几何退化失败补上退化返航链路，避免系统在 `ReturnPreOffboard` 卡住。
+
+### 修复
+
+- **feat(usecase):** `BacktrackUseCase::handleTrajectoryGeneration()` 在可恢复的非“点过近”失败时切换到 waypoint 退化返航，不再只记日志后停留在 `ReturnPreOffboard`
+- **feat(domain):** 新增 `WaypointFallbackSession`，负责将录制点逆序重采样为 0.3m 稀疏路径，并按当前位置推进 waypoint 目标
+- **fix(usecase):** 退化返航继续复用 `/mavros/setpoint_raw/local` 的 `PositionTarget` 发布链，不引入新的 ROS 控制接口
+- **fix(usecase):** 退化返航暂停后恢复从头开始，正常轨迹返航仍保持原有断点续航语义
+- **fix(trajectory):** 非法 `trajectory_core` 配置显式分类为 `InvalidConfig`，不会被 waypoint fallback 掩盖
+
+### 测试与文档
+
+- **test(fallback):** 新增 `test_waypoint_fallback_session.cpp`，覆盖稀疏路径构建、推进和 restart 行为
+- **test(usecase):** `test_backtrack_usecase.cpp` 增加“非法配置不会误入 waypoint 退化返航”用例
+- **docs(readme/llm):** README、LLM_MAP 和技术文档同步更新退化返航的当前实现语义
+
+### 涉及文件
+
+- `src/application/backtrack_usecase.cpp`
+- `include/px4_backtrack/application/backtrack_usecase.hpp`
+- `src/domain/waypoint_fallback_session.cpp`
+- `include/px4_backtrack/domain/waypoint_fallback_session.hpp`
+- `tests/unit/test_backtrack_usecase.cpp`
+- `tests/unit/test_waypoint_fallback_session.cpp`
+- `CMakeLists.txt`
+- `README.md`
+- `LLM_MAP.md`
+- `doc/返航实现技术文档.md`
+
 ## 2026-04-10 — 点过近退化轨迹触发原地降落
 
 修复“起飞后原地悬停，录制点数足够但点过近/起终点几何退化，触发返航后轨迹生成失败却未降级降落”的问题。

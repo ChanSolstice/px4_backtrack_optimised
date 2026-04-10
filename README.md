@@ -13,7 +13,8 @@
 - 轨迹生成前会对停顿/悬停形成的高密度录制点做空间抽稀，减小停顿点附近抽动
 - 返航中支持暂停，再次触发后恢复
 - rejoin 进入/退出支持持续判定，避免单帧误差导致状态来回切换
-- 触发时若录制点数不足，或轨迹生成因点过近/起终点几何退化失败，自动降级为原地降落
+- 触发时若录制点数不足，自动降级为原地降落
+- 轨迹生成失败时，可恢复的非几何退化场景自动切换为 waypoint 退化返航；点过近时原地降落；非法配置不会被 fallback 掩盖
 - 返航结束后先固定点悬停，再发起 `POSCTL -> AUTO.LAND` 过渡（非 OFFBOARD 时直接请求 `AUTO.LAND`）
 - 发布内部状态与 RC 丢失持续状态，便于联调
 - 可选 debug 模式：轨迹生成后自动导出录制航点与返航轨迹 CSV，并可在 rviz 中实时查看
@@ -209,7 +210,9 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 │       ├── test_trigger_evaluator.cpp
 │       ├── test_state_machine.cpp
 │       ├── test_rejoin_policy.cpp
-│       └── test_trajectory_session.cpp
+│       ├── test_trajectory_session.cpp
+│       ├── test_waypoint_fallback_session.cpp
+│       └── test_backtrack_usecase.cpp
 └── doc/
     ├── SYSTEM_OVERVIEW.md
     ├── 单元测试文档.md
@@ -229,6 +232,8 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 - `BacktrackStateMachine`
 - `RejoinPolicy`
 - `TrajectorySession`
+- `WaypointFallbackSession`
+- `BacktrackUseCase` 轻集成路径
 
 在 catkin 工作空间根目录执行：
 
