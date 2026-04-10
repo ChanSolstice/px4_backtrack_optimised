@@ -50,7 +50,8 @@ TrajectorySession::TrajectorySession()
     t_start_walltime_(0.0),
     progress_frozen_(false),
     frozen_progress_(0.0),
-    last_generate_cost_ms_(0.0)
+    last_generate_cost_ms_(0.0),
+    last_failure_kind_(FailureKind::None)
 {
 }
 
@@ -60,13 +61,17 @@ void TrajectorySession::reset() {
   t_start_walltime_ = 0.0;
   progress_frozen_ = false;
   frozen_progress_ = 0.0;
+  last_failure_kind_ = FailureKind::None;
 }
 
 bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
                                   const trajectory_core::TrajectoryConfig& config) {
+  last_failure_kind_ = FailureKind::None;
+
   // 检查输入点数
   if (points.size() < 2) {
     ROS_ERROR("[TrajectorySession] Not enough points to generate trajectory: %zu", points.size());
+    last_failure_kind_ = FailureKind::Other;
     return false;
   }
 
@@ -78,6 +83,7 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
 
   if (reduced_points.size() < 2) {
     ROS_ERROR("[TrajectorySession] Too few points after thinning: %zu", reduced_points.size());
+    last_failure_kind_ = FailureKind::TooCloseGeometry;
     return false;
   }
 
@@ -125,6 +131,12 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
     ROS_ERROR("[TrajectorySession] Trajectory generation failed: %s", result.message.c_str());
     ROS_ERROR("[TrajectorySession]   Status: %s",
               trajectory_core::statusCodeToString(result.code).c_str());
+    if (result.code == trajectory_core::StatusCode::INVALID_INPUT &&
+        result.message.find("too close together") != std::string::npos) {
+      last_failure_kind_ = FailureKind::TooCloseGeometry;
+    } else {
+      last_failure_kind_ = FailureKind::Other;
+    }
     return false;
   }
 
@@ -233,6 +245,10 @@ double TrajectorySession::getDuration() const {
     return traj_->duration();
   }
   return 0.0;
+}
+
+TrajectorySession::FailureKind TrajectorySession::getLastFailureKind() const {
+  return last_failure_kind_;
 }
 
 }  // namespace domain

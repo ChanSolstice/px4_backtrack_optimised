@@ -212,4 +212,15 @@ if(CATKIN_ENABLE_TESTING)
       ${catkin_LIBRARIES}
     )
   endif()
+
+  catkin_add_gtest(test_backtrack_usecase
+    tests/unit/test_main.cpp
+    tests/unit/test_backtrack_usecase.cpp
+  )
+  if(TARGET test_backtrack_usecase)
+    target_link_libraries(test_backtrack_usecase
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
 endif()

@@ -46,6 +46,24 @@ TEST(TrajectorySessionTest, RejectsInsufficientPoints) {
 
   EXPECT_FALSE(session.generate(points, config));
   EXPECT_FALSE(session.isValid());
+  EXPECT_EQ(session.getLastFailureKind(), TrajectorySession::FailureKind::Other);
+}
+
+TEST(TrajectorySessionTest, MarksTooCloseGeometryFailure) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  config.ds_m = 0.1;
+  config.min_point_dist_m = 0.01;
+
+  std::vector<RecordPoint> points = {
+      RecordPoint(Vec3(0.0, 0.0, 1.0), 0.0, 0.0),
+      RecordPoint(Vec3(0.0, 0.0, 1.0), 0.0, 0.1),
+      RecordPoint(Vec3(0.0, 0.0, 1.0), 0.0, 0.2),
+  };
+
+  EXPECT_FALSE(session.generate(points, config));
+  EXPECT_FALSE(session.isValid());
+  EXPECT_EQ(session.getLastFailureKind(), TrajectorySession::FailureKind::TooCloseGeometry);
 }
 
 TEST(TrajectorySessionTest, GenerateProducesValidTrajectoryInReverseOrder) {

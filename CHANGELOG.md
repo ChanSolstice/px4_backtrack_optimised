@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-04-10 — 点过近退化轨迹触发原地降落
+
+修复“起飞后原地悬停，录制点数足够但点过近/起终点几何退化，触发返航后轨迹生成失败却未降级降落”的问题。
+
+### 修复
+
+- **fix(usecase):** `BacktrackUseCase::handleTrajectoryGeneration()` 仅在 `TrajectorySession::generate()` 因“点过近/起终点几何退化”失败时触发原地降落，不再把所有生成失败都一刀切降级
+- **refactor(trajectory):** `TrajectorySession` 新增最近一次生成失败分类，供 usecase 精确区分“点过近退化”与其它生成失败
+
+### 测试与文档
+
+- **test(usecase):** 新增 `test_backtrack_usecase.cpp`，覆盖“原地悬停录到足够点数、返航生成失败后应进入 `LandingTransition` 并请求 `AUTO.LAND`”场景
+- **docs(readme/llm):** README 和 LLM_MAP 同步补充“仅点过近/起终点几何退化失败时降级原地降落”的当前行为语义
+- **docs(test):** `doc/返航功能测试文档.md` 将 `BUG-01` 标记为已修复，并保留 `TC-19` 作为对应回归用例
+
+### 涉及文件
+
+- `src/application/backtrack_usecase.cpp`
+- `include/px4_backtrack/application/backtrack_usecase.hpp`
+- `src/domain/trajectory_session.cpp`
+- `include/px4_backtrack/domain/trajectory_session.hpp`
+- `tests/unit/test_backtrack_usecase.cpp`
+- `tests/unit/test_trajectory_session.cpp`
+- `CMakeLists.txt`
+- `README.md`
+- `LLM_MAP.md`
+- `doc/返航功能测试文档.md`
+
 ## 2026-04-10 — 抑制停顿点抽动与 rejoin 抖动
 
 针对“直线分段飞行、段间短暂停顿”场景补强返航稳定性，降低停顿点附近的抽动和 `ReturnActive -> ReturnRejoin` 反复切换。

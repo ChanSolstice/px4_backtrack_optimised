@@ -174,6 +174,9 @@ private:
   /// 检查点数是否足够
   bool checkMinPoints() const;
 
+  /// 统一处理“不可返航，直接降落”的降级路径
+  void triggerImmediateLanding();
+
   /// 执行 debug 数据导出（轨迹生成成功后调用）
   void performDebugDump();
 

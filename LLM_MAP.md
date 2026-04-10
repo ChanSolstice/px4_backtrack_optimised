@@ -249,7 +249,7 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 
 - `checkRCLossEvent()` 必须在 `handleTriggers()` 的最顶部、状态分支之前调用。如果挪到状态分支内部，`isRCLost()` 在某些状态下会失真。
 - `handleReturnTrigger()` 在点数不足时调用 `triggerLanding()`，这会跳过 `ReturnPreOffboard` 直接进 `LandingTransition`。如果你在 `LandingTransition` 之前加了新逻辑，要评估这条直达路径是否会绕过它。
-- 当前代码只在“点数不足”时直接降落；如果点数足够但几何路径退化到无法生成有效轨迹（例如原地悬停积累了很多近重复点），`handleTrajectoryGeneration()` 目前仍只会报错并停留在 `ReturnPreOffboard`，不会自动降级降落。
+- 当前代码在两类明确场景会直接降落：一类是触发时点数不足，另一类是点数足够但几何路径退化为“点过近/起终点近乎重合”并导致 `handleTrajectoryGeneration()` 失败。其它轨迹生成失败不会在这里一刀切降落。
 - [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp) 为准。
 - 仓库已有 `tests/unit/`，但目前主要覆盖领域层和轻集成逻辑，还没有 ROS topic 级 mock/rostest。涉及 adapters、launch、参数装配时，仍然要做一次编译和联调。
 

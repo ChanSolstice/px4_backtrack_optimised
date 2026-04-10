@@ -215,9 +215,7 @@ void BacktrackUseCase::handleTriggers(double now) {
         ROS_WARN("[BacktrackUseCase] RC loss detected while paused but only %zu points recorded (< %d), triggering AUTO.LAND",
                  recording_buffer_.size(),
                  config_.record_min_points);
-        trajectory_generation_requested_ = false;
-        trajectory_session_.reset();
-        state_machine_.triggerLanding();
+        triggerImmediateLanding();
       }
       return;
     }
@@ -232,9 +230,7 @@ void BacktrackUseCase::handleTriggers(double now) {
         ROS_WARN("[BacktrackUseCase] Ch7 long press detected while paused but only %zu points recorded (< %d), triggering AUTO.LAND",
                  recording_buffer_.size(),
                  config_.record_min_points);
-        trajectory_generation_requested_ = false;
-        trajectory_session_.reset();
-        state_machine_.triggerLanding();
+        triggerImmediateLanding();
       }
       return;
     }
@@ -256,9 +252,7 @@ void BacktrackUseCase::handleReturnTrigger(domain::Event event,
            trigger_name,
            recording_buffer_.size(),
            config_.record_min_points);
-  trajectory_generation_requested_ = false;
-  trajectory_session_.reset();
-  state_machine_.triggerLanding();
+  triggerImmediateLanding();
 }
 
 void BacktrackUseCase::handleTrajectoryGeneration() {
@@ -284,8 +278,14 @@ void BacktrackUseCase::handleTrajectoryGeneration() {
       ROS_INFO("[BacktrackUseCase] Trajectory generation successful");
       performDebugDump();
     } else {
-      ROS_ERROR("[BacktrackUseCase] Trajectory generation failed");
-      // 保持在ReturnPreOffboard状态，继续发送固定点setpoint
+      if (trajectory_session_.getLastFailureKind() ==
+          domain::TrajectorySession::FailureKind::TooCloseGeometry) {
+        ROS_ERROR("[BacktrackUseCase] Trajectory generation failed due to too-close geometry, degrading to immediate landing");
+        triggerImmediateLanding();
+      } else {
+        ROS_ERROR("[BacktrackUseCase] Trajectory generation failed");
+        // 保持在ReturnPreOffboard状态，留给后续非“点过近”失败分支处理
+      }
     }
   }
 }
@@ -417,6 +417,14 @@ bool BacktrackUseCase::checkMinPoints() const {
     return false;
   }
   return true;
+}
+
+void BacktrackUseCase::triggerImmediateLanding() {
+  trajectory_generation_requested_ = false;
+  trajectory_session_.reset();
+  rejoin_trigger_candidate_start_time_ = -1.0;
+  rejoin_success_candidate_start_time_ = -1.0;
+  state_machine_.triggerLanding();
 }
 
 void BacktrackUseCase::setDebugDumper(

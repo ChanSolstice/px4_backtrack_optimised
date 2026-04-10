@@ -14,6 +14,12 @@ namespace domain {
 /// 轨迹会话管理（生成、进度跟踪、评估）
 class TrajectorySession {
 public:
+  enum class FailureKind {
+    None,
+    TooCloseGeometry,
+    Other,
+  };
+
   /// 构造函数
   TrajectorySession();
 
@@ -67,6 +73,9 @@ public:
   /// @return 总时长 (s)，如果无效返回0
   double getDuration() const;
 
+  /// 获取最近一次生成失败类型
+  FailureKind getLastFailureKind() const;
+
 private:
   /// 轨迹对象
   std::unique_ptr<trajectory_core::Trajectory> traj_;
@@ -85,6 +94,9 @@ private:
 
   /// 最近一次生成轨迹的耗时 (ms)
   double last_generate_cost_ms_;
+
+  /// 最近一次生成失败类型
+  FailureKind last_failure_kind_;
 
   /// 轨迹生成器（复用）
   trajectory_core::TrajectoryGenerator generator_;
