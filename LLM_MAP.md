@@ -140,6 +140,7 @@
 
 - `RecordingBuffer` 保存录制点与相对时间戳。
 - `TrajectorySession::generate()` 会先基于 `max(min_point_dist_m, ds_m * 0.5)` 对录制点做一次空间抽稀，再把点序逆转，并把时间戳映射为 `t_new = t_last - t_rev`，从而在保持单调递增的同时保留原始采样间隔信息。
+- 抽稀语义是“距离上一个有效点达到阈值才新增点”；距离不足的中间点直接忽略，不覆盖上一个有效点。不要把它改回 `reduced.back() = point`，否则低速连续飞行段会因为锚点不断前移而被整段吞掉。
 - `trajectory_core` 最终执行的轨迹时间轴仍由库内部速度剖面生成；录制时间戳主要用于时间质量检查与 warning，而不是直接决定返航执行时序。
 - 这层抽稀的主要目的不是“减少点数”，而是压缩停顿/悬停阶段形成的高密度点云团，降低停顿点附近的局部折返和抽动。
 
@@ -264,7 +265,7 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 - [`tests/unit/test_rejoin_policy.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_rejoin_policy.cpp)
   覆盖最近点搜索、预瞄和速度限幅
 - [`tests/unit/test_trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_trajectory_session.cpp)
-  覆盖轨迹生成、逆序语义、暂停恢复进度，以及高密度停顿点云团不会把路径长度拉爆
+  覆盖轨迹生成、逆序语义、暂停恢复进度、高密度停顿点云团不会把路径长度拉爆，以及慢速连续直线不会被抽稀截断
 - [`tests/unit/test_waypoint_fallback_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_waypoint_fallback_session.cpp)
   覆盖退化 waypoint 路径的逆序稀疏化、单步推进与 restart 语义
 - [`tests/unit/test_backtrack_usecase.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_backtrack_usecase.cpp)

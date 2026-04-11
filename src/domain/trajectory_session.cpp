@@ -25,12 +25,7 @@ std::vector<RecordPoint> thinRecordedPointsForGeneration(
 
     if (dist >= min_spacing_m) {
       reduced.push_back(point);
-      continue;
     }
-
-    // 录制点只用于描述几何路径；这里保留较新的样本，
-    // 等价于把过密悬停/低速点压缩成更稀疏的折线。
-    reduced.back() = point;
   }
 
   if ((points.back().position - reduced.back().position).norm() > 1e-9) {

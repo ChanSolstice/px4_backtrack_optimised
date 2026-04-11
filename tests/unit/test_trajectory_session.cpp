@@ -36,6 +36,18 @@ std::vector<RecordPoint> makeDensePauseClusterPoints() {
   return points;
 }
 
+std::vector<RecordPoint> makeSlowStraightLinePoints() {
+  std::vector<RecordPoint> points;
+
+  double stamp = 0.0;
+  for (int i = 0; i <= 50; ++i) {
+    points.emplace_back(Vec3(i * 0.02, 0.0, 1.0), 0.0, stamp);
+    stamp += 0.1;
+  }
+
+  return points;
+}
+
 TEST(TrajectorySessionTest, RejectsInsufficientPoints) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
@@ -126,6 +138,21 @@ TEST(TrajectorySessionTest, DensePauseClusterDoesNotBlowUpPathLength) {
   double path_length = session.getTrajectory()->pathLength();
   EXPECT_GT(path_length, 1.8);
   EXPECT_LT(path_length, 2.4);
+}
+
+TEST(TrajectorySessionTest, SlowStraightLineKeepsAccumulatedDistanceWhenThinning) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  config.ds_m = 0.15;
+  config.min_point_dist_m = 0.08;
+
+  ASSERT_TRUE(session.generate(makeSlowStraightLinePoints(), config));
+  ASSERT_TRUE(session.isValid());
+  ASSERT_NE(session.getTrajectory(), nullptr);
+
+  double path_length = session.getTrajectory()->pathLength();
+  EXPECT_GT(path_length, 0.8);
+  EXPECT_LT(path_length, 1.2);
 }
 
 TEST(TrajectorySessionTest, SetProgressControlsFinishedState) {

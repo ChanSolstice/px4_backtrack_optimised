@@ -108,7 +108,7 @@ min_point_dist_m: 0.01
 
 - 保留首点和末点
 - 中间点只有在与上一个保留点的距离大于最小间距时才新增
-- 对距离过近的点，用较新的样本覆盖旧样本
+- 对距离过近的中间点直接忽略，不覆盖上一个有效点，避免低速连续飞行段被截断
 
 这样可以把停顿位置的一团高密度点压缩成更稀疏的代表折线。
 
@@ -123,9 +123,9 @@ min_spacing_m = max(config.min_point_dist_m, config.ds_m * 0.5)
 对于当前配置：
 
 - `ds_m = 0.15`
-- `min_point_dist_m = 0.05`
+- `min_point_dist_m = 0.08`
 
-因此实际最小抽稀间距为 `0.075m`。
+因此实际最小抽稀间距为 `0.08m`。
 
 这个量级足以压掉停顿漂移造成的点云团，同时不会明显破坏主路径形状。
 
@@ -133,16 +133,16 @@ min_spacing_m = max(config.min_point_dist_m, config.ds_m * 0.5)
 
 文件：`config/trajectory_config.yaml`
 
-将：
+曾将：
 
 ```yaml
 min_point_dist_m: 0.01
 ```
 
-改为：
+提高为当前配置：
 
 ```yaml
-min_point_dist_m: 0.05
+min_point_dist_m: 0.08
 ```
 
 并增加注释，明确这是为了降低停顿悬停点对返航轨迹的污染。

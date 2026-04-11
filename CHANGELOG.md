@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-04-11 — 修复低速飞行段抽稀被截断
+
+修复 TC-18 直线分三段返航验证中，`min_point_dist_m=0.08` 时低速连续飞行段被生成前抽稀误删，导致返航轨迹被截断并在第二段附近卡入 `ReturnRejoin` 的问题。
+
+### 修复
+
+- **fix(trajectory):** `thinRecordedPointsForGeneration()` 在中间点距离小于阈值时直接忽略当前点，不再用当前点覆盖上一个有效点，避免低速连续飞行时“距离锚点”被不断前移
+- **fix(trajectory):** 保持首点和末点保留语义不变，确保返航轨迹仍覆盖完整录制路径的起终点
+
+### 测试与文档
+
+- **test(trajectory):** `test_trajectory_session.cpp` 新增慢速直线用例，覆盖每帧位移小于 `min_point_dist_m` 但累计距离持续增长的场景
+- **docs(bug):** 新增 TC-18 bug report，记录 `455 -> 24` 抽稀异常、路径长度 `11.56m -> 4.42m` 截断和修复后的 `455 -> 104` 重放结果
+- **docs(readme/llm):** README 和 LLM_MAP 同步更新生成前抽稀语义：低于阈值的中间点被忽略，不移动上一个有效点
+
+### 涉及文件
+
+- `src/domain/trajectory_session.cpp`
+- `tests/unit/test_trajectory_session.cpp`
+- `README.md`
+- `LLM_MAP.md`
+- `doc/BUG_REPORT_低速连续飞行抽稀锚点覆盖导致返航路径截断.md`
+
 ## 2026-04-10 — 轨迹失败退化为 waypoint 返航
 
 为 `trajectory_core` 的可恢复非几何退化失败补上退化返航链路，避免系统在 `ReturnPreOffboard` 卡住。
