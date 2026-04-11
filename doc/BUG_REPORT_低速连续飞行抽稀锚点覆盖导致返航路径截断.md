@@ -84,6 +84,29 @@ TC-18 使用直线分三段飞行并触发返航，参数中 `min_point_dist_m` 
 
 这说明中间连续移动段被误删，只剩下少数段尾点。
 
+### 2.1 Yaw 曲线异常
+
+同一批 CSV 中还观察到 yaw 差异异常：
+
+```text
+waypoint yaw 范围:     0.269 ~ 0.358 rad
+waypoint yaw 累计变化: 约 0.58 rad
+
+trajectory yaw 范围:     -0.099 ~ 1.637 rad
+trajectory yaw 累计变化: 约 4.17 rad
+trajectory max yaw_rate: 0.6 rad/s
+```
+
+原始 waypoint yaw 基本稳定在 `0.29 ~ 0.34 rad` 附近，但生成轨迹末段 yaw 明显偏离：
+
+```text
+t=16.0s trajectory yaw = 0.857 rad，同位置附近 waypoint yaw 约 0.295 rad
+t=17.4s trajectory yaw = 1.637 rad，同位置附近 waypoint yaw 约 0.293 rad
+t=20.3s trajectory yaw = -0.099 rad，同位置附近 waypoint yaw 约 0.291 rad
+```
+
+因此，trajectory yaw 的大幅摆动不是原始 yaw 录制导致的，也不是 CSV 单位问题；它出现在生成轨迹被截断后的超慢尾段。
+
 ---
 
 ## 3. 根因分析
@@ -135,6 +158,50 @@ t=20.3s 位置约 x=4.289, y=0.157, z=0.795，速度约 0.000m/s
 
 最后一次进入 `ReturnRejoin` 时，轨迹进度约在 `t=15.96s`，正处于这个极慢尾段。由于轨迹本身已经被截断且目标变化极小，实际控制表现为原地抽动，并且很难重新满足回归成功条件。
 
+### 3.4 Yaw 异常是抽稀截断的伴随放大问题
+
+`trajectory.csv` 中的 yaw 不是原始 waypoint yaw 的直接拷贝，而是 `trajectory_core` 生成后的可执行 yaw：
+
+```text
+waypoint yaw
+  -> yaw unwrap
+  -> 几何重采样/投影
+  -> yaw smooth
+  -> yaw hold
+  -> yaw rate limiter
+  -> trajectory yaw
+```
+
+本次异常轨迹在末段进入极慢尾段后，`trajectory_core` 的 yaw rate limiter 使用了重参数化后的大时间步长：
+
+```cpp
+double dt_i = time_profile[i] - time_profile[i - 1];
+dt_per_step[i] = (dt_i > EPS) ? dt_i : config.dt_sample_s;
+```
+
+随后按 P 控制式 yaw_rate 积分：
+
+```cpp
+double error = wrapToPi(yaw_ref[i] - yaw_out[i - 1]);
+double yaw_rate_cmd = clamp(k * error, -yaw_rate_max, yaw_rate_max);
+yaw_out[i] = yaw_out[i - 1] + yaw_rate_cmd * dt_per_step[i];
+```
+
+这里虽然限制了 `yaw_rate_cmd`，但如果 `dt_per_step[i]` 很大，`yaw_rate_cmd * dt_per_step[i]` 仍可能超过当前 yaw error，导致单步越过目标 yaw。越过后下一步又反向修正，于是会在低速尾段形成明显 yaw 摆动。
+
+因此本次 yaw 异常的直接链路是：
+
+```text
+抽稀锚点覆盖
+  -> 低速连续段被截断
+  -> 生成轨迹末端进入超慢收敛段
+  -> yaw limiter 的 dt_per_step 变大
+  -> yaw_rate 积分可能越过 yaw_ref
+  -> trajectory yaw 大幅摆动
+```
+
+这个问题在本次 TC-18 中由抽稀截断触发和放大；但 yaw limiter 的“只限 yaw_rate、不限制单步越过目标”的行为本身是 `trajectory_core` 的潜在独立风险。
+
 ---
 
 ## 4. 修复方案
@@ -178,6 +245,29 @@ if ((points.back().position - reduced.back().position).norm() > 1e-9) {
 
 这个末点覆盖只发生在终点与最后有效点几乎重合时，用于保留最终时间戳、yaw 和精确终点，不会影响中间路径累计。
 
+### 4.3 潜在后续修复：Yaw limiter 防止单步过冲
+
+抽稀修复后，TC-18 不应再生成这种被截断的超慢尾段，trajectory yaw 的大幅摆动预期会明显减轻。
+
+但 `trajectory_core` 的 yaw limiter 仍建议后续单独加固：在积分 yaw 时，不仅要限制 `yaw_rate`，还要限制单步 yaw 增量不要越过当前 `yaw_ref`。
+
+建议语义：
+
+```cpp
+double error = wrapToPi(yaw_ref[i] - yaw_out[i - 1]);
+double max_step = yaw_rate_max * dt;
+double desired_step = clamp(k * error * dt, -max_step, max_step);
+
+if (std::abs(desired_step) > std::abs(error)) {
+  desired_step = error;
+}
+
+yaw_out[i] = yaw_out[i - 1] + desired_step;
+yaw_rate_out[i] = desired_step / dt;
+```
+
+这样即使 `dt` 因低速段或末端收敛变大，yaw 也不会一步跨过参考值，能避免在末段出现 70° 量级的反向摆动。
+
 ---
 
 ## 5. 验证结果
@@ -219,6 +309,17 @@ last_reduced:  x=8.636, y=0.456, z=0.776
 - 每帧位移虽然小于阈值，但累计距离应保留主路径
 - 生成轨迹长度应保持在 `0.8m ~ 1.2m`
 
+### 5.3 Yaw 复测关注项
+
+复测 TC-18 时，除路径长度外，还应检查：
+
+1. `trajectory yaw` 是否仍接近 `waypoint yaw` 的整体范围。
+2. 同位置附近 trajectory yaw 与 waypoint yaw 是否存在超过 `0.5rad` 的异常偏差。
+3. 末段是否仍出现 yaw 从 `0.3rad` 附近摆到 `1.6rad` 再反向回落的现象。
+4. `trajectory max yaw_rate` 是否虽然满足 `0.6rad/s`，但 yaw 角本身仍出现明显过冲。
+
+如果抽稀修复后 yaw 仍大幅摆动，应将 `trajectory_core` 的 yaw limiter 单步过冲作为独立 bug 修复。
+
 ---
 
 ## 6. 经验总结
@@ -231,3 +332,10 @@ last_reduced:  x=8.636, y=0.456, z=0.776
 判断依据不能是“当前点和上一帧点是否足够远”，而应是“当前点和上一个有效锚点是否足够远”。
 
 距离不足时覆盖锚点会破坏累计距离语义，是本次 TC-18 返航路径截断的直接原因。
+
+同时，轨迹几何异常会继续放大 yaw/time/profile 侧的问题。排查返航抽动时不能只看位置轨迹，也要同时检查：
+
+- 轨迹是否被截断
+- 低速/末端收敛段是否异常变长
+- yaw 是否相对原始 waypoint 出现大幅偏离
+- yaw limiter 是否在大 `dt` 下发生单步过冲

@@ -224,7 +224,57 @@ Rejoin successful for X.XX s, returning to active mode
 
 如果日志里 `X.XX s` 基本都接近 `0.25s / 0.10s`，说明持续判定生效。
 
-### 6.2 实飞验证
+### 6.2 TC-18 复测中的再次切换说明
+
+2026-04-11 的 TC-18 复测日志中仍然出现多次：
+
+```text
+ReturnActive -> ReturnRejoin
+ReturnRejoin -> ReturnActive
+ReturnActive -> ReturnRejoin
+```
+
+但这次日志已经不是本报告最初描述的“单帧越阈值立即切换”。关键区别是新日志中进入 rejoin 前均带有持续时间：
+
+```text
+1775895395.420 Deviation detected for 0.30 s, entering rejoin mode
+1775895398.520 Deviation detected for 0.25 s, entering rejoin mode
+1775895401.420 Deviation detected for 0.30 s, entering rejoin mode
+1775895406.924 Deviation detected for 0.30 s, entering rejoin mode
+1775895419.224 Deviation detected for 0.25 s, entering rejoin mode
+```
+
+这说明：
+
+- `rejoin_trigger_hold_s` 已经生效
+- 系统不是对单帧噪声立即切状态
+- 每次进入 `ReturnRejoin` 前，偏离都至少持续了 `0.25s ~ 0.30s`
+
+因此，TC-18 复测中的“仍然多次进 rejoin”不应继续归因于本 bug 的原始根因，而应按新的故障链路分析：
+
+```text
+轨迹生成/跟踪目标异常
+  -> 实际位置持续偏离当前轨迹进度点
+  -> 偏离持续超过 rejoin_trigger_hold_s
+  -> 合法进入 ReturnRejoin
+  -> 退出后再次因持续偏离进入 ReturnRejoin
+```
+
+本次 TC-18 中已经确认有两个新的独立问题会造成这种持续偏离：
+
+1. **低速连续飞行抽稀锚点覆盖导致返航路径截断**
+   录制点 `455 -> 24`，路径长度从约 `11.56m` 截断为约 `4.42m`，当前轨迹进度点与实际可飞路径不再一致。
+
+2. **ReturnRejoin 最近点预瞄目标与冻结退出点不一致**
+   旧 rejoin setpoint 追“当前位置最近点 + lookahead”，但退出判据看 frozen point，导致回归目标和成功目标不一致。
+
+所以本报告的修复结论仍成立：它解决的是**单帧瞬时尖峰触发**。
+如果后续日志仍出现多次 `ReturnActive -> ReturnRejoin`，需要先看日志中的 `Deviation detected for X.XX s`：
+
+- 若没有 `for X.XX s` 或 `X.XX` 明显小于 `rejoin_trigger_hold_s`，说明本 bug 回归。
+- 若 `X.XX >= rejoin_trigger_hold_s`，说明是持续偏离，应继续排查轨迹生成、进度推进、控制跟踪能力或 rejoin 目标一致性。
+
+### 6.3 实飞验证
 
 关注以下现象：
 

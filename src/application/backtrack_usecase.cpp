@@ -437,10 +437,9 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
   // ReturnRejoin状态：从回归策略计算
   if (current_state == domain::State::ReturnRejoin) {
     if (trajectory_session_.isValid()) {
-      double t_nearest = rejoin_policy_.findNearestTime(
-          current_position_, trajectory_session_.getTrajectory());
-      auto rejoin_state = rejoin_policy_.computeRejoinTarget(
-          current_position_, trajectory_session_.getTrajectory(), t_nearest);
+      auto frozen_state = trajectory_session_.evaluate(now);
+      auto rejoin_state = rejoin_policy_.computeFrozenPointTarget(
+          current_position_, frozen_state);
 
       domain::SetpointTarget target;
       target.position = rejoin_state.position;

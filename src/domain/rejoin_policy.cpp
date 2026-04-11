@@ -76,6 +76,25 @@ trajectory_core::TrajectoryState RejoinPolicy::computeRejoinTarget(
   return target_state;
 }
 
+trajectory_core::TrajectoryState RejoinPolicy::computeFrozenPointTarget(
+    const Vec3& current_pos,
+    const trajectory_core::TrajectoryState& frozen_state) const {
+  auto target_state = frozen_state;
+
+  Vec3 delta = frozen_state.position - current_pos;
+  double distance = delta.norm();
+  if (distance < 1e-6) {
+    target_state.velocity = Vec3::Zero();
+    return target_state;
+  }
+
+  constexpr double kRejoinVelocityGain = 1.0;
+  double speed = std::min(config_.v_max_m_s, kRejoinVelocityGain * distance);
+  target_state.velocity = delta * (speed / distance);
+
+  return target_state;
+}
+
 Vec3 RejoinPolicy::limitVelocity(const Vec3& velocity, double v_max) const {
   double v_norm = velocity.norm();
 

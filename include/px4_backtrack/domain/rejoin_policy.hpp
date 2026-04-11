@@ -54,13 +54,15 @@ public:
   bool shouldExitRejoin(const Vec3& current_pos, const Vec3& traj_pos) const;
 
   /// 查找轨迹上距离当前位置最近的时间点
+  /// 当前 ReturnRejoin 主链路不再使用最近点预瞄；该接口保留给测试和后续策略扩展。
   /// @param current_pos 当前位置 (ENU, m)
   /// @param traj 轨迹对象
   /// @return 最近点的时间 (s)
   double findNearestTime(const Vec3& current_pos,
                          const trajectory_core::Trajectory* traj) const;
 
-  /// 计算回归目标状态
+  /// 计算最近点预瞄回归目标状态
+  /// 当前 ReturnRejoin 主链路不再使用该策略；实际控制使用 computeFrozenPointTarget()。
   /// @param current_pos 当前位置 (ENU, m)
   /// @param traj 轨迹对象
   /// @param t_nearest 最近点的时间 (s)
@@ -69,6 +71,14 @@ public:
       const Vec3& current_pos,
       const trajectory_core::Trajectory* traj,
       double t_nearest) const;
+
+  /// 计算回归到冻结进度点的目标状态
+  /// @param current_pos 当前位置 (ENU, m)
+  /// @param frozen_state 进入 rejoin 时冻结进度对应的轨迹状态
+  /// @return 目标状态：位置/yaw 复用冻结点，速度指向冻结点并按距离比例收敛
+  trajectory_core::TrajectoryState computeFrozenPointTarget(
+      const Vec3& current_pos,
+      const trajectory_core::TrajectoryState& frozen_state) const;
 
 private:
   /// 配置参数

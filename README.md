@@ -90,6 +90,7 @@
 - `ConfigLoader` 会从 ROS 参数服务器强制读取这些触发参数；如果 launch 没有把它们加载进来，节点会在启动时报错退出
 - `TriggerConfig` 头文件不再提供业务默认值，避免“头文件默认值”和 YAML 配置并存导致行为不一致
 - rejoin 进入/退出除距离阈值外，还支持持续时间阈值；调试“频繁 rejoin”时不要只盯距离参数
+- `ReturnRejoin` 当前直接回拉到进入 rejoin 时冻结的轨迹进度点，速度为指向冻结点的比例收敛速度并受 `rejoin_v_max_m_s` 限幅；`rejoin_lookahead_time_s` 保留为兼容参数，但当前冻结点回拉链路不使用它
 
 主要分组：
 

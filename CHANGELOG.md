@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-04-11 — ReturnRejoin 回拉冻结点
+
+修复 `ReturnRejoin` 中“退出判据看冻结进度点，但 setpoint 追最近点预瞄目标”的目标不一致问题，降低回归阶段原地抽动和无法退出的风险。
+
+### 修复
+
+- **fix(rejoin):** `ReturnRejoin` setpoint 改为直接回拉到冻结进度点，不再在全轨迹上搜索最近点并叠加 `lookahead`
+- **fix(rejoin):** 回归速度改为当前位置指向冻结点的比例收敛速度，`speed = min(rejoin_v_max_m_s, 1.0 * distance)`，靠近目标时线性减速
+- **fix(rejoin):** 回归期间 yaw 和 yaw_rate 直接复用冻结点轨迹姿态，避免回归时额外原地转向扰动
+
+### 测试与文档
+
+- **test(rejoin):** `test_rejoin_policy.cpp` 新增冻结点回拉测试，覆盖速度限幅、近距离比例减速、到点速度归零和 yaw 复用
+- **docs(bug):** 新增 bug report，记录 `ReturnRejoin` 最近点预瞄目标与冻结退出点不一致导致卡住的问题
+- **docs(readme/llm):** README 和 LLM_MAP 同步更新当前 `ReturnRejoin` 控制目标语义
+
+### 涉及文件
+
+- `src/application/backtrack_usecase.cpp`
+- `src/domain/rejoin_policy.cpp`
+- `include/px4_backtrack/domain/rejoin_policy.hpp`
+- `tests/unit/test_rejoin_policy.cpp`
+- `README.md`
+- `LLM_MAP.md`
+- `doc/BUG_REPORT_ReturnRejoin最近点预瞄目标与冻结退出点不一致.md`
+
 ## 2026-04-11 — 修复低速飞行段抽稀被截断
 
 修复 TC-18 直线分三段返航验证中，`min_point_dist_m=0.08` 时低速连续飞行段被生成前抽稀误删，导致返航轨迹被截断并在第二段附近卡入 `ReturnRejoin` 的问题。

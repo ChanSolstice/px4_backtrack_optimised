@@ -88,7 +88,7 @@
 
 - [`include/px4_backtrack/domain/rejoin_policy.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/rejoin_policy.hpp)
 - [`src/domain/rejoin_policy.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/rejoin_policy.cpp)
-  负责偏离判定、最近点搜索、预瞄目标与速度限幅。
+  负责偏离判定和回归目标计算。当前 `ReturnRejoin` 主链路直接回拉到冻结进度点，速度为指向冻结点的比例收敛速度并受 `rejoin_v_max_m_s` 限幅；最近点搜索/预瞄接口仅保留给测试和后续策略扩展。
 
 ### Adapters 层
 
@@ -211,6 +211,8 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 
 如果你看到日志里频繁刷 `ReturnActive -> ReturnRejoin`，先检查这两个 hold 参数是否和 YAML 对齐，而不是只调距离阈值。
 
+当前 `ReturnRejoin` 的 setpoint 与退出判据使用同一个冻结进度点：进入 rejoin 时冻结 `TrajectorySession` 进度，回归目标位置就是该冻结点，速度为 `min(rejoin_v_max_m_s, distance)` 方向指向冻结点，yaw/yaw_rate 复用冻结点轨迹姿态。不要在主链路里重新改回“最近点 + lookahead”，否则目标点和 `shouldExitRejoin()` 的判据点会再次不一致。
+
 ## 常见改动应该改哪里
 
 | 目标 | 必看文件 |
@@ -263,7 +265,7 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 - [`tests/unit/test_state_machine.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_state_machine.cpp)
   覆盖主状态迁移和 `AUTO.LAND` 高优先级
 - [`tests/unit/test_rejoin_policy.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_rejoin_policy.cpp)
-  覆盖最近点搜索、预瞄和速度限幅
+  覆盖偏离/回归阈值、最近点搜索、预瞄兼容接口，以及冻结点回拉的比例速度限幅和 yaw 复用
 - [`tests/unit/test_trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_trajectory_session.cpp)
   覆盖轨迹生成、逆序语义、暂停恢复进度、高密度停顿点云团不会把路径长度拉爆，以及慢速连续直线不会被抽稀截断
 - [`tests/unit/test_waypoint_fallback_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_waypoint_fallback_session.cpp)

@@ -67,5 +67,44 @@ TEST(RejoinPolicyTest, InvalidTrajectoryReturnsZeroTimeAndDefaultState) {
   EXPECT_TRUE(target.velocity.isApprox(Vec3::Zero()));
 }
 
+TEST(RejoinPolicyTest, FrozenPointTargetPullsTowardFrozenPositionWithProportionalSpeed) {
+  RejoinConfig config;
+  config.v_max_m_s = 0.3;
+  RejoinPolicy policy(config);
+
+  trajectory_core::TrajectoryState frozen_state;
+  frozen_state.position = Vec3(1.0, 0.0, 1.0);
+  frozen_state.velocity = Vec3(0.0, 0.0, 0.0);
+  frozen_state.yaw = 0.7;
+  frozen_state.yaw_rate = 0.2;
+
+  auto far_target = policy.computeFrozenPointTarget(
+      Vec3(0.0, 0.0, 1.0), frozen_state);
+  EXPECT_TRUE(far_target.position.isApprox(frozen_state.position));
+  EXPECT_NEAR(far_target.velocity.norm(), config.v_max_m_s, 1e-6);
+  EXPECT_GT(far_target.velocity.x(), 0.0);
+  EXPECT_NEAR(far_target.yaw, frozen_state.yaw, 1e-6);
+  EXPECT_NEAR(far_target.yaw_rate, frozen_state.yaw_rate, 1e-6);
+
+  auto near_target = policy.computeFrozenPointTarget(
+      Vec3(0.8, 0.0, 1.0), frozen_state);
+  EXPECT_NEAR(near_target.velocity.norm(), 0.2, 1e-6);
+  EXPECT_GT(near_target.velocity.x(), 0.0);
+}
+
+TEST(RejoinPolicyTest, FrozenPointTargetStopsWhenAlreadyAtFrozenPosition) {
+  RejoinConfig config;
+  config.v_max_m_s = 0.3;
+  RejoinPolicy policy(config);
+
+  trajectory_core::TrajectoryState frozen_state;
+  frozen_state.position = Vec3(1.0, 0.0, 1.0);
+  frozen_state.velocity = Vec3(0.3, 0.0, 0.0);
+
+  auto target = policy.computeFrozenPointTarget(frozen_state.position, frozen_state);
+  EXPECT_TRUE(target.position.isApprox(frozen_state.position));
+  EXPECT_TRUE(target.velocity.isApprox(Vec3::Zero()));
+}
+
 }  // namespace
 }  // namespace px4_backtrack::domain
