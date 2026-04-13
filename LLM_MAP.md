@@ -163,7 +163,7 @@ RC 丢失检测已拆分为两个方法：
 - `tick(now)` 中调用 `updateNow(now)`
 - 超时+防抖逻辑在 `checkRCLossEvent()` 中推进，`isRCLost()` 只读 `rc_loss_triggered_`
 
-重要：`checkRCLossEvent()` 在 `handleTriggers()` 的最顶部、状态分支之前调用，确保 RC 超时的状态推进不被任何分支或 `checkMinPoints()` 挡住。
+重要：`AUTO.LAND` 让步优先于 RC 丢失边沿推进。`handleTriggers()` 先判断当前模式是否为 `AUTO.LAND`，命中时直接返回；只有非 `AUTO.LAND` 时才调用 `checkRCLossEvent()`，避免降落让步期间消费掉 RC loss 边沿。
 
 如果只改其中一条链路，RC loss 会失真。
 
@@ -181,9 +181,11 @@ RC 丢失检测已拆分为两个方法：
 
 因此恢复路径会重新走 `ReturnPreOffboard`，而不是直接跳回 `ReturnActive`。
 
-### 5. AUTO.LAND 是状态机里的全局高优先级分支
+### 5. AUTO.LAND 是全局让步分支，并在 UseCase 层锁存到 DISARM
 
-`BacktrackStateMachine::tick()` 一开始就检查 `mode == "AUTO.LAND"`。如果命中，会清理 setpoint 和 mode request，并把状态退回 `Recording` 或 `IdleDisarmed`。
+`BacktrackUseCase::handleAutoLandYield()` 一旦看到 armed 状态下 `mode == "AUTO.LAND"`，会锁存 `auto_land_yield_active_`，清理轨迹/退化返航/rejoin 临时状态，并在 DISARM 之前跳过录制延时、触发检测、轨迹生成、fallback 推进和 rejoin 处理。这样即使 PX4/MAVROS 模式短暂跳出 `AUTO.LAND`，节点也不会重新触发返航或请求 `OFFBOARD`。
+
+`BacktrackStateMachine::tick()` 一开始也检查 `mode == "AUTO.LAND"`。如果命中，会清理 setpoint 和 mode request；armed 时从返航相关状态退回 `Recording`，disarmed 时进入 `IdleDisarmed`。不要把 armed 的 `AUTO.LAND` 直接改成 `IdleDisarmed`，否则如果外部取消降落且飞机仍 armed，状态机可能因为没有新的 DISARM->ARM 边沿而卡在 idle。
 
 如果你改降落逻辑，必须评估这条全局分支是否还成立。
 
@@ -250,7 +252,8 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 
 ## 当前容易踩坑的地方
 
-- `checkRCLossEvent()` 必须在 `handleTriggers()` 的最顶部、状态分支之前调用。如果挪到状态分支内部，`isRCLost()` 在某些状态下会失真。
+- `AUTO.LAND` 让步检查必须早于 `checkRCLossEvent()`。非 `AUTO.LAND` 下，`checkRCLossEvent()` 仍应放在状态分支之前；如果挪到 `Recording` 分支内部，`isRCLost()` 在某些状态下会失真。
+- `auto_land_yield_active_` 是“直到 DISARM”的锁存，不是只看当前 tick 的 `mode == "AUTO.LAND"`。不要为了允许中途恢复返航而直接删除它；如果需求变化，需要先定义清楚外部取消降落后的安全语义。
 - `handleReturnTrigger()` 在点数不足时调用 `triggerLanding()`，这会跳过 `ReturnPreOffboard` 直接进 `LandingTransition`。如果你在 `LandingTransition` 之前加了新逻辑，要评估这条直达路径是否会绕过它。
 - 当前代码有四类“不可直接走平滑轨迹”的分支：一类是触发时点数不足，直接降落；一类是点数足够但几何路径退化为“点过近/起终点近乎重合”，轨迹生成失败后直接降落；一类是其它可恢复轨迹生成失败，会切到 waypoint 退化返航；最后一类是非法轨迹配置，这时不会走 fallback，而是停留在 `ReturnPreOffboard` 并停止重试。
 - [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp) 为准。

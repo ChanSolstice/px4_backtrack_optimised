@@ -22,7 +22,8 @@ BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config)
     record_delay_started_(false),
     trajectory_generation_requested_(false),
     rejoin_trigger_candidate_start_time_(-1.0),
-    rejoin_success_candidate_start_time_(-1.0)
+    rejoin_success_candidate_start_time_(-1.0),
+    auto_land_yield_active_(false)
 {
   ROS_INFO("[BacktrackUseCase] Initialized");
 }
@@ -34,20 +35,33 @@ TickOutput BacktrackUseCase::tick(double now) {
   // 飞行周期复位检测
   handleFlightCycleReset(current_armed_);
 
+  // AUTO.LAND让步期间不再执行任何返航触发或控制逻辑
+  bool auto_land_yielding = handleAutoLandYield();
+
   // 录制延时处理
-  handleRecordDelay(now);
+  if (!auto_land_yielding) {
+    handleRecordDelay(now);
+  }
 
   // 触发检测与处理
-  handleTriggers(now);
+  if (!auto_land_yielding) {
+    handleTriggers(now);
+  }
 
   // 轨迹生成处理
-  handleTrajectoryGeneration();
+  if (!auto_land_yielding) {
+    handleTrajectoryGeneration();
+  }
 
   // 退化 waypoint 会话执行进度
-  handleWaypointFallbackProgress();
+  if (!auto_land_yielding) {
+    handleWaypointFallbackProgress();
+  }
 
   // 偏离检测与回归处理
-  handleRejoin(now);
+  if (!auto_land_yielding) {
+    handleRejoin(now);
+  }
 
   // 构造TickInput
   domain::TickInput tick_input;
@@ -128,10 +142,31 @@ void BacktrackUseCase::handleFlightCycleReset(bool armed) {
     trajectory_generation_requested_ = false;
     rejoin_trigger_candidate_start_time_ = -1.0;
     rejoin_success_candidate_start_time_ = -1.0;
+    auto_land_yield_active_ = false;
 
     // 进入WaitRecordDelay状态（通过状态机处理）
     // 状态机会在tick中检测ARM并自动转换
   }
+}
+
+bool BacktrackUseCase::handleAutoLandYield() {
+  if (!current_armed_) {
+    auto_land_yield_active_ = false;
+    return false;
+  }
+
+  if (current_mode_ == "AUTO.LAND" && !auto_land_yield_active_) {
+    ROS_WARN("[BacktrackUseCase] AUTO.LAND detected, yielding until DISARM");
+    trajectory_generation_requested_ = false;
+    trajectory_session_.reset();
+    waypoint_fallback_session_.reset();
+    rejoin_trigger_candidate_start_time_ = -1.0;
+    rejoin_success_candidate_start_time_ = -1.0;
+    record_delay_started_ = false;
+    auto_land_yield_active_ = true;
+  }
+
+  return auto_land_yield_active_;
 }
 
 void BacktrackUseCase::handleRecordDelay(double now) {
@@ -160,6 +195,12 @@ void BacktrackUseCase::handleRecordDelay(double now) {
 
 void BacktrackUseCase::handleTriggers(double now) {
   auto current_state = state_machine_.getCurrentState();
+
+  // AUTO.LAND模式下跳过所有触发检测，让步给外部降落控制
+  if (current_mode_ == "AUTO.LAND") {
+    return;
+  }
+
   bool rc_loss_event = trigger_evaluator_.checkRCLossEvent();
 
   // 在Recording状态检测返航触发

@@ -93,5 +93,63 @@ TEST(BacktrackUseCaseTest, DoesNotFallbackWhenTrajectoryConfigurationIsInvalid) 
   EXPECT_FALSE(output.mode_request.has_value());
 }
 
+TEST(BacktrackUseCaseTest, AutoLandYieldSuppressesRetriggerUntilDisarm) {
+  BacktrackUseCase usecase(makeConfig());
+
+  usecase.onStateReceived(false, "");
+  auto output = usecase.tick(0.0);
+  EXPECT_EQ(output.current_state, domain::State::IdleDisarmed);
+
+  usecase.onStateReceived(true, "OFFBOARD");
+  output = usecase.tick(0.1);
+  EXPECT_EQ(output.current_state, domain::State::WaitRecordDelay);
+
+  output = usecase.tick(0.2);
+  EXPECT_EQ(output.current_state, domain::State::Recording);
+
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), 0.0, 1.2);
+
+  usecase.onRCReceived(makeRcChannels(1000));
+  output = usecase.tick(0.3);
+  EXPECT_EQ(output.current_state, domain::State::Recording);
+
+  output = usecase.tick(0.4);
+  ASSERT_EQ(output.current_state, domain::State::ReturnActive);
+  EXPECT_FALSE(output.mode_request.has_value());
+
+  usecase.onStateReceived(true, "AUTO.LAND");
+  output = usecase.tick(0.5);
+  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_FALSE(output.should_publish_setpoint);
+  EXPECT_FALSE(output.mode_request.has_value());
+
+  // AUTO.LAND一旦接管，即使模式短暂跳出且触发通道再次动作，也不能重新请求OFFBOARD。
+  usecase.onStateReceived(true, "POSCTL");
+  usecase.onRCReceived(makeRcChannels(1500));
+  output = usecase.tick(0.6);
+  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_FALSE(output.should_publish_setpoint);
+  EXPECT_FALSE(output.mode_request.has_value());
+
+  usecase.onRCReceived(makeRcChannels(1000));
+  output = usecase.tick(0.7);
+  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_FALSE(output.should_publish_setpoint);
+  EXPECT_FALSE(output.mode_request.has_value());
+
+  output = usecase.tick(0.8);
+  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_FALSE(output.should_publish_setpoint);
+  EXPECT_FALSE(output.mode_request.has_value());
+
+  usecase.onStateReceived(false, "AUTO.LAND");
+  output = usecase.tick(0.9);
+  EXPECT_EQ(output.current_state, domain::State::IdleDisarmed);
+  EXPECT_FALSE(output.should_publish_setpoint);
+  EXPECT_FALSE(output.mode_request.has_value());
+}
+
 }  // namespace
 }  // namespace px4_backtrack::application

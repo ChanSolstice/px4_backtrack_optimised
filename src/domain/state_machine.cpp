@@ -15,23 +15,25 @@ BacktrackStateMachine::BacktrackStateMachine(const StateMachineConfig& config)
 void BacktrackStateMachine::tick(const TickInput& input) {
   // AUTO.LAND全局优先级处理
   if (isAutoLandMode(input.mode)) {
-    // 检测到AUTO.LAND，立即清理返航相关状态
+    // 检测到AUTO.LAND，立即清理返航相关输出
+    current_setpoint_ = std::nullopt;
+    current_mode_request_ = std::nullopt;
+    should_publish_setpoint_ = false;
+
+    if (!input.armed) {
+      if (current_state_ != State::IdleDisarmed) {
+        ROS_WARN("[StateMachine] AUTO.LAND disarmed, entering IdleDisarmed");
+        enterState(State::IdleDisarmed, input);
+      }
+      last_input_ = input;
+      return;
+    }
+
     if (current_state_ != State::IdleDisarmed &&
         current_state_ != State::WaitRecordDelay &&
         current_state_ != State::Recording) {
       ROS_WARN("[StateMachine] AUTO.LAND detected, yielding control");
-
-      // 清除setpoint和模式请求
-      current_setpoint_ = std::nullopt;
-      current_mode_request_ = std::nullopt;
-      should_publish_setpoint_ = false;
-
-      // 回到Recording或IdleDisarmed
-      if (input.armed) {
-        enterState(State::Recording, input);
-      } else {
-        enterState(State::IdleDisarmed, input);
-      }
+      enterState(State::Recording, input);
     }
 
     last_input_ = input;

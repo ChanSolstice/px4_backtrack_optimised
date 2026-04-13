@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-04-12 — AUTO.LAND 让步锁存
+
+修复 TC-11 `AUTO.LAND` 优先级让步测试中，外部降落接管后节点仍可能重新触发返航并请求 `OFFBOARD` 的问题。
+
+### 修复
+
+- **fix(usecase):** 新增 `auto_land_yield_active_` 锁存，armed 状态下一旦检测到 `AUTO.LAND`，直到 DISARM 前跳过录制延时、触发检测、轨迹生成、fallback 推进和 rejoin 处理
+- **fix(usecase):** `AUTO.LAND` 让步检查早于 `checkRCLossEvent()`，避免降落期间消费 RC loss 边沿
+- **fix(state_machine):** `AUTO.LAND` 分支始终清理 setpoint 和 mode request；armed 时退回 `Recording`，disarmed 时进入 `IdleDisarmed`，避免仍 armed 时卡在 idle
+
+### 测试与文档
+
+- **test(usecase):** 新增 `AutoLandYieldSuppressesRetriggerUntilDisarm`，覆盖 `AUTO.LAND` 后模式短暂跳出且 Ch7 再次动作时不再请求 `OFFBOARD`
+- **test(state_machine):** 补充 `AUTO.LAND` 后 disarm 进入 `IdleDisarmed` 的状态机用例
+- **docs(llm/changelog):** 更新 LLM_MAP 和变更记录，明确 `AUTO.LAND` 让步锁存与 RC loss 触发顺序约束
+
+### 涉及文件
+
+- `src/application/backtrack_usecase.cpp`
+- `include/px4_backtrack/application/backtrack_usecase.hpp`
+- `src/domain/state_machine.cpp`
+- `tests/unit/test_backtrack_usecase.cpp`
+- `tests/unit/test_state_machine.cpp`
+- `LLM_MAP.md`
+- `CHANGELOG.md`
+
 ## 2026-04-11 — ReturnRejoin 回拉冻结点
 
 修复 `ReturnRejoin` 中“退出判据看冻结进度点，但 setpoint 追最近点预瞄目标”的目标不一致问题，降低回归阶段原地抽动和无法退出的风险。

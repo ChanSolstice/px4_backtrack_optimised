@@ -150,8 +150,14 @@ private:
   double rejoin_trigger_candidate_start_time_;
   double rejoin_success_candidate_start_time_;
 
+  // AUTO.LAND让步锁存：一旦外部降落接管，直到DISARM前都不再触发返航
+  bool auto_land_yield_active_;
+
   /// 飞行周期复位检测
   void handleFlightCycleReset(bool armed);
+
+  /// AUTO.LAND让步处理
+  bool handleAutoLandYield();
 
   /// 录制延时处理
   void handleRecordDelay(double now);

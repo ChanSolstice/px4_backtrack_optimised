@@ -110,6 +110,28 @@ TEST(StateMachineTest, AutoLandHasGlobalPriorityAndYieldsControl) {
   EXPECT_FALSE(machine.getModeRequest().has_value());
 }
 
+TEST(StateMachineTest, AutoLandDisarmReturnsToIdleDisarmed) {
+  StateMachineConfig config;
+  config.pre_offboard_setpoint_count = 0;
+
+  BacktrackStateMachine machine(config);
+  machine.tick(makeInput(true, "", 0.0));
+  machine.startRecording();
+  machine.lockPosition(Vec3(0.0, 0.0, 1.0), 0.0);
+  machine.triggerReturn(Event::Ch7LongPress);
+  machine.tick(makeInput(true, "OFFBOARD", 0.1, true));
+  ASSERT_EQ(machine.getCurrentState(), State::ReturnActive);
+
+  machine.tick(makeInput(true, "AUTO.LAND", 0.2));
+  ASSERT_EQ(machine.getCurrentState(), State::Recording);
+
+  machine.tick(makeInput(false, "AUTO.LAND", 0.3));
+
+  EXPECT_EQ(machine.getCurrentState(), State::IdleDisarmed);
+  EXPECT_FALSE(machine.shouldPublishSetpoint());
+  EXPECT_FALSE(machine.getModeRequest().has_value());
+}
+
 TEST(StateMachineTest, DirectLandingRequestsAutoLandImmediatelyWhenNotInOffboard) {
   BacktrackStateMachine machine{StateMachineConfig()};
 
