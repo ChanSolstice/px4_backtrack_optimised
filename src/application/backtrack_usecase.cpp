@@ -468,7 +468,9 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
       target.yaw = traj_state.yaw;
       target.yaw_rate = traj_state.yaw_rate;
       target.acceleration = traj_state.acceleration;
-      target.type_mask = traj_state.acceleration.has_value() ? 0x0000 : 0x0038;
+      target.type_mask = traj_state.acceleration.has_value()
+                             ? 0x0000
+                             : domain::position_target_mask::kIgnoreAcceleration;
       target.coordinate_frame = 1;  // FRAME_LOCAL_NED
 
       return target;
@@ -488,7 +490,7 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
       target.yaw = rejoin_state.yaw;
       target.yaw_rate = rejoin_state.yaw_rate;
       target.acceleration = std::nullopt;
-      target.type_mask = 0x0038;  // IGNORE_AFX/AFY/AFZ
+      target.type_mask = domain::position_target_mask::kIgnoreAcceleration;
       target.coordinate_frame = 1;  // FRAME_LOCAL_NED
 
       return target;

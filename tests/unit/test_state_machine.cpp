@@ -51,6 +51,8 @@ TEST(StateMachineTest, ReturnPreOffboardRequestsOffboardAndEntersReturnActive) {
   EXPECT_TRUE(machine.shouldPublishSetpoint());
   ASSERT_TRUE(machine.getSetpointTarget().has_value());
   EXPECT_TRUE(machine.getSetpointTarget()->position.isApprox(Vec3(3.0, 4.0, 5.0)));
+  EXPECT_EQ(machine.getSetpointTarget()->type_mask,
+            position_target_mask::kIgnoreAcceleration);
   EXPECT_FALSE(machine.getModeRequest().has_value());
 
   machine.tick(makeInput(true, "", 0.2));

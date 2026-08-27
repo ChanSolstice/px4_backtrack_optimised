@@ -493,8 +493,7 @@ SetpointTarget BacktrackStateMachine::createHoldPositionSetpoint(
   target.yaw_rate = 0.0;
   target.acceleration = std::nullopt;
 
-  // type_mask: 忽略AFX/AFY/AFZ
-  target.type_mask = 0x0038;  // IGNORE_AFX | IGNORE_AFY | IGNORE_AFZ
+  target.type_mask = position_target_mask::kIgnoreAcceleration;
 
   // coordinate_frame: FRAME_LOCAL_NED
   target.coordinate_frame = 1;

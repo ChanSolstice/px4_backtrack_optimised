@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -159,6 +160,13 @@ inline std::string modeRequestToString(ModeRequest req) {
 // ============================================================================
 // Setpoint目标数据结构
 // ============================================================================
+
+namespace position_target_mask {
+
+/// 忽略加速度/力字段，保留位置、速度、yaw和yaw_rate控制
+constexpr uint16_t kIgnoreAcceleration = 0x01C0;
+
+}  // namespace position_target_mask
 
 /// Setpoint目标（领域对象）
 struct SetpointTarget {

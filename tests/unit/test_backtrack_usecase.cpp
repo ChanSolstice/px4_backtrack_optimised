@@ -117,6 +117,9 @@ TEST(BacktrackUseCaseTest, AutoLandYieldSuppressesRetriggerUntilDisarm) {
 
   output = usecase.tick(0.4);
   ASSERT_EQ(output.current_state, domain::State::ReturnActive);
+  ASSERT_TRUE(output.setpoint.has_value());
+  EXPECT_EQ(output.setpoint->type_mask,
+            domain::position_target_mask::kIgnoreAcceleration);
   EXPECT_FALSE(output.mode_request.has_value());
 
   usecase.onStateReceived(true, "AUTO.LAND");
