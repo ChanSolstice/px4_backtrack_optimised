@@ -517,6 +517,7 @@ void BacktrackUseCase::triggerImmediateLanding() {
   waypoint_fallback_session_.reset();
   rejoin_trigger_candidate_start_time_ = -1.0;
   rejoin_success_candidate_start_time_ = -1.0;
+  state_machine_.lockPosition(current_position_, current_yaw_);
   state_machine_.triggerLanding();
 }
 

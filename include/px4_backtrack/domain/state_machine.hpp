@@ -236,10 +236,10 @@ struct StateData {
   /// 暂停前所处的逻辑态（用于恢复）
   State paused_from_state;
 
-  /// 降落过渡开始时间
-  double landing_transition_start_time;
+  /// 上次降落模式切换尝试时间
+  double last_landing_mode_attempt_time;
 
-  /// 降落过渡阶段（0=初始化，1=已发POSCTL，2=已发AUTO.LAND）
+  /// 降落过渡目标阶段（0=请求POSCTL，1=请求AUTO.LAND）
   int landing_transition_stage;
 
   /// 默认构造函数
@@ -253,7 +253,7 @@ struct StateData {
       ch18_offboard_entered(false),
       ch18_offboard_fail_start_time(0.0),
       paused_from_state(State::IdleDisarmed),
-      landing_transition_start_time(0.0),
+      last_landing_mode_attempt_time(0.0),
       landing_transition_stage(0)
   {}
 
@@ -268,7 +268,7 @@ struct StateData {
     ch18_offboard_entered = false;
     ch18_offboard_fail_start_time = 0.0;
     paused_from_state = State::IdleDisarmed;
-    landing_transition_start_time = 0.0;
+    last_landing_mode_attempt_time = 0.0;
     landing_transition_stage = 0;
   }
 };
@@ -282,7 +282,7 @@ struct StateMachineConfig {
   int pre_offboard_setpoint_count;    ///< OFFBOARD预发送setpoint次数
   double ch18_hover_wait_s;            ///< Ch18固定点悬停等待时间 (s)
   double landing_hover_s;              ///< 降落前固定点悬停时间 (s)
-  double offboard_attempt_interval_s;  ///< OFFBOARD尝试间隔 (s)，用于节流
+  double offboard_attempt_interval_s;  ///< 模式切换尝试间隔 (s)，用于节流
 
   /// 默认构造函数
   StateMachineConfig()

@@ -354,44 +354,36 @@ void BacktrackStateMachine::tickLandingHover(const TickInput& input) {
 
 void BacktrackStateMachine::tickLandingTransition(const TickInput& input) {
   // LandingTransition状态：执行OFFBOARD->POSCTL->AUTO.LAND过渡
-  // 停止发布setpoint
-  current_setpoint_ = std::nullopt;
-  should_publish_setpoint_ = false;
-
-  // 非OFFBOARD状态可直接请求AUTO.LAND
-  if (state_data_.landing_transition_stage == 0 && input.mode != "OFFBOARD") {
-    ROS_INFO("[StateMachine] Landing transition: requesting AUTO.LAND directly");
-    current_mode_request_ = ModeRequest::AUTO_LAND;
-    state_data_.landing_transition_stage = 2;
-    return;
-  }
-
-  // 阶段0：初始化，发送POSCTL
-  if (state_data_.landing_transition_stage == 0) {
-    ROS_INFO("[StateMachine] Landing transition: requesting POSCTL");
-    current_mode_request_ = ModeRequest::POSCTL;
-    state_data_.landing_transition_start_time = input.now;
-    state_data_.landing_transition_stage = 1;
-    return;
-  }
-
-  // 阶段1：等待1秒后发送AUTO.LAND
-  if (state_data_.landing_transition_stage == 1) {
-    double elapsed = input.now - state_data_.landing_transition_start_time;
-    if (elapsed >= 1.0) {
-      ROS_INFO("[StateMachine] Landing transition: requesting AUTO.LAND");
-      current_mode_request_ = ModeRequest::AUTO_LAND;
-      state_data_.landing_transition_stage = 2;
-    } else {
-      // 继续等待，不发送新的模式请求
-      current_mode_request_ = std::nullopt;
-    }
-    return;
-  }
-
-  // 阶段2：已发送AUTO.LAND，等待自然降落完成
-  // 不再发送任何请求
   current_mode_request_ = std::nullopt;
+
+  const int desired_stage = input.mode == "OFFBOARD" ? 0 : 1;
+  if (state_data_.landing_transition_stage != desired_stage) {
+    state_data_.landing_transition_stage = desired_stage;
+    state_data_.last_landing_mode_attempt_time =
+        input.now - config_.offboard_attempt_interval_s;
+  }
+
+  // POSCTL得到飞控确认前继续发送安全悬停目标，避免OFFBOARD失去setpoint。
+  if (desired_stage == 0) {
+    current_setpoint_ = createHoldPositionSetpoint(
+        state_data_.locked_position, state_data_.locked_yaw);
+    should_publish_setpoint_ = true;
+  } else {
+    current_setpoint_ = std::nullopt;
+    should_publish_setpoint_ = false;
+  }
+
+  const double elapsed = input.now - state_data_.last_landing_mode_attempt_time;
+  if (elapsed < config_.offboard_attempt_interval_s) {
+    return;
+  }
+
+  current_mode_request_ = desired_stage == 0
+                              ? ModeRequest::POSCTL
+                              : ModeRequest::AUTO_LAND;
+  state_data_.last_landing_mode_attempt_time = input.now;
+  ROS_INFO("[StateMachine] Landing transition: requesting %s",
+           modeRequestToString(*current_mode_request_).c_str());
 }
 
 void BacktrackStateMachine::enterState(State new_state, const TickInput& input) {
@@ -458,9 +450,9 @@ void BacktrackStateMachine::enterState(State new_state, const TickInput& input) 
       break;
 
     case State::LandingTransition:
-      // 进入降落过渡，重置阶段
-      state_data_.landing_transition_stage = 0;
-      state_data_.landing_transition_start_time = 0.0;
+      state_data_.landing_transition_stage = input.mode == "OFFBOARD" ? 0 : 1;
+      state_data_.last_landing_mode_attempt_time =
+          input.now - config_.offboard_attempt_interval_s;
       break;
   }
 }

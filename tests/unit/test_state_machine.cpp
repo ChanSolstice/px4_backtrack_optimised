@@ -172,5 +172,43 @@ TEST(StateMachineTest, DirectLandingRequestsAutoLandImmediatelyWhenNotInOffboard
   EXPECT_EQ(*machine.getModeRequest(), ModeRequest::AUTO_LAND);
 }
 
+TEST(StateMachineTest, LandingTransitionRetriesUntilActualModeChanges) {
+  StateMachineConfig config;
+  config.offboard_attempt_interval_s = 1.0;
+  BacktrackStateMachine machine(config);
+
+  machine.tick(makeInput(true, "OFFBOARD", 0.0));
+  machine.startRecording();
+  machine.lockPosition(Vec3(3.0, 4.0, 5.0), 1.2);
+  machine.triggerLanding();
+
+  machine.tick(makeInput(true, "OFFBOARD", 0.1));
+  ASSERT_TRUE(machine.getModeRequest().has_value());
+  EXPECT_EQ(*machine.getModeRequest(), ModeRequest::POSCTL);
+  EXPECT_TRUE(machine.shouldPublishSetpoint());
+  ASSERT_TRUE(machine.getSetpointTarget().has_value());
+  EXPECT_TRUE(machine.getSetpointTarget()->position.isApprox(Vec3(3.0, 4.0, 5.0)));
+
+  machine.tick(makeInput(true, "OFFBOARD", 0.5));
+  EXPECT_FALSE(machine.getModeRequest().has_value());
+  EXPECT_TRUE(machine.shouldPublishSetpoint());
+
+  machine.tick(makeInput(true, "OFFBOARD", 1.1));
+  ASSERT_TRUE(machine.getModeRequest().has_value());
+  EXPECT_EQ(*machine.getModeRequest(), ModeRequest::POSCTL);
+
+  machine.tick(makeInput(true, "POSCTL", 1.2));
+  ASSERT_TRUE(machine.getModeRequest().has_value());
+  EXPECT_EQ(*machine.getModeRequest(), ModeRequest::AUTO_LAND);
+  EXPECT_FALSE(machine.shouldPublishSetpoint());
+
+  machine.tick(makeInput(true, "POSCTL", 1.5));
+  EXPECT_FALSE(machine.getModeRequest().has_value());
+
+  machine.tick(makeInput(true, "POSCTL", 2.2));
+  ASSERT_TRUE(machine.getModeRequest().has_value());
+  EXPECT_EQ(*machine.getModeRequest(), ModeRequest::AUTO_LAND);
+}
+
 }  // namespace
 }  // namespace px4_backtrack::domain
