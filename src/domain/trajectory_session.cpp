@@ -1,4 +1,5 @@
 #include "px4_backtrack/domain/trajectory_session.hpp"
+#include "px4_backtrack/domain/path_yaw.hpp"
 #include <ros/console.h>
 #include <chrono>
 #include <algorithm>
@@ -95,25 +96,32 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
              min_spacing_m);
   }
 
+  // 构造逆序返航点，并由返航路径的水平切线生成机头航向。
+  std::vector<RecordPoint> return_points(reduced_points.rbegin(), reduced_points.rend());
+  std::vector<Vec3> return_positions;
+  return_positions.reserve(return_points.size());
+  for (const auto& point : return_points) {
+    return_positions.push_back(point.position);
+  }
+  const auto return_yaws = computePathTangentYaws(
+      return_positions, return_points.front().yaw);
+
   // 构造轨迹输入waypoints（逆序 + 保留原始采样间隔的相对关系）
   std::vector<trajectory_core::Waypoint> waypoints;
-  waypoints.reserve(reduced_points.size());
+  waypoints.reserve(return_points.size());
 
-  const size_t n = reduced_points.size();
+  const size_t n = return_points.size();
   const double t_end = reduced_points.back().timestamp;
 
   for (size_t i = 0; i < n; ++i) {
-    // 逆序索引
-    size_t reverse_idx = n - 1 - i;
-    const auto& pt = reduced_points[reverse_idx];
+    const auto& pt = return_points[i];
 
     // 逆序后重新映射到从 0 开始的单调递增时间轴。
     // 这样既满足 trajectory_core 对 timestamp 单调性的要求，
     // 又保留原始录制 dt 间隔用于时间质量诊断。
     double t_new = t_end - pt.timestamp;
 
-    // 构造Waypoint
-    waypoints.emplace_back(pt.position, pt.yaw, t_new);
+    waypoints.emplace_back(pt.position, return_yaws[i], t_new);
   }
 
   ROS_INFO("[TrajectorySession] Generating trajectory from %zu waypoints (reversed, mirrored timestamps)",

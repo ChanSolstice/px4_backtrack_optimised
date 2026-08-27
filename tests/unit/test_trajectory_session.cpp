@@ -1,9 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "px4_backtrack/domain/trajectory_session.hpp"
 
 namespace px4_backtrack::domain {
 namespace {
+
+constexpr double kPi = 3.14159265358979323846;
 
 std::vector<RecordPoint> makeRecordPoints() {
   return {
@@ -46,6 +50,11 @@ std::vector<RecordPoint> makeSlowStraightLinePoints() {
   }
 
   return points;
+}
+
+double yawError(double actual, double expected) {
+  return std::abs(std::atan2(std::sin(actual - expected),
+                            std::cos(actual - expected)));
 }
 
 TEST(TrajectorySessionTest, RejectsInsufficientPoints) {
@@ -100,10 +109,12 @@ TEST(TrajectorySessionTest, GenerateProducesValidTrajectoryInReverseOrder) {
   auto start_state = session.evaluate(10.0);
   EXPECT_NEAR(start_state.position.x(), 2.0, 0.25);
   EXPECT_NEAR(start_state.position.z(), 1.0, 1e-6);
+  EXPECT_NEAR(yawError(start_state.yaw, kPi), 0.0, 1e-3);
 
   auto end_state = session.getTrajectory()->evaluate(session.getDuration());
   EXPECT_NEAR(end_state.position.x(), 0.0, 0.25);
   EXPECT_NEAR(end_state.position.z(), 1.0, 1e-6);
+  EXPECT_NEAR(yawError(end_state.yaw, kPi), 0.0, 1e-3);
 }
 
 TEST(TrajectorySessionTest, FreezeAndResumeKeepProgressContinuous) {
