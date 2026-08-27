@@ -154,5 +154,35 @@ TEST(BacktrackUseCaseTest, AutoLandYieldSuppressesRetriggerUntilDisarm) {
   EXPECT_FALSE(output.mode_request.has_value());
 }
 
+TEST(BacktrackUseCaseTest, DoesNotFinishTimedTrajectoryBeforeReachingReturnGoal) {
+  BacktrackUseCase usecase(makeConfig());
+
+  usecase.onStateReceived(false, "");
+  usecase.tick(0.0);
+  usecase.onStateReceived(true, "OFFBOARD");
+  usecase.tick(0.1);
+  usecase.tick(0.2);
+
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), 0.0, 1.2);
+
+  usecase.onRCReceived(makeRcChannels(1000));
+  usecase.tick(0.3);
+  auto output = usecase.tick(0.4);
+  ASSERT_EQ(output.current_state, domain::State::ReturnActive);
+
+  // ReturnPreOffboard切换周期仍会保留一次hold setpoint，先启动轨迹时钟。
+  usecase.tick(10000.0);
+  output = usecase.tick(20000.0);
+  EXPECT_EQ(output.current_state, domain::State::ReturnActive);
+  EXPECT_TRUE(output.should_publish_setpoint);
+
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), 0.0, 20000.1);
+  output = usecase.tick(20000.1);
+  EXPECT_EQ(output.current_state, domain::State::LandingHover);
+  EXPECT_TRUE(output.should_publish_setpoint);
+}
+
 }  // namespace
 }  // namespace px4_backtrack::application

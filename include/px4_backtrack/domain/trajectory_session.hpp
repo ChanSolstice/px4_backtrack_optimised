@@ -39,9 +39,12 @@ public:
   /// @return 轨迹状态
   trajectory_core::TrajectoryState evaluate(double current_walltime);
 
-  /// 检查轨迹是否完成
+  /// 检查时间进度结束且飞机已进入终点位置容差
+  /// @param current_position 飞机当前位置
+  /// @param position_tolerance_m 终点位置容差
   /// @return 是否完成
-  bool isFinished() const;
+  bool isFinished(const Vec3& current_position,
+                  double position_tolerance_m) const;
 
   /// 检查轨迹是否有效
   /// @return 是否有效

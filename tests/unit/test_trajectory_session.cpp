@@ -172,12 +172,15 @@ TEST(TrajectorySessionTest, SetProgressControlsFinishedState) {
 
   ASSERT_TRUE(session.generate(makeRecordPoints(), config));
   ASSERT_GT(session.getDuration(), 0.0);
+  const Vec3 goal = session.getTrajectory()->goalPosition();
 
   session.setProgress(session.getDuration() + 0.01);
-  EXPECT_TRUE(session.isFinished());
+  EXPECT_FALSE(session.isFinished(goal + Vec3(0.3, 0.0, 0.0), 0.2));
+  EXPECT_TRUE(session.isFinished(goal + Vec3(0.1, 0.0, 0.0), 0.2));
 
   session.reset();
   EXPECT_FALSE(session.isValid());
+  EXPECT_FALSE(session.isFinished(goal, 0.2));
   EXPECT_DOUBLE_EQ(session.getDuration(), 0.0);
 }
 

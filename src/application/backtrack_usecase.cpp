@@ -73,7 +73,9 @@ TickOutput BacktrackUseCase::tick(double now) {
   tick_input.trajectory_ready =
       trajectory_session_.isValid() || waypoint_fallback_session_.isValid();
   tick_input.trajectory_finished =
-      trajectory_session_.isFinished() || waypoint_fallback_session_.isFinished();
+      trajectory_session_.isFinished(
+          current_position_, config_.rejoin_config.success_dist_m) ||
+      waypoint_fallback_session_.isFinished();
 
   // 驱动状态机
   state_machine_.tick(tick_input);

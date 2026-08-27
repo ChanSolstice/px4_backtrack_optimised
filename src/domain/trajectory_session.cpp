@@ -212,12 +212,17 @@ trajectory_core::TrajectoryState TrajectorySession::evaluate(double current_wall
   return traj_->evaluate(t_progress_);
 }
 
-bool TrajectorySession::isFinished() const {
+bool TrajectorySession::isFinished(const Vec3& current_position,
+                                   double position_tolerance_m) const {
   if (!traj_ || !traj_->isValid()) {
     return false;
   }
 
-  return t_progress_ >= traj_->duration();
+  if (t_progress_ < traj_->duration() || position_tolerance_m < 0.0) {
+    return false;
+  }
+
+  return (current_position - traj_->goalPosition()).norm() <= position_tolerance_m;
 }
 
 bool TrajectorySession::isValid() const {
