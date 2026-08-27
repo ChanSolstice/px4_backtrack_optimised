@@ -450,8 +450,11 @@ void BacktrackStateMachine::enterState(State new_state, const TickInput& input) 
       break;
 
     case State::LandingHover:
-      // 锁定当前位置（在外部调用lockPosition）
       state_data_.landing_hover_start_time = input.now;
+      current_setpoint_ = createHoldPositionSetpoint(
+          state_data_.locked_position, state_data_.locked_yaw);
+      should_publish_setpoint_ = true;
+      current_mode_request_ = std::nullopt;
       break;
 
     case State::LandingTransition:
