@@ -431,6 +431,9 @@ void BacktrackStateMachine::enterState(State new_state, const TickInput& input) 
 
     case State::ReturnActive:
       // 轨迹会话已在UseCase层初始化
+      current_setpoint_ = std::nullopt;
+      should_publish_setpoint_ = true;
+      current_mode_request_ = std::nullopt;
       break;
 
     case State::ReturnRejoin:

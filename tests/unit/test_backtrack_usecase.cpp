@@ -172,8 +172,7 @@ TEST(BacktrackUseCaseTest, DoesNotFinishTimedTrajectoryBeforeReachingReturnGoal)
   auto output = usecase.tick(0.4);
   ASSERT_EQ(output.current_state, domain::State::ReturnActive);
 
-  // ReturnPreOffboard切换周期仍会保留一次hold setpoint，先启动轨迹时钟。
-  usecase.tick(10000.0);
+  // 即使时间剖面已经结束，未到达返航终点也不能进入降落。
   output = usecase.tick(20000.0);
   EXPECT_EQ(output.current_state, domain::State::ReturnActive);
   EXPECT_TRUE(output.should_publish_setpoint);
