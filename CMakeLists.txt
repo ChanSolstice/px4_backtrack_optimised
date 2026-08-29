@@ -204,6 +204,17 @@ if(CATKIN_ENABLE_TESTING)
     )
   endif()
 
+  catkin_add_gtest(test_path_yaw
+    tests/unit/test_main.cpp
+    tests/unit/test_path_yaw.cpp
+  )
+  if(TARGET test_path_yaw)
+    target_link_libraries(test_path_yaw
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
   catkin_add_gtest(test_rejoin_policy
     tests/unit/test_main.cpp
     tests/unit/test_rejoin_policy.cpp

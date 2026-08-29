@@ -8,9 +8,14 @@ namespace domain {
 namespace {
 
 constexpr double kHorizontalDirectionEps = 1e-6;
+constexpr double kTangentChordMinM = 0.20;
 
 bool hasHorizontalDirection(const Vec3& direction) {
   return std::hypot(direction.x(), direction.y()) > kHorizontalDirectionEps;
+}
+
+bool reachesTangentChord(const Vec3& direction) {
+  return std::hypot(direction.x(), direction.y()) >= kTangentChordMinM;
 }
 
 }  // namespace
@@ -22,16 +27,32 @@ std::vector<double> computePathTangentYaws(
 
   for (size_t i = 0; i < positions.size(); ++i) {
     Vec3 tangent = Vec3::Zero();
+    size_t previous = i;
+    size_t next = i;
 
-    if (i > 0 && i + 1 < positions.size()) {
-      tangent = positions[i + 1] - positions[i - 1];
-    } else if (i + 1 < positions.size()) {
-      tangent = positions[i + 1] - positions[i];
-    } else if (i > 0) {
-      tangent = positions[i] - positions[i - 1];
+    // 用至少 0.2 m 的水平弦估计切向，避免录制起止悬停的厘米级漂移主导 yaw。
+    for (size_t candidate = i + 1; candidate < positions.size(); ++candidate) {
+      if (reachesTangentChord(positions[candidate] - positions[i])) {
+        next = candidate;
+        break;
+      }
+    }
+    for (size_t candidate = i; candidate > 0; --candidate) {
+      if (reachesTangentChord(positions[i] - positions[candidate - 1])) {
+        previous = candidate - 1;
+        break;
+      }
     }
 
-    // 垂直段或重复水平点没有可用切线，优先寻找后续飞行方向。
+    if (previous < i && next > i) {
+      tangent = positions[next] - positions[previous];
+    } else if (next > i) {
+      tangent = positions[next] - positions[i];
+    } else if (previous < i) {
+      tangent = positions[i] - positions[previous];
+    }
+
+    // 短于最小弦长的整段路径仍退化到任意有效水平差分。
     if (!hasHorizontalDirection(tangent)) {
       for (size_t next = i + 1; next < positions.size(); ++next) {
         tangent = positions[next] - positions[i];
