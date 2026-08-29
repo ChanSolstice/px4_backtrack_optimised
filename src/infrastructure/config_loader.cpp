@@ -121,7 +121,7 @@ void ConfigLoader::loadOffboardParams(ros::NodeHandle& nh, application::UseCaseC
 
 void ConfigLoader::loadRejoinParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
   nh.param("rejoin_trigger_dist_m", config.rejoin_config.trigger_dist_m, 0.5);
-  nh.param("rejoin_success_dist_m", config.rejoin_config.success_dist_m, 0.1);
+  nh.param("rejoin_success_dist_m", config.rejoin_config.success_dist_m, 0.4);
   nh.param("rejoin_v_max_m_s", config.rejoin_config.v_max_m_s, 0.3);
   nh.param("rejoin_lookahead_time_s", config.rejoin_config.lookahead_time_s, 0.5);
   nh.param("rejoin_trigger_hold_s", config.rejoin_config.trigger_hold_s, 0.25);

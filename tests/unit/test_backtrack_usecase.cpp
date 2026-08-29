@@ -192,6 +192,36 @@ TEST(BacktrackUseCaseTest, WallTimeCannotAdvanceSpatialTrajectory) {
   EXPECT_TRUE(output.should_publish_setpoint);
 }
 
+TEST(BacktrackUseCaseTest, ReturnEndToleranceIsIndependentFromRejoinSuccessDistance) {
+  auto config = makeConfig();
+  config.rejoin_config.success_dist_m = 0.4;
+  BacktrackUseCase usecase(config);
+
+  usecase.onStateReceived(false, "");
+  usecase.tick(0.0);
+  usecase.onStateReceived(true, "OFFBOARD");
+  usecase.tick(0.1);
+  usecase.tick(0.2);
+
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, kPi, 1.2);
+  usecase.onRCReceived(makeRcChannels(1000));
+  usecase.tick(0.3);
+  ASSERT_EQ(usecase.tick(0.4).current_state, domain::State::ReturnActive);
+
+  // 回到 Rejoin 的 0.4m 安全走廊不等于到达终点，终点仍要求 0.2m。
+  usecase.onOdomReceived(
+      domain::Vec3(0.0, 0.0, 1.3), kZeroVelocity, kPi, 1.3);
+  auto output = usecase.tick(0.5);
+  EXPECT_EQ(output.current_state, domain::State::ReturnActive);
+
+  usecase.onOdomReceived(
+      domain::Vec3(0.0, 0.0, 1.19), kZeroVelocity, kPi, 1.4);
+  output = usecase.tick(0.6);
+  EXPECT_EQ(output.current_state, domain::State::LandingHover);
+}
+
 TEST(BacktrackUseCaseTest, AlignsStartYawBeforeHorizontalReturn) {
   BacktrackUseCase usecase(makeConfig());
 

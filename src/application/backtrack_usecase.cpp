@@ -13,6 +13,7 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kYawAlignmentToleranceRad = 15.0 * kPi / 180.0;
 constexpr double kYawAlignmentTimeoutS = 10.0;
+constexpr double kReturnEndPositionToleranceM = 0.20;
 
 double wrappedAngleError(double actual, double target) {
   return std::abs(std::atan2(std::sin(actual - target),
@@ -103,7 +104,7 @@ TickOutput BacktrackUseCase::tick(double now) {
   tick_input.trajectory_finished =
       trajectory_session_.isFinished(
           current_position_, current_velocity_,
-          config_.rejoin_config.success_dist_m) ||
+          kReturnEndPositionToleranceM) ||
       waypoint_fallback_session_.isFinished();
 
   // 驱动状态机
