@@ -59,6 +59,11 @@ TickOutput BacktrackUseCase::tick(double now) {
     handleWaypointFallbackProgress();
   }
 
+  // 正常返航按实际位置更新空间进度
+  if (!auto_land_yielding) {
+    handleTrajectoryProgress();
+  }
+
   // 偏离检测与回归处理
   if (!auto_land_yielding) {
     handleRejoin(now);
@@ -75,7 +80,8 @@ TickOutput BacktrackUseCase::tick(double now) {
       trajectory_session_.isValid() || waypoint_fallback_session_.isValid();
   tick_input.trajectory_finished =
       trajectory_session_.isFinished(
-          current_position_, config_.rejoin_config.success_dist_m) ||
+          current_position_, current_velocity_,
+          config_.rejoin_config.success_dist_m) ||
       waypoint_fallback_session_.isFinished();
 
   // 驱动状态机
@@ -250,9 +256,6 @@ void BacktrackUseCase::handleTriggers(double now) {
     if (trigger_evaluator_.checkCh7PressEvent()) {
       ROS_INFO("[BacktrackUseCase] Ch7 press event detected, pausing");
       state_machine_.triggerPause();
-      if (trajectory_session_.isValid()) {
-        trajectory_session_.freezeProgress();
-      }
       return;
     }
   }
@@ -266,9 +269,7 @@ void BacktrackUseCase::handleTriggers(double now) {
         ROS_WARN("[BacktrackUseCase] RC loss detected while paused, resuming return");
         state_machine_.lockPosition(current_position_, current_yaw_);
         state_machine_.triggerReturn(domain::Event::RCLossTriggered);
-        if (trajectory_session_.isValid()) {
-          trajectory_session_.resumeProgress(now);
-        } else if (waypoint_fallback_session_.isValid()) {
+        if (waypoint_fallback_session_.isValid()) {
           waypoint_fallback_session_.restart();
         }
       } else {
@@ -285,9 +286,7 @@ void BacktrackUseCase::handleTriggers(double now) {
         ROS_INFO("[BacktrackUseCase] Ch7 long press detected, resuming");
         state_machine_.lockPosition(current_position_, current_yaw_);
         state_machine_.triggerReturn(domain::Event::Ch7LongPress);
-        if (trajectory_session_.isValid()) {
-          trajectory_session_.resumeProgress(now);
-        } else if (waypoint_fallback_session_.isValid()) {
+        if (waypoint_fallback_session_.isValid()) {
           waypoint_fallback_session_.restart();
         }
       } else {
@@ -378,6 +377,19 @@ void BacktrackUseCase::handleWaypointFallbackProgress() {
   waypoint_fallback_session_.updateProgress(current_position_);
 }
 
+void BacktrackUseCase::handleTrajectoryProgress() {
+  if (state_machine_.getCurrentState() != domain::State::ReturnActive ||
+      !trajectory_session_.isValid()) {
+    return;
+  }
+
+  if (!trajectory_session_.updateProgress(
+          current_position_, config_.rejoin_config.lookahead_time_s)) {
+    ROS_ERROR_THROTTLE(1.0,
+                       "[BacktrackUseCase] Local path projection failed; holding last valid target");
+  }
+}
+
 void BacktrackUseCase::handleRejoin(double now) {
   auto current_state = state_machine_.getCurrentState();
 
@@ -394,11 +406,13 @@ void BacktrackUseCase::handleRejoin(double now) {
       return;
     }
 
-    // 获取轨迹上的当前进度位置
-    auto traj_state = trajectory_session_.evaluate(now);
+    if (!trajectory_session_.hasValidProjection()) {
+      return;
+    }
 
-    // 检查是否偏离
-    if (rejoin_policy_.shouldTriggerRejoin(current_position_, traj_state.position)) {
+    // 只使用当前位置到局部路径投影点的横向距离，纵向速度落后不触发回归。
+    if (rejoin_policy_.shouldTriggerRejoin(
+            trajectory_session_.getCrossTrackError())) {
       if (rejoin_trigger_candidate_start_time_ < 0.0) {
         rejoin_trigger_candidate_start_time_ = now;
       }
@@ -407,7 +421,6 @@ void BacktrackUseCase::handleRejoin(double now) {
       if (hold_duration >= config_.rejoin_config.trigger_hold_s) {
         ROS_WARN("[BacktrackUseCase] Deviation detected for %.2f s, entering rejoin mode",
                  hold_duration);
-        trajectory_session_.freezeProgress();  // 冻结轨迹进度，防止退出条件目标持续漂移
         state_machine_.enterRejoin();
         rejoin_trigger_candidate_start_time_ = -1.0;
       }
@@ -424,11 +437,11 @@ void BacktrackUseCase::handleRejoin(double now) {
       return;
     }
 
-    // 获取轨迹上的当前进度位置
-    auto traj_state = trajectory_session_.evaluate(now);
-
-    // 检查是否回归成功
-    if (rejoin_policy_.shouldExitRejoin(current_position_, traj_state.position)) {
+    // 阶段 B 中 Rejoin 仍回到进入状态时保留的空间目标；阶段 C 将统一为
+    // 低速弧长跟随。这里不能复用进入前的旧 cross-track 值判断退出。
+    const double distance_to_target =
+        (current_position_ - trajectory_session_.getTargetState().position).norm();
+    if (rejoin_policy_.shouldExitRejoin(distance_to_target)) {
       if (rejoin_success_candidate_start_time_ < 0.0) {
         rejoin_success_candidate_start_time_ = now;
       }
@@ -437,7 +450,6 @@ void BacktrackUseCase::handleRejoin(double now) {
       if (hold_duration >= config_.rejoin_config.success_hold_s) {
         ROS_INFO("[BacktrackUseCase] Rejoin successful for %.2f s, returning to active mode",
                  hold_duration);
-        trajectory_session_.resumeProgress(now);  // 恢复轨迹进度，从冻结点继续
         state_machine_.exitRejoin();
         rejoin_success_candidate_start_time_ = -1.0;
       }
@@ -467,7 +479,7 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
     }
 
     if (trajectory_session_.isValid()) {
-      auto traj_state = trajectory_session_.evaluate(now);
+      const auto& traj_state = trajectory_session_.getTargetState();
 
       domain::SetpointTarget target;
       target.position = traj_state.position;
@@ -487,7 +499,7 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
   // ReturnRejoin状态：从回归策略计算
   if (current_state == domain::State::ReturnRejoin) {
     if (trajectory_session_.isValid()) {
-      auto frozen_state = trajectory_session_.evaluate(now);
+      const auto& frozen_state = trajectory_session_.getTargetState();
       auto rejoin_state = rejoin_policy_.computeFrozenPointTarget(
           current_position_, frozen_state);
 

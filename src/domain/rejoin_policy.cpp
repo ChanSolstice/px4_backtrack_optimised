@@ -11,14 +11,12 @@ RejoinPolicy::RejoinPolicy(const RejoinConfig& config)
 {
 }
 
-bool RejoinPolicy::shouldTriggerRejoin(const Vec3& current_pos, const Vec3& traj_pos) const {
-  double dist = (current_pos - traj_pos).norm();
-  return dist > config_.trigger_dist_m;
+bool RejoinPolicy::shouldTriggerRejoin(double cross_track_error) const {
+  return cross_track_error > config_.trigger_dist_m;
 }
 
-bool RejoinPolicy::shouldExitRejoin(const Vec3& current_pos, const Vec3& traj_pos) const {
-  double dist = (current_pos - traj_pos).norm();
-  return dist < config_.success_dist_m;
+bool RejoinPolicy::shouldExitRejoin(double cross_track_error) const {
+  return cross_track_error < config_.success_dist_m;
 }
 
 double RejoinPolicy::findNearestTime(const Vec3& current_pos,

@@ -42,16 +42,14 @@ public:
   explicit RejoinPolicy(const RejoinConfig& config);
 
   /// 判断是否需要触发回归
-  /// @param current_pos 当前位置 (ENU, m)
-  /// @param traj_pos 轨迹上的当前进度位置 (ENU, m)
+  /// @param cross_track_error 当前位置到局部路径投影点的距离 (m)
   /// @return 是否需要回归
-  bool shouldTriggerRejoin(const Vec3& current_pos, const Vec3& traj_pos) const;
+  bool shouldTriggerRejoin(double cross_track_error) const;
 
   /// 判断是否完成回归（可以退出回归状态）
-  /// @param current_pos 当前位置 (ENU, m)
-  /// @param traj_pos 轨迹上的当前进度位置 (ENU, m)
+  /// @param cross_track_error 当前位置到局部路径投影点的距离 (m)
   /// @return 是否完成回归
-  bool shouldExitRejoin(const Vec3& current_pos, const Vec3& traj_pos) const;
+  bool shouldExitRejoin(double cross_track_error) const;
 
   /// 查找轨迹上距离当前位置最近的时间点
   /// 当前 ReturnRejoin 主链路不再使用最近点预瞄；该接口保留给测试和后续策略扩展。

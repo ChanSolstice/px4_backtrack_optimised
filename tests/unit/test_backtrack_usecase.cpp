@@ -156,7 +156,7 @@ TEST(BacktrackUseCaseTest, AutoLandYieldSuppressesRetriggerUntilDisarm) {
   EXPECT_FALSE(output.mode_request.has_value());
 }
 
-TEST(BacktrackUseCaseTest, DoesNotFinishTimedTrajectoryBeforeReachingReturnGoal) {
+TEST(BacktrackUseCaseTest, WallTimeCannotAdvanceSpatialTrajectory) {
   BacktrackUseCase usecase(makeConfig());
 
   usecase.onStateReceived(false, "");
@@ -174,13 +174,17 @@ TEST(BacktrackUseCaseTest, DoesNotFinishTimedTrajectoryBeforeReachingReturnGoal)
   auto output = usecase.tick(0.4);
   ASSERT_EQ(output.current_state, domain::State::ReturnActive);
 
-  // 即使时间剖面已经结束，未到达返航终点也不能进入降落。
+  // 无论 wall time 跳变多大，实际位置未前进时空间进度都不会结束。
   output = usecase.tick(20000.0);
   EXPECT_EQ(output.current_state, domain::State::ReturnActive);
   EXPECT_TRUE(output.should_publish_setpoint);
 
-  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 20000.1);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 20000.1);
   output = usecase.tick(20000.1);
+  EXPECT_EQ(output.current_state, domain::State::ReturnActive);
+
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 20000.2);
+  output = usecase.tick(20000.2);
   EXPECT_EQ(output.current_state, domain::State::LandingHover);
   EXPECT_TRUE(output.should_publish_setpoint);
 }

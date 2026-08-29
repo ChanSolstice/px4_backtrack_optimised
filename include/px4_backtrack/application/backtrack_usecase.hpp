@@ -181,6 +181,9 @@ private:
   /// 退化 waypoint 会话执行进度处理
   void handleWaypointFallbackProgress();
 
+  /// 按实际位置更新弧长路径进度
+  void handleTrajectoryProgress();
+
   /// 偏离检测与回归处理
   void handleRejoin(double now);
 

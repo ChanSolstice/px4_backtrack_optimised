@@ -26,11 +26,11 @@ TEST(RejoinPolicyTest, TriggerAndExitUseConfiguredDistanceThresholds) {
   config.success_dist_m = 0.1;
   RejoinPolicy policy(config);
 
-  EXPECT_TRUE(policy.shouldTriggerRejoin(Vec3(1.0, 0.0, 0.0), Vec3(0.0, 0.0, 0.0)));
-  EXPECT_FALSE(policy.shouldTriggerRejoin(Vec3(0.2, 0.0, 0.0), Vec3(0.0, 0.0, 0.0)));
+  EXPECT_TRUE(policy.shouldTriggerRejoin(1.0));
+  EXPECT_FALSE(policy.shouldTriggerRejoin(0.2));
 
-  EXPECT_TRUE(policy.shouldExitRejoin(Vec3(0.05, 0.0, 0.0), Vec3(0.0, 0.0, 0.0)));
-  EXPECT_FALSE(policy.shouldExitRejoin(Vec3(0.2, 0.0, 0.0), Vec3(0.0, 0.0, 0.0)));
+  EXPECT_TRUE(policy.shouldExitRejoin(0.05));
+  EXPECT_FALSE(policy.shouldExitRejoin(0.2));
 }
 
 TEST(RejoinPolicyTest, FindsNearestTimeAndLimitsVelocityForRejoinTarget) {
