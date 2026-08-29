@@ -15,6 +15,7 @@ BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config)
     current_armed_(false),
     current_mode_(""),
     current_position_(domain::Vec3::Zero()),
+    current_velocity_(domain::Vec3::Zero()),
     current_yaw_(0.0),
     has_seen_disarm_(false),
     arm_after_disarm_detected_(false),
@@ -95,8 +96,12 @@ TickOutput BacktrackUseCase::tick(double now) {
   return output;
 }
 
-void BacktrackUseCase::onOdomReceived(const domain::Vec3& position, double yaw, double stamp) {
+void BacktrackUseCase::onOdomReceived(const domain::Vec3& position,
+                                      const domain::Vec3& velocity,
+                                      double yaw,
+                                      double stamp) {
   current_position_ = position;
+  current_velocity_ = velocity;
   current_yaw_ = yaw;
 
   // 录制处理

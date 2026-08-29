@@ -64,14 +64,21 @@ public:
 
   /// 获取最新里程计数据（线程安全）
   /// @param position 输出：位置 (ENU, m)
+  /// @param velocity 输出：线速度 (ENU, m/s)
   /// @param yaw 输出：yaw角 (rad)
   /// @param stamp 输出：时间戳 (s)
   /// @return 是否收到过数据
-  bool getLatest(domain::Vec3& position, double& yaw, double& stamp) const;
+  bool getLatest(domain::Vec3& position,
+                 domain::Vec3& velocity,
+                 double& yaw,
+                 double& stamp) const;
 
   /// 设置外部回调（可选）
-  /// @param callback 回调函数 (position, yaw, stamp)
-  void setCallback(std::function<void(const domain::Vec3&, double, double)> callback);
+  /// @param callback 回调函数 (position, velocity, yaw, stamp)
+  void setCallback(std::function<void(const domain::Vec3&,
+                                      const domain::Vec3&,
+                                      double,
+                                      double)> callback);
 
 private:
   /// ROS订阅者
@@ -80,12 +87,16 @@ private:
   /// 最新数据（mutex保护）
   mutable std::mutex mutex_;
   domain::Vec3 position_;
+  domain::Vec3 velocity_;
   double yaw_;
   double stamp_;
   bool has_data_;
 
   /// 外部回调（可选）
-  std::function<void(const domain::Vec3&, double, double)> external_callback_;
+  std::function<void(const domain::Vec3&,
+                     const domain::Vec3&,
+                     double,
+                     double)> external_callback_;
 
   /// ROS回调
   void odomCallback(const nav_msgs::Odometry::ConstPtr& msg);

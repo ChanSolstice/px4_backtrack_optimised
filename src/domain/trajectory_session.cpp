@@ -29,10 +29,16 @@ std::vector<RecordPoint> thinRecordedPointsForGeneration(
     }
   }
 
-  if ((points.back().position - reduced.back().position).norm() > 1e-9) {
-    reduced.push_back(points.back());
+  const auto& endpoint = points.back();
+  while (reduced.size() > 1 &&
+         (endpoint.position - reduced.back().position).norm() < min_spacing_m) {
+    reduced.pop_back();
+  }
+
+  if ((endpoint.position - reduced.back().position).norm() > 1e-9) {
+    reduced.push_back(endpoint);
   } else {
-    reduced.back() = points.back();
+    reduced.back() = endpoint;
   }
 
   return reduced;

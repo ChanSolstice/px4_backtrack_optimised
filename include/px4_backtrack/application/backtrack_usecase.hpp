@@ -98,9 +98,13 @@ public:
 
   /// 里程计回调
   /// @param position 位置 (ENU, m)
+  /// @param velocity 线速度 (ENU, m/s)
   /// @param yaw Yaw角 (rad)
   /// @param stamp 时间戳 (s)
-  void onOdomReceived(const domain::Vec3& position, double yaw, double stamp);
+  void onOdomReceived(const domain::Vec3& position,
+                      const domain::Vec3& velocity,
+                      double yaw,
+                      double stamp);
 
   /// RC回调
   /// @param channels RC通道数组
@@ -133,6 +137,7 @@ private:
   bool current_armed_;
   std::string current_mode_;
   domain::Vec3 current_position_;
+  domain::Vec3 current_velocity_;
   double current_yaw_;
 
   // 飞行周期复位检测

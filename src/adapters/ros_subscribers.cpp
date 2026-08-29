@@ -60,6 +60,7 @@ void StateSubscriber::stateCallback(const mavros_msgs::State::ConstPtr& msg) {
 
 OdomSubscriber::OdomSubscriber(ros::NodeHandle& nh, const std::string& topic)
   : position_(domain::Vec3::Zero()),
+    velocity_(domain::Vec3::Zero()),
     yaw_(0.0),
     stamp_(0.0),
     has_data_(false)
@@ -68,18 +69,26 @@ OdomSubscriber::OdomSubscriber(ros::NodeHandle& nh, const std::string& topic)
   ROS_INFO("[OdomSubscriber] Subscribed to: %s", topic.c_str());
 }
 
-bool OdomSubscriber::getLatest(domain::Vec3& position, double& yaw, double& stamp) const {
+bool OdomSubscriber::getLatest(domain::Vec3& position,
+                               domain::Vec3& velocity,
+                               double& yaw,
+                               double& stamp) const {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!has_data_) {
     return false;
   }
   position = position_;
+  velocity = velocity_;
   yaw = yaw_;
   stamp = stamp_;
   return true;
 }
 
-void OdomSubscriber::setCallback(std::function<void(const domain::Vec3&, double, double)> callback) {
+void OdomSubscriber::setCallback(
+    std::function<void(const domain::Vec3&,
+                       const domain::Vec3&,
+                       double,
+                       double)> callback) {
   std::lock_guard<std::mutex> lock(mutex_);
   external_callback_ = callback;
 }
@@ -89,6 +98,9 @@ void OdomSubscriber::odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
   domain::Vec3 pos(msg->pose.pose.position.x,
                    msg->pose.pose.position.y,
                    msg->pose.pose.position.z);
+  domain::Vec3 velocity(msg->twist.twist.linear.x,
+                        msg->twist.twist.linear.y,
+                        msg->twist.twist.linear.z);
 
   // 提取yaw角（从四元数转换）
   tf2::Quaternion q(msg->pose.pose.orientation.x,
@@ -106,14 +118,23 @@ void OdomSubscriber::odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     position_ = pos;
+    velocity_ = velocity;
     yaw_ = yaw;
     stamp_ = stamp;
     has_data_ = true;
   }
 
   // 调用外部回调（如果设置）
-  if (external_callback_) {
-    external_callback_(pos, yaw, stamp);
+  std::function<void(const domain::Vec3&,
+                     const domain::Vec3&,
+                     double,
+                     double)> cb;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    cb = external_callback_;
+  }
+  if (cb) {
+    cb(pos, velocity, yaw, stamp);
   }
 }
 

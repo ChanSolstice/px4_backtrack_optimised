@@ -166,6 +166,45 @@ TEST(TrajectorySessionTest, SlowStraightLineKeepsAccumulatedDistanceWhenThinning
   EXPECT_LT(path_length, 1.2);
 }
 
+TEST(TrajectorySessionTest, DenseEndpointClusterKeepsTrueEndpointWithoutShortFinalGap) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  config.ds_m = 0.6;
+  config.min_point_dist_m = 0.3;
+
+  std::vector<RecordPoint> points = {
+      RecordPoint(Vec3(0.0, 0.0, 1.0), 0.0, 0.0),
+      RecordPoint(Vec3(0.6, 0.0, 1.0), 0.0, 0.1),
+      RecordPoint(Vec3(1.0, 0.0, 1.0), 0.0, 0.2),
+      RecordPoint(Vec3(1.20, 0.0, 1.0), 0.0, 0.3),
+      RecordPoint(Vec3(1.24, 0.0, 1.0), 0.0, 0.4),
+      RecordPoint(Vec3(1.26, 0.0, 1.0), 0.0, 0.5),
+  };
+
+  ASSERT_TRUE(session.generate(points, config));
+  const auto start = session.getTrajectory()->evaluate(0.0);
+  EXPECT_TRUE(start.position.isApprox(points.back().position, 1e-6));
+}
+
+TEST(TrajectorySessionTest, ReversingEndpointRemovesConflictingRetainedPoint) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  config.ds_m = 1.0;
+  config.min_point_dist_m = 0.5;
+
+  std::vector<RecordPoint> points = {
+      RecordPoint(Vec3(0.0, 0.0, 1.0), 0.0, 0.0),
+      RecordPoint(Vec3(0.5, 0.0, 1.0), 0.0, 0.1),
+      RecordPoint(Vec3(1.0, 0.0, 1.0), 0.0, 0.2),
+      RecordPoint(Vec3(1.4, 0.0, 1.0), 0.0, 0.3),
+      RecordPoint(Vec3(1.05, 0.0, 1.0), 0.0, 0.4),
+  };
+
+  ASSERT_TRUE(session.generate(points, config));
+  const auto start = session.getTrajectory()->evaluate(0.0);
+  EXPECT_TRUE(start.position.isApprox(points.back().position, 1e-6));
+}
+
 TEST(TrajectorySessionTest, SetProgressControlsFinishedState) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
