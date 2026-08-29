@@ -131,7 +131,7 @@ TEST(StateMachineTest, AutoLandHasGlobalPriorityAndYieldsControl) {
 
   machine.tick(makeInput(true, "AUTO.LAND", 0.2));
 
-  EXPECT_EQ(machine.getCurrentState(), State::Recording);
+  EXPECT_EQ(machine.getCurrentState(), State::AutoLandYield);
   EXPECT_FALSE(machine.shouldPublishSetpoint());
   EXPECT_FALSE(machine.getModeRequest().has_value());
 }
@@ -149,7 +149,7 @@ TEST(StateMachineTest, AutoLandDisarmReturnsToIdleDisarmed) {
   ASSERT_EQ(machine.getCurrentState(), State::ReturnActive);
 
   machine.tick(makeInput(true, "AUTO.LAND", 0.2));
-  ASSERT_EQ(machine.getCurrentState(), State::Recording);
+  ASSERT_EQ(machine.getCurrentState(), State::AutoLandYield);
 
   machine.tick(makeInput(false, "AUTO.LAND", 0.3));
 

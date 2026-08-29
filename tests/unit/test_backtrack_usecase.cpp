@@ -129,7 +129,7 @@ TEST(BacktrackUseCaseTest, AutoLandYieldSuppressesRetriggerUntilDisarm) {
 
   usecase.onStateReceived(true, "AUTO.LAND");
   output = usecase.tick(0.5);
-  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_EQ(output.current_state, domain::State::AutoLandYield);
   EXPECT_FALSE(output.should_publish_setpoint);
   EXPECT_FALSE(output.mode_request.has_value());
 
@@ -137,18 +137,18 @@ TEST(BacktrackUseCaseTest, AutoLandYieldSuppressesRetriggerUntilDisarm) {
   usecase.onStateReceived(true, "POSCTL");
   usecase.onRCReceived(makeRcChannels(1500));
   output = usecase.tick(0.6);
-  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_EQ(output.current_state, domain::State::AutoLandYield);
   EXPECT_FALSE(output.should_publish_setpoint);
   EXPECT_FALSE(output.mode_request.has_value());
 
   usecase.onRCReceived(makeRcChannels(1000));
   output = usecase.tick(0.7);
-  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_EQ(output.current_state, domain::State::AutoLandYield);
   EXPECT_FALSE(output.should_publish_setpoint);
   EXPECT_FALSE(output.mode_request.has_value());
 
   output = usecase.tick(0.8);
-  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_EQ(output.current_state, domain::State::AutoLandYield);
   EXPECT_FALSE(output.should_publish_setpoint);
   EXPECT_FALSE(output.mode_request.has_value());
 

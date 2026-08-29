@@ -49,7 +49,10 @@ enum class State {
   LandingHover,
 
   /// 执行OFFBOARD->POSCTL->AUTO.LAND过渡并清理
-  LandingTransition
+  LandingTransition,
+
+  /// AUTO.LAND 已由飞控接管，停止发布控制量并等待 DISARM
+  AutoLandYield
 };
 
 /// 状态转换为字符串（用于日志输出）
@@ -65,6 +68,7 @@ inline std::string stateToString(State state) {
     case State::Paused: return "Paused";
     case State::LandingHover: return "LandingHover";
     case State::LandingTransition: return "LandingTransition";
+    case State::AutoLandYield: return "AutoLandYield";
     default: return "Unknown";
   }
 }
