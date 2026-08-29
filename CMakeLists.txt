@@ -193,6 +193,17 @@ if(CATKIN_ENABLE_TESTING)
     )
   endif()
 
+  catkin_add_gtest(test_ros_subscribers
+    tests/unit/test_main.cpp
+    tests/unit/test_ros_subscribers.cpp
+  )
+  if(TARGET test_ros_subscribers)
+    target_link_libraries(test_ros_subscribers
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
   catkin_add_gtest(test_rejoin_policy
     tests/unit/test_main.cpp
     tests/unit/test_rejoin_policy.cpp

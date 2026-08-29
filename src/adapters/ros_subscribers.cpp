@@ -6,6 +6,22 @@
 namespace px4_backtrack {
 namespace adapters {
 
+domain::Vec3 velocityInParentFrame(const nav_msgs::Odometry& msg) {
+  const tf2::Quaternion orientation(
+      msg.pose.pose.orientation.x,
+      msg.pose.pose.orientation.y,
+      msg.pose.pose.orientation.z,
+      msg.pose.pose.orientation.w);
+  const tf2::Vector3 velocity_child(
+      msg.twist.twist.linear.x,
+      msg.twist.twist.linear.y,
+      msg.twist.twist.linear.z);
+  const tf2::Vector3 velocity_parent =
+      tf2::Matrix3x3(orientation) * velocity_child;
+  return domain::Vec3(
+      velocity_parent.x(), velocity_parent.y(), velocity_parent.z());
+}
+
 // ============================================================================
 // StateSubscriber实现
 // ============================================================================
@@ -98,9 +114,8 @@ void OdomSubscriber::odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
   domain::Vec3 pos(msg->pose.pose.position.x,
                    msg->pose.pose.position.y,
                    msg->pose.pose.position.z);
-  domain::Vec3 velocity(msg->twist.twist.linear.x,
-                        msg->twist.twist.linear.y,
-                        msg->twist.twist.linear.z);
+  // nav_msgs/Odometry 规定 twist 位于 child_frame_id；领域层统一使用父 ENU。
+  const domain::Vec3 velocity = velocityInParentFrame(*msg);
 
   // 提取yaw角（从四元数转换）
   tf2::Quaternion q(msg->pose.pose.orientation.x,
