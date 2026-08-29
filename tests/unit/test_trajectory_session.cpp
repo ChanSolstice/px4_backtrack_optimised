@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 
 #include "px4_backtrack/domain/trajectory_session.hpp"
 
@@ -179,6 +180,43 @@ TEST(TrajectorySessionTest, LocalProjectionDoesNotJumpAcrossSelfIntersection) {
   // 原点也位于后续返程支路；局部窗口必须保留在第一次穿越处。
   EXPECT_LT(session.getProjectedArcLength(), path_length * 0.5);
   EXPECT_NEAR(session.getCrossTrackError(), 0.0, 0.05);
+}
+
+TEST(TrajectorySessionTest, RejoinDoesNotMoveTargetArcLengthBackward) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  config.enable_end_converge = false;
+  config.v_max = 1.0;
+  config.v_end_max = 1.0;
+  config.v_start_m_s = 1.0;
+  config.v_end_m_s = 1.0;
+
+  ASSERT_TRUE(session.generate(makeRecordPoints(), config));
+  ASSERT_TRUE(session.updateProgress(Vec3(2.0, 0.0, 1.0), 0.5));
+  const double normal_target_s = session.getTargetArcLength();
+  ASSERT_GT(normal_target_s, 0.4);
+
+  ASSERT_TRUE(session.updateRejoinProgress(
+      Vec3(2.0, 1.0, 1.0), 0.5, 0.5));
+  EXPECT_GE(session.getTargetArcLength(), normal_target_s);
+  EXPECT_GT(session.getCrossTrackError(), 0.9);
+}
+
+TEST(TrajectorySessionTest, ProjectionFailureKeepsLastValidTarget) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  ASSERT_TRUE(session.generate(makeRecordPoints(), config));
+  ASSERT_TRUE(session.updateProgress(Vec3(2.0, 0.0, 1.0), 0.5));
+  const auto previous_target = session.getTargetState();
+  const double previous_target_s = session.getTargetArcLength();
+
+  Vec3 invalid_position = Vec3::Zero();
+  invalid_position.x() = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(session.updateProgress(invalid_position, 0.5));
+  EXPECT_FALSE(session.hasValidProjection());
+  EXPECT_DOUBLE_EQ(session.getTargetArcLength(), previous_target_s);
+  EXPECT_TRUE(session.getTargetState().position.isApprox(previous_target.position));
+  EXPECT_TRUE(session.getTargetState().velocity.isApprox(previous_target.velocity));
 }
 
 TEST(TrajectorySessionTest, DensePauseClusterDoesNotBlowUpPathLength) {

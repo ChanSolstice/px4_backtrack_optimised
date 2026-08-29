@@ -1,7 +1,6 @@
 #include "px4_backtrack/domain/rejoin_policy.hpp"
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace px4_backtrack {
 namespace domain {
@@ -15,93 +14,51 @@ bool RejoinPolicy::shouldTriggerRejoin(double cross_track_error) const {
   return cross_track_error > config_.trigger_dist_m;
 }
 
-bool RejoinPolicy::shouldExitRejoin(double cross_track_error) const {
-  return cross_track_error < config_.success_dist_m;
+bool RejoinPolicy::shouldExitRejoin(
+    double cross_track_error,
+    const Vec3& current_velocity,
+    const Vec3& path_target_velocity,
+    const Vec3& published_target_velocity) const {
+  return cross_track_error < config_.success_dist_m &&
+         (current_velocity - path_target_velocity).norm() <
+             kExitVelocityErrorMps &&
+         (published_target_velocity - path_target_velocity).norm() <=
+             kMaxVelocityStepMps;
 }
 
-double RejoinPolicy::findNearestTime(const Vec3& current_pos,
-                                      const trajectory_core::Trajectory* traj) const {
-  if (!traj || !traj->isValid()) {
-    return 0.0;
+trajectory_core::TrajectoryState RejoinPolicy::applyRejoinLimits(
+    const trajectory_core::TrajectoryState& path_target,
+    double cross_track_error,
+    const Vec3& previous_target_velocity) const {
+  auto target = path_target;
+  const double nominal_speed = target.velocity.norm();
+  if (nominal_speed < 1e-9) {
+    target.velocity = Vec3::Zero();
+    return target;
   }
 
-  // 采样轨迹并查找最近点
-  // 使用较粗的采样间隔（20Hz）进行快速搜索
-  const double dt_sample = 0.05;  // 20Hz
-  auto samples = traj->sample(dt_sample);
+  const double recovery_span =
+      std::max(1e-6, config_.trigger_dist_m - config_.success_dist_m);
+  const double recovery_ratio = std::clamp(
+      (config_.trigger_dist_m - cross_track_error) / recovery_span,
+      0.0,
+      1.0);
+  const double limited_speed = std::min(
+      nominal_speed,
+      config_.v_max_m_s +
+          recovery_ratio * std::max(0.0, nominal_speed - config_.v_max_m_s));
+  Vec3 desired_velocity = target.velocity * (limited_speed / nominal_speed);
 
-  if (samples.empty()) {
-    return 0.0;
+  // 进入 Rejoin 时也限制参考速度的单周期变化，避免从巡航速度瞬时降到限速。
+  const Vec3 velocity_step = desired_velocity - previous_target_velocity;
+  const double step_norm = velocity_step.norm();
+  if (step_norm > kMaxVelocityStepMps) {
+    desired_velocity = previous_target_velocity +
+        velocity_step * (kMaxVelocityStepMps / step_norm);
   }
-
-  // 查找距离当前位置最近的采样点
-  double min_dist = std::numeric_limits<double>::max();
-  double nearest_time = 0.0;
-
-  for (const auto& state : samples) {
-    double dist = (current_pos - state.position).norm();
-    if (dist < min_dist) {
-      min_dist = dist;
-      nearest_time = state.t;
-    }
-  }
-
-  return nearest_time;
-}
-
-trajectory_core::TrajectoryState RejoinPolicy::computeRejoinTarget(
-    const Vec3& current_pos,
-    const trajectory_core::Trajectory* traj,
-    double t_nearest) const {
-
-  if (!traj || !traj->isValid()) {
-    // 返回空状态
-    return trajectory_core::TrajectoryState();
-  }
-
-  // 计算预瞄时间
-  double t_target = t_nearest + config_.lookahead_time_s;
-
-  // Clamp到轨迹时间范围
-  t_target = std::clamp(t_target, 0.0, traj->duration());
-
-  // 评估预瞄点的状态
-  auto target_state = traj->evaluate(t_target);
-
-  // 限幅速度
-  target_state.velocity = limitVelocity(target_state.velocity, config_.v_max_m_s);
-
-  return target_state;
-}
-
-trajectory_core::TrajectoryState RejoinPolicy::computeFrozenPointTarget(
-    const Vec3& current_pos,
-    const trajectory_core::TrajectoryState& frozen_state) const {
-  auto target_state = frozen_state;
-
-  Vec3 delta = frozen_state.position - current_pos;
-  double distance = delta.norm();
-  if (distance < 1e-6) {
-    target_state.velocity = Vec3::Zero();
-    return target_state;
-  }
-
-  constexpr double kRejoinVelocityGain = 1.0;
-  double speed = std::min(config_.v_max_m_s, kRejoinVelocityGain * distance);
-  target_state.velocity = delta * (speed / distance);
-
-  return target_state;
-}
-
-Vec3 RejoinPolicy::limitVelocity(const Vec3& velocity, double v_max) const {
-  double v_norm = velocity.norm();
-
-  if (v_norm <= v_max || v_norm < 1e-6) {
-    return velocity;
-  }
-
-  // 缩放速度向量
-  return velocity * (v_max / v_norm);
+  target.velocity = desired_velocity;
+  target.acceleration = std::nullopt;
+  return target;
 }
 
 }  // namespace domain

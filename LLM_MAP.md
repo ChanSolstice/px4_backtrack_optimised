@@ -2,7 +2,7 @@
 
 这份文档不是给最终用户看的，而是给后续阅读、解释或修改本仓库的 LLM/自动化代理看的。目标是让模型先建立正确的代码地图，再动手改动，减少把旧版 Python 文档误当成现状、或者只改一层没改全链路的风险。
 
-## 先记住这 10 条
+## 先记住这 11 条
 
 1. 这是 ROS1 `catkin` 工程，不是 ROS2。
 2. 当前主实现入口是 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp)。
@@ -58,7 +58,7 @@
 这里是最重要的编排层，职责包括：
 
 - 持有所有核心 domain 对象
-- 缓存当前 `armed/mode/position/yaw`
+- 缓存当前 `armed/mode/position/velocity/yaw`
 - 处理飞行周期复位和录制延时
 - 检测触发条件
 - 请求轨迹生成
@@ -84,11 +84,11 @@
 
 - [`include/px4_backtrack/domain/trajectory_session.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/trajectory_session.hpp)
 - [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp)
-  封装 `trajectory_core::TrajectoryGenerator`、轨迹对象、执行进度、暂停/恢复。
+  封装 `trajectory_core::TrajectoryGenerator`、轨迹对象、局部路径投影、单调弧长进度和预瞄目标。执行进度只由实际位置推进，不再维护 wall-time 秒表或冻结/恢复接口。
 
 - [`include/px4_backtrack/domain/rejoin_policy.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/rejoin_policy.hpp)
 - [`src/domain/rejoin_policy.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/rejoin_policy.cpp)
-  负责偏离判定和回归目标计算。当前 `ReturnRejoin` 主链路直接回拉到冻结进度点，速度为指向冻结点的比例收敛速度并受 `rejoin_v_max_m_s` 限幅；最近点搜索/预瞄接口仅保留给测试和后续策略扩展。
+  负责横向偏离阈值、Rejoin 平滑限速和退出速度连续性判定。`ReturnRejoin` 与正常返航复用 `TrajectorySession` 的局部弧长投影目标，不存在全轨迹最近时间搜索或冻结点回拉接口。
 
 ### Adapters 层
 
@@ -172,14 +172,14 @@ RC 丢失检测已拆分为两个方法：
 暂停时：
 
 - `state_machine_.triggerPause()`
-- `trajectory_session_.freezeProgress()`
+- 空间进度自然停止更新，保留最后合法的 `projected_s` 和目标状态
 
 恢复时：
 
 - `state_machine_.triggerReturn(Event::Ch7LongPress)`
-- `trajectory_session_.resumeProgress(now)`
+- 固定当前位置，并把悬停 yaw 更新为保留路径目标的切向 yaw
 
-因此恢复路径会重新走 `ReturnPreOffboard`，而不是直接跳回 `ReturnActive`。
+因此恢复路径会重新走 `ReturnPreOffboard` 完成航向对准，而不是直接跳回 `ReturnActive`；进入 `ReturnActive` 后再由实际位置重新投影，不需要修正任何时间基准。
 
 ### 5. AUTO.LAND 是全局让步分支，并在 UseCase 层锁存到 DISARM
 
@@ -204,14 +204,19 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 
 `DebugDumper` 和 `DebugPublisher` 通过 `setDebugDumper()` / `setDebugPublisher()` 注入 `BacktrackUseCase`，默认为 `nullptr`（不启用）。`performDebugDump()` 在 `handleTrajectoryGeneration()` 成功后调用，内部先判空再执行。这意味着 debug 功能对正常飞行路径零侵入——不启用时没有任何额外开销。
 
-### 8. rejoin 现在不再是“单帧越阈值立即切换”
+### 8. rejoin 是同一路径跟随器的低速模式
 
-当前实现里，rejoin 的进入/退出除了距离阈值，还带持续时间判定：
+当前实现里，偏离距离是当前位置到局部路径投影点的横向距离，不是到 wall-time 参考点的三维位置差。rejoin 的进入/退出除了距离阈值，还带持续时间判定：
 
-- 进入：`dist > rejoin_trigger_dist_m` 持续达到 `rejoin_trigger_hold_s`
-- 退出：`dist < rejoin_success_dist_m` 持续达到 `rejoin_success_hold_s`
+- 进入：`cross_track_error > rejoin_trigger_dist_m` 持续达到 `rejoin_trigger_hold_s`
+- 执行：扩大局部前向投影窗口、随横向误差缩短预瞄，速度向 `rejoin_v_max_m_s` 平滑限幅；位置和 yaw 仍取自路径目标
+- 退出：横向误差、实际速度误差、已发布目标速度连续性同时满足，并持续达到 `rejoin_success_hold_s`
 
-如果你看到日志里频繁刷 `ReturnActive -> ReturnRejoin`，先检查这两个 hold 参数是否和 YAML 对齐，而不是只调距离阈值。
+不要重新引入全轨迹最近点搜索、冻结时间点或固定冷却时间来处理 Rejoin。
+
+### 9. 返航开始前必须完成路径切向 yaw 对准
+
+轨迹生成后，`ReturnPreOffboard` 保持触发位置，但将 hold yaw 更新为 `evaluateByArcLength(0).yaw`。只有 OFFBOARD、轨迹就绪且 yaw 误差不大于 15° 时才进入 `ReturnActive`；10s 超时只报错并继续悬停，不允许带大角度误差开始平移。暂停恢复使用保留路径目标的 yaw，语义相同。
 
 当前 `ReturnRejoin` 的 setpoint 与退出判据使用同一个冻结进度点：进入 rejoin 时冻结 `TrajectorySession` 进度，回归目标位置就是该冻结点，速度为 `min(rejoin_v_max_m_s, distance)` 方向指向冻结点，yaw/yaw_rate 复用冻结点轨迹姿态。不要在主链路里重新改回“最近点 + lookahead”，否则目标点和 `shouldExitRejoin()` 的判据点会再次不一致。
 

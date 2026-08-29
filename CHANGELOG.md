@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-08-29 — 弧长驱动返航与统一 Rejoin 跟随
+
+将返航执行基准从 wall time 改为实际位置的局部路径投影，消除沿路径速度落后被误判为横向偏离而反复 Rejoin 的根因。
+
+### 改造
+
+- **refactor(trajectory):** `TrajectorySession` 仅维护单调 `projected_s`、`target_s` 和横向误差，以局部投影和路径速度预瞄生成 setpoint
+- **fix(completion):** 完成判定同时约束剩余弧长、终点距离和实际水平速度，不再依赖轨迹 CPU 秒表
+- **refactor(rejoin):** `ReturnRejoin` 复用同一弧长跟随器，扩大局部搜索、缩短预瞄并平滑限速；删除全局最近时间搜索和冻结点回拉逻辑
+- **fix(yaw):** `ReturnPreOffboard` 与暂停恢复先保持位置并对准路径切向 yaw，15° 内才允许开始水平返航
+- **fix(continuity):** Rejoin 退出同时检查横向误差、实际速度和已发布目标速度，限制单周期参考速度向量变化不超过 `0.3 m/s`
+
+### 测试
+
+- 覆盖慢速沿线跟随、单调进度、自交路径局部投影、空间终点判定和投影失败保持
+- 覆盖起始/恢复 yaw 对准、Rejoin 路径 yaw、速度未收敛不退出和退出前后目标连续性
+
 ## 2026-04-12 — AUTO.LAND 让步锁存
 
 修复 TC-11 `AUTO.LAND` 优先级让步测试中，外部降落接管后节点仍可能重新触发返航并请求 `OFFBOARD` 的问题。

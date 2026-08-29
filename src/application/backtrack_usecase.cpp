@@ -2,9 +2,24 @@
 #include "px4_backtrack/infrastructure/debug_dumper.hpp"
 #include "px4_backtrack/adapters/debug_publishers.hpp"
 #include <ros/console.h>
+#include <algorithm>
+#include <cmath>
 
 namespace px4_backtrack {
 namespace application {
+
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kYawAlignmentToleranceRad = 15.0 * kPi / 180.0;
+constexpr double kYawAlignmentTimeoutS = 10.0;
+
+double wrappedAngleError(double actual, double target) {
+  return std::abs(std::atan2(std::sin(actual - target),
+                            std::cos(actual - target)));
+}
+
+}  // namespace
 
 BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config)
   : config_(config),
@@ -24,6 +39,10 @@ BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config)
     trajectory_generation_requested_(false),
     rejoin_trigger_candidate_start_time_(-1.0),
     rejoin_success_candidate_start_time_(-1.0),
+    yaw_alignment_start_time_(-1.0),
+    yaw_alignment_timeout_reported_(false),
+    last_path_target_velocity_(domain::Vec3::Zero()),
+    has_last_path_target_velocity_(false),
     auto_land_yield_active_(false)
 {
   ROS_INFO("[BacktrackUseCase] Initialized");
@@ -51,7 +70,7 @@ TickOutput BacktrackUseCase::tick(double now) {
 
   // 轨迹生成处理
   if (!auto_land_yielding) {
-    handleTrajectoryGeneration();
+    handleTrajectoryGeneration(now);
   }
 
   // 退化 waypoint 会话执行进度
@@ -76,8 +95,11 @@ TickOutput BacktrackUseCase::tick(double now) {
   tick_input.now = now;
   tick_input.current_position = current_position_;
   tick_input.current_yaw = current_yaw_;
-  tick_input.trajectory_ready =
-      trajectory_session_.isValid() || waypoint_fallback_session_.isValid();
+  const auto state_before_tick = state_machine_.getCurrentState();
+  tick_input.trajectory_ready = waypoint_fallback_session_.isValid() ||
+      (trajectory_session_.isValid() &&
+       (state_before_tick != domain::State::ReturnPreOffboard ||
+        isTrajectoryActivationReady(now)));
   tick_input.trajectory_finished =
       trajectory_session_.isFinished(
           current_position_, current_velocity_,
@@ -96,7 +118,7 @@ TickOutput BacktrackUseCase::tick(double now) {
 
   // 计算setpoint
   if (output.should_publish_setpoint) {
-    output.setpoint = computeSetpoint(now);
+    output.setpoint = computeSetpoint();
   }
 
   return output;
@@ -155,6 +177,10 @@ void BacktrackUseCase::handleFlightCycleReset(bool armed) {
     trajectory_generation_requested_ = false;
     rejoin_trigger_candidate_start_time_ = -1.0;
     rejoin_success_candidate_start_time_ = -1.0;
+    yaw_alignment_start_time_ = -1.0;
+    yaw_alignment_timeout_reported_ = false;
+    last_path_target_velocity_ = domain::Vec3::Zero();
+    has_last_path_target_velocity_ = false;
     auto_land_yield_active_ = false;
 
     // 进入WaitRecordDelay状态（通过状态机处理）
@@ -175,6 +201,9 @@ bool BacktrackUseCase::handleAutoLandYield() {
     waypoint_fallback_session_.reset();
     rejoin_trigger_candidate_start_time_ = -1.0;
     rejoin_success_candidate_start_time_ = -1.0;
+    yaw_alignment_start_time_ = -1.0;
+    yaw_alignment_timeout_reported_ = false;
+    has_last_path_target_velocity_ = false;
     record_delay_started_ = false;
     auto_land_yield_active_ = true;
   }
@@ -267,8 +296,13 @@ void BacktrackUseCase::handleTriggers(double now) {
     if (rc_loss_event) {
       if (has_min_points) {
         ROS_WARN("[BacktrackUseCase] RC loss detected while paused, resuming return");
-        state_machine_.lockPosition(current_position_, current_yaw_);
+        const double hold_yaw = trajectory_session_.isValid()
+            ? trajectory_session_.getTargetState().yaw
+            : current_yaw_;
+        state_machine_.lockPosition(current_position_, hold_yaw);
         state_machine_.triggerReturn(domain::Event::RCLossTriggered);
+        yaw_alignment_start_time_ = now;
+        yaw_alignment_timeout_reported_ = false;
         if (waypoint_fallback_session_.isValid()) {
           waypoint_fallback_session_.restart();
         }
@@ -284,8 +318,13 @@ void BacktrackUseCase::handleTriggers(double now) {
     if (trigger_evaluator_.checkCh7LongPress()) {
       if (has_min_points) {
         ROS_INFO("[BacktrackUseCase] Ch7 long press detected, resuming");
-        state_machine_.lockPosition(current_position_, current_yaw_);
+        const double hold_yaw = trajectory_session_.isValid()
+            ? trajectory_session_.getTargetState().yaw
+            : current_yaw_;
+        state_machine_.lockPosition(current_position_, hold_yaw);
         state_machine_.triggerReturn(domain::Event::Ch7LongPress);
+        yaw_alignment_start_time_ = now;
+        yaw_alignment_timeout_reported_ = false;
         if (waypoint_fallback_session_.isValid()) {
           waypoint_fallback_session_.restart();
         }
@@ -320,7 +359,7 @@ void BacktrackUseCase::handleReturnTrigger(domain::Event event,
   triggerImmediateLanding();
 }
 
-void BacktrackUseCase::handleTrajectoryGeneration() {
+void BacktrackUseCase::handleTrajectoryGeneration(double now) {
   // 在ReturnPreOffboard状态且轨迹生成被请求时，执行轨迹生成
   auto current_state = state_machine_.getCurrentState();
 
@@ -342,6 +381,14 @@ void BacktrackUseCase::handleTrajectoryGeneration() {
       waypoint_fallback_session_.reset();
       rejoin_trigger_candidate_start_time_ = -1.0;
       rejoin_success_candidate_start_time_ = -1.0;
+      yaw_alignment_start_time_ = now;
+      yaw_alignment_timeout_reported_ = false;
+      has_last_path_target_velocity_ = false;
+      const domain::Vec3 locked_position =
+          state_machine_.getStateData().locked_position;
+      state_machine_.lockPosition(
+          locked_position,
+          trajectory_session_.getTargetState().yaw);
       ROS_INFO("[BacktrackUseCase] Trajectory generation successful");
       performDebugDump();
     } else {
@@ -378,16 +425,52 @@ void BacktrackUseCase::handleWaypointFallbackProgress() {
 }
 
 void BacktrackUseCase::handleTrajectoryProgress() {
-  if (state_machine_.getCurrentState() != domain::State::ReturnActive ||
+  const auto state = state_machine_.getCurrentState();
+  if ((state != domain::State::ReturnActive &&
+       state != domain::State::ReturnRejoin) ||
       !trajectory_session_.isValid()) {
     return;
   }
 
-  if (!trajectory_session_.updateProgress(
-          current_position_, config_.rejoin_config.lookahead_time_s)) {
+  const bool projection_ok = state == domain::State::ReturnRejoin
+      ? trajectory_session_.updateRejoinProgress(
+            current_position_,
+            config_.rejoin_config.lookahead_time_s,
+            config_.rejoin_config.trigger_dist_m)
+      : trajectory_session_.updateProgress(
+            current_position_, config_.rejoin_config.lookahead_time_s);
+  if (!projection_ok) {
     ROS_ERROR_THROTTLE(1.0,
                        "[BacktrackUseCase] Local path projection failed; holding last valid target");
+    if (state == domain::State::ReturnActive) {
+      ROS_WARN("[BacktrackUseCase] Entering Rejoin because local path projection is unavailable");
+      state_machine_.enterRejoin();
+      rejoin_trigger_candidate_start_time_ = -1.0;
+    }
   }
+}
+
+bool BacktrackUseCase::isTrajectoryActivationReady(double now) {
+  if (!trajectory_session_.isValid()) {
+    return false;
+  }
+
+  const double yaw_error = wrappedAngleError(
+      current_yaw_, trajectory_session_.getTargetState().yaw);
+  if (yaw_error <= kYawAlignmentToleranceRad) {
+    return true;
+  }
+
+  if (yaw_alignment_start_time_ < 0.0) {
+    yaw_alignment_start_time_ = now;
+  }
+  if (!yaw_alignment_timeout_reported_ &&
+      now - yaw_alignment_start_time_ >= kYawAlignmentTimeoutS) {
+    ROS_ERROR("[BacktrackUseCase] Start yaw alignment timed out: error=%.1f deg; holding position",
+              yaw_error * 180.0 / kPi);
+    yaw_alignment_timeout_reported_ = true;
+  }
+  return false;
 }
 
 void BacktrackUseCase::handleRejoin(double now) {
@@ -433,15 +516,20 @@ void BacktrackUseCase::handleRejoin(double now) {
   // 在ReturnRejoin状态检测回归成功
   if (current_state == domain::State::ReturnRejoin) {
     rejoin_trigger_candidate_start_time_ = -1.0;
-    if (!trajectory_session_.isValid()) {
+    if (!trajectory_session_.isValid() ||
+        !trajectory_session_.hasValidProjection()) {
       return;
     }
 
-    // 阶段 B 中 Rejoin 仍回到进入状态时保留的空间目标；阶段 C 将统一为
-    // 低速弧长跟随。这里不能复用进入前的旧 cross-track 值判断退出。
-    const double distance_to_target =
-        (current_position_ - trajectory_session_.getTargetState().position).norm();
-    if (rejoin_policy_.shouldExitRejoin(distance_to_target)) {
+    const auto& path_target = trajectory_session_.getTargetState();
+    const domain::Vec3 published_target_velocity = has_last_path_target_velocity_
+        ? last_path_target_velocity_
+        : path_target.velocity;
+    if (rejoin_policy_.shouldExitRejoin(
+            trajectory_session_.getCrossTrackError(),
+            current_velocity_,
+            path_target.velocity,
+            published_target_velocity)) {
       if (rejoin_success_candidate_start_time_ < 0.0) {
         rejoin_success_candidate_start_time_ = now;
       }
@@ -463,7 +551,7 @@ void BacktrackUseCase::handleRejoin(double now) {
   rejoin_success_candidate_start_time_ = -1.0;
 }
 
-domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
+domain::SetpointTarget BacktrackUseCase::computeSetpoint() {
   auto current_state = state_machine_.getCurrentState();
 
   // 优先使用状态机提供的setpoint（固定点悬停）
@@ -492,6 +580,9 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
                              : domain::position_target_mask::kIgnoreAcceleration;
       target.coordinate_frame = 1;  // FRAME_LOCAL_NED
 
+      last_path_target_velocity_ = target.velocity;
+      has_last_path_target_velocity_ = true;
+
       return target;
     }
   }
@@ -499,9 +590,14 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
   // ReturnRejoin状态：从回归策略计算
   if (current_state == domain::State::ReturnRejoin) {
     if (trajectory_session_.isValid()) {
-      const auto& frozen_state = trajectory_session_.getTargetState();
-      auto rejoin_state = rejoin_policy_.computeFrozenPointTarget(
-          current_position_, frozen_state);
+      const auto& path_state = trajectory_session_.getTargetState();
+      const domain::Vec3 previous_velocity = has_last_path_target_velocity_
+          ? last_path_target_velocity_
+          : path_state.velocity;
+      auto rejoin_state = rejoin_policy_.applyRejoinLimits(
+          path_state,
+          trajectory_session_.getCrossTrackError(),
+          previous_velocity);
 
       domain::SetpointTarget target;
       target.position = rejoin_state.position;
@@ -511,6 +607,9 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
       target.acceleration = std::nullopt;
       target.type_mask = domain::position_target_mask::kIgnoreAcceleration;
       target.coordinate_frame = 1;  // FRAME_LOCAL_NED
+
+      last_path_target_velocity_ = target.velocity;
+      has_last_path_target_velocity_ = true;
 
       return target;
     }
@@ -536,6 +635,9 @@ void BacktrackUseCase::triggerImmediateLanding() {
   waypoint_fallback_session_.reset();
   rejoin_trigger_candidate_start_time_ = -1.0;
   rejoin_success_candidate_start_time_ = -1.0;
+  yaw_alignment_start_time_ = -1.0;
+  yaw_alignment_timeout_reported_ = false;
+  has_last_path_target_velocity_ = false;
   state_machine_.lockPosition(current_position_, current_yaw_);
   state_machine_.triggerLanding();
 }

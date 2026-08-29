@@ -41,6 +41,11 @@ public:
   bool updateProgress(const Vec3& current_position,
                       double lookahead_time_s);
 
+  /// Rejoin 低速模式下更新路径进度：扩大局部前向窗口并随偏离缩短预瞄
+  bool updateRejoinProgress(const Vec3& current_position,
+                            double lookahead_time_s,
+                            double trigger_distance_m);
+
   /// 获取当前预瞄目标状态
   const trajectory_core::TrajectoryState& getTargetState() const;
 
@@ -114,6 +119,12 @@ private:
 
   /// 轨迹生成器（复用）
   trajectory_core::TrajectoryGenerator generator_;
+
+  /// 空间进度更新的共用实现
+  bool updateProgressImpl(const Vec3& current_position,
+                          double lookahead_time_s,
+                          double forward_window_scale,
+                          double lookahead_scale_distance_m);
 };
 
 }  // namespace domain

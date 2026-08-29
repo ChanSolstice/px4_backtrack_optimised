@@ -155,6 +155,14 @@ private:
   double rejoin_trigger_candidate_start_time_;
   double rejoin_success_candidate_start_time_;
 
+  // 返航前起始航向对准计时
+  double yaw_alignment_start_time_;
+  bool yaw_alignment_timeout_reported_;
+
+  // 上周期已发布的路径目标速度，用于 Rejoin 速度连续性
+  domain::Vec3 last_path_target_velocity_;
+  bool has_last_path_target_velocity_;
+
   // AUTO.LAND让步锁存：一旦外部降落接管，直到DISARM前都不再触发返航
   bool auto_land_yield_active_;
 
@@ -176,7 +184,7 @@ private:
                            const char* trigger_name);
 
   /// 轨迹生成处理
-  void handleTrajectoryGeneration();
+  void handleTrajectoryGeneration(double now);
 
   /// 退化 waypoint 会话执行进度处理
   void handleWaypointFallbackProgress();
@@ -184,11 +192,14 @@ private:
   /// 按实际位置更新弧长路径进度
   void handleTrajectoryProgress();
 
+  /// 轨迹是否已完成起始航向对准，可进入 ReturnActive
+  bool isTrajectoryActivationReady(double now);
+
   /// 偏离检测与回归处理
   void handleRejoin(double now);
 
   /// 计算setpoint输出
-  domain::SetpointTarget computeSetpoint(double now);
+  domain::SetpointTarget computeSetpoint();
 
   /// 检查点数是否足够
   bool checkMinPoints() const;

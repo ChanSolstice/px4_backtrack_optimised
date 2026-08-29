@@ -210,8 +210,28 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
 
 bool TrajectorySession::updateProgress(const Vec3& current_position,
                                        double lookahead_time_s) {
+  return updateProgressImpl(current_position, lookahead_time_s, 1.0, 0.0);
+}
+
+bool TrajectorySession::updateRejoinProgress(
+    const Vec3& current_position,
+    double lookahead_time_s,
+    double trigger_distance_m) {
+  return updateProgressImpl(
+      current_position, lookahead_time_s, 2.0, trigger_distance_m);
+}
+
+bool TrajectorySession::updateProgressImpl(
+    const Vec3& current_position,
+    double lookahead_time_s,
+    double forward_window_scale,
+    double lookahead_scale_distance_m) {
   if (!traj_ || !traj_->isValid() || !current_position.allFinite() ||
-      !std::isfinite(lookahead_time_s)) {
+      !std::isfinite(lookahead_time_s) ||
+      !std::isfinite(forward_window_scale) ||
+      !std::isfinite(lookahead_scale_distance_m) ||
+      forward_window_scale <= 0.0) {
+    projection_valid_ = false;
     return false;
   }
 
@@ -221,9 +241,11 @@ bool TrajectorySession::updateProgress(const Vec3& current_position,
       trajectory_v_max_m_s_ * kProjectionCycleHorizonS +
           kProjectionWindowMarginM);
   const double s_min = std::max(0.0, projected_s_ - kProjectionBackwardWindowM);
-  const double s_max = std::min(path_length, projected_s_ + forward_window);
+  const double s_max = std::min(
+      path_length, projected_s_ + forward_window * forward_window_scale);
   const auto projection = traj_->projectPosition(current_position, s_min, s_max);
   if (!projection.valid) {
+    projection_valid_ = false;
     return false;
   }
 
@@ -233,11 +255,20 @@ bool TrajectorySession::updateProgress(const Vec3& current_position,
   projection_valid_ = true;
 
   const auto projected_state = traj_->evaluateByArcLength(projected_s_);
+  double lookahead_scale = 1.0;
+  if (lookahead_scale_distance_m > 0.0) {
+    lookahead_scale = std::clamp(
+        1.0 - cross_track_error_ / lookahead_scale_distance_m, 0.0, 1.0);
+  }
   const double lookahead_m = std::clamp(
-      projected_state.velocity.norm() * std::max(0.0, lookahead_time_s),
+      projected_state.velocity.norm() * std::max(0.0, lookahead_time_s) *
+          lookahead_scale,
       kLookaheadMinM,
       kLookaheadMaxM);
-  target_s_ = std::min(projected_s_ + lookahead_m, path_length);
+  const double candidate_target_s =
+      std::min(projected_s_ + lookahead_m, path_length);
+  // 目标弧长同样不回退，Rejoin 通过实际进度追上旧预瞄目标来平滑缩短预瞄。
+  target_s_ = std::max(target_s_, candidate_target_s);
   target_state_ = traj_->evaluateByArcLength(target_s_);
   return true;
 }

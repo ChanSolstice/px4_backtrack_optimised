@@ -43,7 +43,7 @@
 1. 启动节点后，`ConfigLoader` 从参数服务器读取返航参数，再加载 `trajectory_config.yaml`。
 2. `BacktrackNode` 建立 `/mavros/state`、`/Odometry_px4`、`/mavros/rc/in` 订阅，以及 setpoint、状态发布器和 `/mavros/set_mode` 客户端。
 3. 订阅回调把状态、里程计和 RC 数据送入 `BacktrackUseCase`。
-4. 20Hz 定时器调用 `BacktrackUseCase::tick()`，由它依次处理飞行周期复位、录制延时、触发检测、轨迹生成、rejoin 与状态机推进。
+4. 20Hz 定时器调用 `BacktrackUseCase::tick()`，由它依次处理飞行周期复位、录制延时、触发检测、轨迹生成、实际位置局部投影、rejoin 与状态机推进。
 5. `BacktrackStateMachine` 决定当前是否应该发布 setpoint、是否请求切换 `OFFBOARD` / `POSCTL` / `AUTO.LAND`。
 6. Adapters 层把领域层的 `SetpointTarget` 转成 `mavros_msgs/PositionTarget` 并发布。
 
@@ -54,7 +54,7 @@
 | 接口 | 类型 | 作用 |
 | --- | --- | --- |
 | `/mavros/state` | `mavros_msgs/State` | 获取 `armed` 与当前飞控模式 |
-| `/Odometry_px4` | `nav_msgs/Odometry` | 提供当前位置、航向和录制时间戳 |
+| `/Odometry_px4` | `nav_msgs/Odometry` | 提供当前位置、线速度、航向和录制时间戳 |
 | `/mavros/rc/in` | `mavros_msgs/RCIn` | 提供 `CH7`、`CH18` 和 RC 消息时序 |
 
 ### 输出
@@ -89,8 +89,10 @@
 - `CH7` / `CH18` / `RC loss` 触发参数现在以 `backtrack_params.yaml` 为唯一运行时来源
 - `ConfigLoader` 会从 ROS 参数服务器强制读取这些触发参数；如果 launch 没有把它们加载进来，节点会在启动时报错退出
 - `TriggerConfig` 头文件不再提供业务默认值，避免“头文件默认值”和 YAML 配置并存导致行为不一致
-- rejoin 进入/退出除距离阈值外，还支持持续时间阈值；调试“频繁 rejoin”时不要只盯距离参数
-- `ReturnRejoin` 当前直接回拉到进入 rejoin 时冻结的轨迹进度点，速度为指向冻结点的比例收敛速度并受 `rejoin_v_max_m_s` 限幅；`rejoin_lookahead_time_s` 保留为兼容参数，但当前冻结点回拉链路不使用它
+- 正常返航按飞机实际位置在路径上的局部投影推进弧长，`rejoin_lookahead_time_s` 同时用于正常预瞄和 Rejoin 缩短预瞄，不再由 wall time 推进参考点
+- rejoin 进入/退出使用横向投影距离和持续时间阈值；退出还要求实际速度、已发布目标速度都接近恢复后的路径速度
+- `ReturnRejoin` 与正常返航复用同一个弧长跟随器，只扩大局部前向搜索窗口并平滑限制速度；位置和 yaw 始终来自路径预瞄点
+- 轨迹生成成功后，`ReturnPreOffboard` 保持触发位置并先对准返航起始切向 yaw；误差大于 15° 时不会开始水平返航
 
 主要分组：
 
