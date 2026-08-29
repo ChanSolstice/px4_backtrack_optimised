@@ -57,6 +57,7 @@ set(DOMAIN_SOURCES
   src/domain/state_machine.cpp
   src/domain/recording_buffer.cpp
   src/domain/trigger_evaluator.cpp
+  src/domain/path_yaw.cpp
   src/domain/trajectory_session.cpp
   src/domain/waypoint_fallback_session.cpp
   src/domain/rejoin_policy.cpp

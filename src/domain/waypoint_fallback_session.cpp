@@ -1,4 +1,5 @@
 #include "px4_backtrack/domain/waypoint_fallback_session.hpp"
+#include "px4_backtrack/domain/path_yaw.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -9,18 +10,7 @@ namespace domain {
 namespace {
 
 constexpr double kEps = 1e-9;
-constexpr double kPi = 3.14159265358979323846;
 constexpr uint16_t kPositionYawTypeMask = 0x09F8;  // ignore vel/acc/yaw_rate
-
-double shortestAngleDelta(double from, double to) {
-  double delta = std::fmod(to - from, 2.0 * kPi);
-  if (delta > kPi) {
-    delta -= 2.0 * kPi;
-  } else if (delta < -kPi) {
-    delta += 2.0 * kPi;
-  }
-  return delta;
-}
 
 std::vector<FallbackWaypoint> buildSparseReverseWaypoints(
     const std::vector<RecordPoint>& points,
@@ -34,19 +24,16 @@ std::vector<FallbackWaypoint> buildSparseReverseWaypoints(
   sparse.emplace_back(points.back().position, points.back().yaw);
 
   Vec3 segment_start_pos = points.back().position;
-  double segment_start_yaw = points.back().yaw;
   double distance_since_last = 0.0;
 
   for (size_t rev_idx = n - 1; rev_idx > 0; --rev_idx) {
     const auto& next_point = points[rev_idx - 1];
     Vec3 segment_end_pos = next_point.position;
-    double segment_end_yaw = next_point.yaw;
     Vec3 segment_vec = segment_end_pos - segment_start_pos;
     double segment_len = segment_vec.norm();
 
     if (segment_len <= kEps) {
       segment_start_pos = segment_end_pos;
-      segment_start_yaw = segment_end_yaw;
       continue;
     }
 
@@ -54,12 +41,9 @@ std::vector<FallbackWaypoint> buildSparseReverseWaypoints(
       double remain = spacing_m - distance_since_last;
       double ratio = remain / segment_len;
       Vec3 interp_pos = segment_start_pos + ratio * segment_vec;
-      double interp_yaw = segment_start_yaw +
-                          shortestAngleDelta(segment_start_yaw, segment_end_yaw) * ratio;
-      sparse.emplace_back(interp_pos, interp_yaw);
+      sparse.emplace_back(interp_pos, 0.0);
 
       segment_start_pos = interp_pos;
-      segment_start_yaw = interp_yaw;
       segment_vec = segment_end_pos - segment_start_pos;
       segment_len = segment_vec.norm();
       distance_since_last = 0.0;
@@ -71,14 +55,21 @@ std::vector<FallbackWaypoint> buildSparseReverseWaypoints(
 
     distance_since_last += segment_len;
     segment_start_pos = segment_end_pos;
-    segment_start_yaw = segment_end_yaw;
   }
 
   const auto& home = points.front();
   if ((sparse.back().position - home.position).norm() > kEps) {
-    sparse.emplace_back(home.position, home.yaw);
-  } else {
-    sparse.back().yaw = home.yaw;
+    sparse.emplace_back(home.position, 0.0);
+  }
+
+  std::vector<Vec3> positions;
+  positions.reserve(sparse.size());
+  for (const auto& waypoint : sparse) {
+    positions.push_back(waypoint.position);
+  }
+  const auto yaws = computePathTangentYaws(positions, points.back().yaw);
+  for (size_t i = 0; i < sparse.size(); ++i) {
+    sparse[i].yaw = yaws[i];
   }
 
   return sparse;

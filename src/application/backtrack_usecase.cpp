@@ -73,7 +73,9 @@ TickOutput BacktrackUseCase::tick(double now) {
   tick_input.trajectory_ready =
       trajectory_session_.isValid() || waypoint_fallback_session_.isValid();
   tick_input.trajectory_finished =
-      trajectory_session_.isFinished() || waypoint_fallback_session_.isFinished();
+      trajectory_session_.isFinished(
+          current_position_, config_.rejoin_config.success_dist_m) ||
+      waypoint_fallback_session_.isFinished();
 
   // 驱动状态机
   state_machine_.tick(tick_input);
@@ -468,7 +470,9 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
       target.yaw = traj_state.yaw;
       target.yaw_rate = traj_state.yaw_rate;
       target.acceleration = traj_state.acceleration;
-      target.type_mask = traj_state.acceleration.has_value() ? 0x0000 : 0x0038;
+      target.type_mask = traj_state.acceleration.has_value()
+                             ? 0x0000
+                             : domain::position_target_mask::kIgnoreAcceleration;
       target.coordinate_frame = 1;  // FRAME_LOCAL_NED
 
       return target;
@@ -488,7 +492,7 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint(double now) {
       target.yaw = rejoin_state.yaw;
       target.yaw_rate = rejoin_state.yaw_rate;
       target.acceleration = std::nullopt;
-      target.type_mask = 0x0038;  // IGNORE_AFX/AFY/AFZ
+      target.type_mask = domain::position_target_mask::kIgnoreAcceleration;
       target.coordinate_frame = 1;  // FRAME_LOCAL_NED
 
       return target;
@@ -515,6 +519,7 @@ void BacktrackUseCase::triggerImmediateLanding() {
   waypoint_fallback_session_.reset();
   rejoin_trigger_candidate_start_time_ = -1.0;
   rejoin_success_candidate_start_time_ = -1.0;
+  state_machine_.lockPosition(current_position_, current_yaw_);
   state_machine_.triggerLanding();
 }
 
