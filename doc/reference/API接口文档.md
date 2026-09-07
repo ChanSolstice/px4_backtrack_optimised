@@ -210,7 +210,7 @@ auto config = TrajectoryConfig::loadFromYaml("config.yaml");
 config.saveToYaml("output_config.yaml");
 ```
 
-详细参数说明请参考 [参数配置指南](参数配置指南.md)。
+详细参数说明请参考 [参数配置指南](../../../trajectory_core/doc/reference/参数配置指南.md)。
 
 ### TrajectoryState - 轨迹状态
 
@@ -1134,7 +1134,7 @@ int main() {
 
 ### Q1: 如何选择合适的参数？
 
-**A**: 参考 [参数配置指南](参数配置指南.md) 中的典型场景配置，根据实际情况调整。关键参数：
+**A**: 参考 [参数配置指南](../../../trajectory_core/doc/reference/参数配置指南.md) 中的典型场景配置，根据实际情况调整。关键参数：
 - `v_max`: 根据飞行器性能和安全要求
 - `ds_m` 和 `max_deviation_m`: 通常保持一致，0.1-0.3m
 - `yaw_rate_max`: 0.6 rad/s 适合大多数情况
@@ -1266,9 +1266,9 @@ std::string timeModeToString(TimeMode mode);
 
 ### E. 相关文档
 
-- [参数配置指南](参数配置指南.md) - 详细的参数说明
-- [任务规划](任务规划.md) - 项目开发计划
-- [技术文档](trajectory_core轨迹生成算法库.md) - 算法详细说明
+- [参数配置指南](../../../trajectory_core/doc/reference/参数配置指南.md) - 库参数说明
+- [返航改造方案](../design/弧长驱动返航路径跟随改造方案.md) - 返航侧的实现方案
+- [算法流程](../../../trajectory_core/doc/reference/轨迹生成流程_流水线说明.md) - 库的当前生成流水线
 
 ---
 

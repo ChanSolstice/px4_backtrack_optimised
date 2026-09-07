@@ -2,7 +2,7 @@
 
 `px4_backtrack_optimised` 是一个基于 ROS1 `catkin` 的 PX4 返航节点，采用接近 DDD 的分层结构实现。节点在飞行中录制航迹，在满足触发条件后使用 `trajectory_core` 生成逆序返航轨迹，并通过 MAVROS 下发 `PositionTarget` 与模式切换请求。
 
-这份 README 面向开发者和集成人员，重点说明仓库现状、模块职责、ROS 接口、配置与启动方式。更细的设计背景见 [`doc/返航实现技术文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/返航实现技术文档.md)。
+这份 README 面向开发者和集成人员，重点说明仓库现状、模块职责、ROS 接口、配置与启动方式。更细的设计背景见 [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)。
 
 ## 核心能力
 
@@ -22,7 +22,7 @@
 
 ## 仓库现状
 
-当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp)。`doc/TECHNICAL_DOCUMENTATION.md` 与 [`doc/backtrack_node.py`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/backtrack_node.py) 描述的是旧版 Python 基线；阅读当前工程时，应优先以 C++ 源码和 [`doc/返航实现技术文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/返航实现技术文档.md) 为准。
+当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp)。`doc/archive/TECHNICAL_DOCUMENTATION.md` 与 [`doc/archive/backtrack_node.py`](doc/archive/backtrack_node.py) 描述的是旧版 Python 基线；阅读当前工程时，应优先以 C++ 源码和 [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md) 为准。
 
 ## 架构概览
 
@@ -221,13 +221,12 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 │       ├── test_waypoint_fallback_session.cpp
 │       └── test_backtrack_usecase.cpp
 └── doc/
-    ├── SYSTEM_OVERVIEW.md
-    ├── 单元测试文档.md
-    ├── 返航实现技术文档.md
-    ├── 实现任务清单.md
-    ├── TECHNICAL_DOCUMENTATION.md
-    ├── API接口文档.md
-    └── backtrack_node.py
+    ├── README.md        # 文档导航
+    ├── reference/       # 系统与接口说明
+    ├── design/          # 设计方案与任务计划
+    ├── testing/         # 测试方法和执行记录
+    ├── reviews/         # 架构审核与待处理问题
+    └── archive/         # 历史问题和 Python 基线
 ```
 
 ## 测试
@@ -254,17 +253,19 @@ catkin_test_results
 
 ## 相关文档
 
-- [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md)
+- [文档导航](doc/README.md)：按用途分类的完整索引。
+- [双仓库架构与运行边界审核（2026-09-07）](doc/reviews/双仓库架构与运行边界审核_2026-09-07.md)：当前审核基线、问题证据、修复顺序和适用边界。
+- [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)
   基于当前 C++ 代码整理的系统级总览，含状态机迁移图与主要处理流程
-- [`doc/单元测试文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/单元测试文档.md)
+- [`doc/testing/单元测试文档.md`](doc/testing/单元测试文档.md)
   当前单元测试范围、运行方式、结果判读和扩展建议
-- [`doc/返航实现技术文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/返航实现技术文档.md)
+- [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)
   当前 C++ 方案的设计说明，最接近本仓库目标结构
-- [`doc/实现任务清单.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/实现任务清单.md)
+- [`doc/design/实现任务清单.md`](doc/design/实现任务清单.md)
   分阶段实现计划，适合回看模块拆分意图
-- [`doc/API接口文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/API接口文档.md)
+- [`doc/reference/API接口文档.md`](doc/reference/API接口文档.md)
   `trajectory_core` 的接口说明
-- [`doc/TECHNICAL_DOCUMENTATION.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/TECHNICAL_DOCUMENTATION.md)
+- [`doc/archive/TECHNICAL_DOCUMENTATION.md`](doc/archive/TECHNICAL_DOCUMENTATION.md)
   旧版 Python 节点行为文档，仅可作为历史对照
 
 ## 已知注意点

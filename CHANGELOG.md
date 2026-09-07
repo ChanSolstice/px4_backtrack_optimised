@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-07 — 文档分类与双仓库架构审核
+
+- 按参考、设计、测试、审核、历史资料增加一级文档目录，新增导航并更新链接。
+- 记录 `b0222e6` / `trajectory_core@fb959e4` 的架构与运行边界审核，区分离线复现、代码确认和待验证风险，列出修复顺序。
+- 本次仅调整文档与历史文件位置，没有修改算法或重跑 SITL。
+
 ## 2026-08-29 — 弧长驱动返航与统一 Rejoin 跟随
 
 将返航执行基准从 wall time 改为实际位置的局部路径投影，消除沿路径速度落后被误判为横向偏离而反复 Rejoin 的根因。
@@ -81,7 +87,7 @@
 - `tests/unit/test_rejoin_policy.cpp`
 - `README.md`
 - `LLM_MAP.md`
-- `doc/BUG_REPORT_ReturnRejoin最近点预瞄目标与冻结退出点不一致.md`
+- `doc/archive/BUG_REPORT_ReturnRejoin最近点预瞄目标与冻结退出点不一致.md`
 
 ## 2026-04-11 — 修复低速飞行段抽稀被截断
 
@@ -104,7 +110,7 @@
 - `tests/unit/test_trajectory_session.cpp`
 - `README.md`
 - `LLM_MAP.md`
-- `doc/BUG_REPORT_低速连续飞行抽稀锚点覆盖导致返航路径截断.md`
+- `doc/archive/BUG_REPORT_低速连续飞行抽稀锚点覆盖导致返航路径截断.md`
 
 ## 2026-04-10 — 轨迹失败退化为 waypoint 返航
 
@@ -135,7 +141,7 @@
 - `CMakeLists.txt`
 - `README.md`
 - `LLM_MAP.md`
-- `doc/返航实现技术文档.md`
+- `doc/reference/返航实现技术文档.md`
 
 ## 2026-04-10 — 点过近退化轨迹触发原地降落
 
@@ -150,7 +156,7 @@
 
 - **test(usecase):** 新增 `test_backtrack_usecase.cpp`，覆盖“原地悬停录到足够点数、返航生成失败后应进入 `LandingTransition` 并请求 `AUTO.LAND`”场景
 - **docs(readme/llm):** README 和 LLM_MAP 同步补充“仅点过近/起终点几何退化失败时降级原地降落”的当前行为语义
-- **docs(test):** `doc/返航功能测试文档.md` 将 `BUG-01` 标记为已修复，并保留 `TC-19` 作为对应回归用例
+- **docs(test):** `doc/testing/返航功能测试文档.md` 将 `BUG-01` 标记为已修复，并保留 `TC-19` 作为对应回归用例
 
 ### 涉及文件
 
@@ -163,7 +169,7 @@
 - `CMakeLists.txt`
 - `README.md`
 - `LLM_MAP.md`
-- `doc/返航功能测试文档.md`
+- `doc/testing/返航功能测试文档.md`
 
 ## 2026-04-10 — 抑制停顿点抽动与 rejoin 抖动
 
@@ -191,8 +197,8 @@
 - `config/trajectory_config.yaml`
 - `config/backtrack_params.yaml`
 - `tests/unit/test_trajectory_session.cpp`
-- `doc/BUG_REPORT_停顿点高密度录制导致返航抽动.md`
-- `doc/BUG_REPORT_rejoin单帧越阈值导致状态反复切换.md`
+- `doc/archive/BUG_REPORT_停顿点高密度录制导致返航抽动.md`
+- `doc/archive/BUG_REPORT_rejoin单帧越阈值导致状态反复切换.md`
 
 ## 2026-04-08 — 参数与测试文档同步调整
 
@@ -207,13 +213,13 @@
 
 ### 文档
 
-- **docs(test):** `doc/返航功能测试文档.md` 参数基线改为与当前 YAML 保持一致，并补充 `trajectory_core` 参数表
+- **docs(test):** `doc/testing/返航功能测试文档.md` 参数基线改为与当前 YAML 保持一致，并补充 `trajectory_core` 参数表
 
 ### 涉及文件
 
 - `config/backtrack_params.yaml`
 - `config/trajectory_config.yaml`
-- `doc/返航功能测试文档.md`
+- `doc/testing/返航功能测试文档.md`
 
 ## 2026-04-08 — 修复 ReturnRejoin 期间进度未冻结
 
@@ -227,15 +233,15 @@
 
 - **test(state_machine):** 补充状态机相关测试覆盖，验证进入 rejoin 后不会再残留固定点 setpoint
 - **docs(bug):** 新增两份 bug report，分别记录 `ReturnRejoin` 期间进度未冻结问题和 `current_setpoint_` 残留导致返航悬停问题
-- **docs(test):** `doc/返航功能测试文档.md` 补充实飞问题记录与用例结果
+- **docs(test):** `doc/testing/返航功能测试文档.md` 补充实飞问题记录与用例结果
 
 ### 涉及文件
 
 - `src/application/backtrack_usecase.cpp`
 - `tests/unit/test_state_machine.cpp`
-- `doc/BUG_REPORT_rejoin进度未冻结导致轨迹跟踪失败.md`
-- `doc/BUG_REPORT_setpoint残留导致返航悬停.md`
-- `doc/返航功能测试文档.md`
+- `doc/archive/BUG_REPORT_rejoin进度未冻结导致轨迹跟踪失败.md`
+- `doc/archive/BUG_REPORT_setpoint残留导致返航悬停.md`
+- `doc/testing/返航功能测试文档.md`
 
 ## 2026-04-01 — 修复固定点 setpoint 残留导致返航悬停
 
@@ -255,8 +261,8 @@
 
 ### 新增
 
-- **docs(test):** 新增 `doc/单元测试文档.md`，说明当前 `gtest` 覆盖范围、运行方式、结果判读与扩展建议
-- **docs(test):** 新增 `doc/返航功能测试文档.md`，定义返航主流程、触发、rejoin、降落和 `AUTO.LAND` 让步等测试项
+- **docs(test):** 新增 `doc/testing/单元测试文档.md`，说明当前 `gtest` 覆盖范围、运行方式、结果判读与扩展建议
+- **docs(test):** 新增 `doc/testing/返航功能测试文档.md`，定义返航主流程、触发、rejoin、降落和 `AUTO.LAND` 让步等测试项
 
 ### 文档
 
@@ -264,8 +270,8 @@
 
 ### 涉及文件
 
-- `doc/单元测试文档.md`
-- `doc/返航功能测试文档.md`
+- `doc/testing/单元测试文档.md`
+- `doc/testing/返航功能测试文档.md`
 - `README.md`
 
 ## 2026-03-26 — 触发参数配置来源收口到 YAML
@@ -341,14 +347,14 @@
 
 ### 文档
 
-- **docs(system):** `doc/SYSTEM_OVERVIEW.md` 补充状态机主状态迁移图、全局覆盖规则与 `LandingTransition` 内部阶段图
+- **docs(system):** `doc/reference/SYSTEM_OVERVIEW.md` 补充状态机主状态迁移图、全局覆盖规则与 `LandingTransition` 内部阶段图
 - **docs(llm):** `LLM_MAP.md` 更新测试现状说明，明确仓库已具备基础领域层单元测试
 - **docs(readme):** `README.md` 补充测试目录、测试命令与 `SYSTEM_OVERVIEW` 文档入口
 
 ### 涉及文件
 
 - `CMakeLists.txt`
-- `doc/SYSTEM_OVERVIEW.md`
+- `doc/reference/SYSTEM_OVERVIEW.md`
 - `tests/unit/test_main.cpp`
 - `tests/unit/test_recording_buffer.cpp`
 - `tests/unit/test_trigger_evaluator.cpp`
@@ -372,9 +378,9 @@
 
 ### 文档
 
-- **docs(api):** `doc/API接口文档.md` 按新版 `trajectory_core` 能力刷新，补充 `warning_flags`、`ResultWarning`、`curvatureFromArcLength()`、逐点 `dt` yaw limiter、YAML 覆盖范围等说明
-- **docs(system):** 新增 `doc/SYSTEM_OVERVIEW.md`，提供基于当前 C++ 实现整理的系统级概览
-- **docs(tech):** `doc/返航实现技术文档.md` 中的 waypoint 时间戳构造规则更新为镜像映射语义
+- **docs(api):** `doc/reference/API接口文档.md` 按新版 `trajectory_core` 能力刷新，补充 `warning_flags`、`ResultWarning`、`curvatureFromArcLength()`、逐点 `dt` yaw limiter、YAML 覆盖范围等说明
+- **docs(system):** 新增 `doc/reference/SYSTEM_OVERVIEW.md`，提供基于当前 C++ 实现整理的系统级概览
+- **docs(tech):** `doc/reference/返航实现技术文档.md` 中的 waypoint 时间戳构造规则更新为镜像映射语义
 - **docs(llm):** `LLM_MAP.md` 更新 `trajectory_core` 时间戳接入真相，并补充对高层概览文档使用边界的提醒
 
 ### 涉及文件
@@ -382,9 +388,9 @@
 - `include/px4_backtrack/domain/trajectory_session.hpp`
 - `src/domain/trajectory_session.cpp`
 - `src/application/backtrack_usecase.cpp`
-- `doc/API接口文档.md`
-- `doc/SYSTEM_OVERVIEW.md`
-- `doc/返航实现技术文档.md`
+- `doc/reference/API接口文档.md`
+- `doc/reference/SYSTEM_OVERVIEW.md`
+- `doc/reference/返航实现技术文档.md`
 - `LLM_MAP.md`
 
 ## 2026-03-20 — 代码审核修复
