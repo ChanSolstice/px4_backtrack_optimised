@@ -11,6 +11,7 @@
 - **refactor(rejoin):** `ReturnRejoin` 复用同一弧长跟随器，扩大局部搜索、缩短预瞄并平滑限速；删除全局最近时间搜索和冻结点回拉逻辑
 - **fix(yaw):** `ReturnPreOffboard` 与暂停恢复先保持位置并对准路径切向 yaw，15° 内才允许开始水平返航
 - **fix(yaw):** 用至少 `0.20 m` 的稳定弦长估计录制路径切向，避免端点厘米级悬停漂移导致返航 yaw 翻转
+- **fix(recording):** 保留真实末点时回退删除过近的中间点，满足末端最小间距且不截断低速路径
 - **fix(odom):** 按 `nav_msgs/Odometry` 语义将 child/body twist 旋转到父 ENU，再用于 Rejoin 与终点速度判定
 - **fix(continuity):** Rejoin 退出同时检查横向误差、实际速度和已发布目标速度，限制单周期参考速度向量变化不超过 `0.3 m/s`
 - **fix(rejoin):** 将 `0.4 m` Rejoin 安全走廊与固定 `0.2 m` 终点精度解耦，避免正常三维跟踪误差使 Rejoin 卡到终点
@@ -20,9 +21,15 @@
 
 - 覆盖慢速沿线跟随、单调进度、自交路径局部投影、空间终点判定和投影失败保持
 - 覆盖起始/恢复 yaw 对准、Rejoin 路径 yaw、速度未收敛不退出和退出前后目标连续性
-- 当前两个仓库源码在干净 catkin 工作空间完成 `324` 项测试，`0` 失败
+- 当前两个仓库源码在干净 catkin 工作空间完成实际 testcase `162 / 162`；`catkin_test_results` 原始 `324` 为 XML 重复累计，`0` 失败
 - Docker SITL 完成 3 m/8 m 直线、L 型、S 型、普通自交、受控 Rejoin 和加速度 A/B；生产配置名义场景 Rejoin 为 `0`
+- 直线起始掉头将 PX4 `MC_YAWRATE_MAX` 临时设为 `45 deg/s` 后，实测 yaw rate 峰值 `44.90 deg/s`；该试验没有修改仓库配置
 - 闭合且起终点重合的 figure-8 暴露 `trajectory_core` 端点 yaw/速度方向冲突，当前列为禁止实飞的跨仓库残余风险
+
+### 已知边界
+
+- `ReturnPreOffboard` 会一步设置返航起始切向 yaw，并以 `15°` 门限决定何时开始平移；应用层没有起始 yaw 斜坡或速率限制器
+- `trajectory_config.yaml` 的 `yaw_rate_max` 只约束运动轨迹 yaw，原地对准速率由 PX4 参数和飞控内环决定
 
 ## 2026-04-12 — AUTO.LAND 让步锁存
 

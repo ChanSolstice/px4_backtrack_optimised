@@ -181,6 +181,8 @@ RC 丢失检测已拆分为两个方法：
 
 因此恢复路径会重新走 `ReturnPreOffboard` 完成航向对准，而不是直接跳回 `ReturnActive`；进入 `ReturnActive` 后再由实际位置重新投影，不需要修正任何时间基准。
 
+注意：`ReturnPreOffboard` 的保持位置 setpoint 会一步切换到目标路径 yaw，应用层只用 `15°` 误差门限和 `10 s` 超时做放行检查，没有 yaw 斜坡或角速度限制器。`trajectory_config.yaml::yaw_rate_max` 只作用于生成后的运动轨迹；原地对准速度由 PX4（如 `MC_YAWRATE_MAX`）及飞控内环约束。
+
 ### 5. AUTO.LAND 是全局让步分支，并在 UseCase 层锁存到 DISARM
 
 `BacktrackUseCase::handleAutoLandYield()` 一旦看到 armed 状态下 `mode == "AUTO.LAND"`，会锁存 `auto_land_yield_active_`，清理轨迹/退化返航/rejoin 临时状态，并在 DISARM 之前跳过录制延时、触发检测、轨迹生成、fallback 推进和 rejoin 处理。这样即使 PX4/MAVROS 模式短暂跳出 `AUTO.LAND`，节点也不会重新触发返航或请求 `OFFBOARD`。

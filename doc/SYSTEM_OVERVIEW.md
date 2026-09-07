@@ -449,7 +449,7 @@
 
 - 走廊偏差约束：`max_deviation_m`
 - 拐角处理参数：`corner_angle_threshold_deg`、`corner_blend_len_m`、`corner_blend_ratio`
-- yaw 平滑与 yaw 速率限制：`enable_yaw_smooth`、`max_yaw_deviation_rad`、`yaw_rate_max`
+- 生成后运动轨迹的 yaw 平滑与速率限制：`enable_yaw_smooth`、`max_yaw_deviation_rad`、`yaw_rate_max`；不包括 `ReturnPreOffboard` 的原地起始对准
 - 末端收敛参数：`enable_end_converge`、`s_stop_m`、`r_stop_m`、`v_end_max`
 - 速度约束：`v_max`、`vz_max`
 - 加速度约束：`a_tan_max`、`a_lat_max`、`az_up_max`、`az_down_max`
