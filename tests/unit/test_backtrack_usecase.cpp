@@ -504,5 +504,43 @@ TEST(BacktrackUseCaseTest, LowBatteryInPausedBroadcastsButDoesNotResume) {
   EXPECT_TRUE(output.low_battery);
 }
 
+TEST(BacktrackUseCaseTest, LowBatteryDuringWaitRecordDelayBroadcastsWithoutLandingOrReturn) {
+  auto config = makeConfig();
+  config.record_delay_s = 15.0;
+  config.trigger_config.enable_ch7 = false;
+  config.trigger_config.enable_low_battery = true;
+  config.trigger_config.low_battery_threshold = 0.15;
+  config.trigger_config.low_battery_confirm_s = 3.0;
+
+  BacktrackUseCase usecase(config);
+
+  usecase.onStateReceived(false, "");
+  usecase.tick(0.0);
+  usecase.onStateReceived(true, "POSCTL");
+  auto output = usecase.tick(0.1);
+  EXPECT_EQ(output.current_state, domain::State::WaitRecordDelay);
+  EXPECT_FALSE(output.low_battery);
+
+  // 在 WaitRecordDelay 阶段（前15秒）收到低电量数据
+  usecase.onBatteryReceived(0.10);
+  output = usecase.tick(1.0);
+  EXPECT_EQ(output.current_state, domain::State::WaitRecordDelay);
+  EXPECT_FALSE(output.low_battery);
+
+  // 超过确认延时（3.0s）后，低电量确认触发
+  output = usecase.tick(4.5);
+  // 核心业务设计：前15s延时期内不自动降落也不触发返航，但必须广播 low_battery = true 供前端提示
+  EXPECT_EQ(output.current_state, domain::State::WaitRecordDelay);
+  EXPECT_TRUE(output.low_battery);
+  EXPECT_FALSE(output.should_publish_setpoint);
+  EXPECT_FALSE(output.mode_request.has_value());
+
+  // 延时到达（1.0 + 15.0 = 16.0s）后自然进入 Recording
+  output = usecase.tick(16.5);
+  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_TRUE(output.low_battery);
+  EXPECT_FALSE(output.should_publish_setpoint);
+}
+
 }  // namespace
 }  // namespace px4_backtrack::application
