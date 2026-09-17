@@ -13,6 +13,7 @@ add_compile_options(-Wall -Wextra)
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   std_msgs
+  sensor_msgs
   nav_msgs
   geometry_msgs
   mavros_msgs
@@ -32,6 +33,7 @@ catkin_package(
   CATKIN_DEPENDS
     roscpp
     std_msgs
+    sensor_msgs
     nav_msgs
     geometry_msgs
     mavros_msgs
