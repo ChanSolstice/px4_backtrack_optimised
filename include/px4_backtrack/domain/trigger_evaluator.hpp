@@ -28,6 +28,11 @@ struct TriggerConfig {
   bool enable_rc_loss{};         ///< 是否启用RC丢失触发
   double rc_loss_timeout_s{};    ///< RC消息超时时间 (s)
   double rc_loss_debounce_s{};   ///< RC丢失防抖时间 (s)
+
+  // 低电量触发参数
+  bool enable_low_battery{};         ///< 是否启用低电量触发
+  double low_battery_threshold{};    ///< 低电量阈值 (0.0~1.0)，低于此值视为低电量
+  double low_battery_confirm_s{};    ///< 低电量确认时间 (s)
 };
 
 // ============================================================================
@@ -73,6 +78,18 @@ public:
   /// @return RC是否处于丢失状态
   bool isRCLost() const;
 
+  /// 更新电池电量
+  /// @param percentage 电量百分比 (0.0~1.0)
+  void updateBattery(double percentage);
+
+  /// 检测低电量事件（边沿触发，仅在首次确认低电量时返回true）
+  /// @return 是否刚刚确认低电量触发
+  bool checkLowBatteryEvent();
+
+  /// 查询低电量持续状态（电平语义，触发后持续返回true）
+  /// @return 是否处于低电量状态
+  bool isLowBattery() const;
+
 private:
   /// 配置参数
   TriggerConfig config_;
@@ -100,6 +117,13 @@ private:
   double rc_loss_debounce_start_time_; ///< 防抖开始时间
   bool rc_loss_triggered_;        ///< 是否已触发RC丢失
   bool has_received_rc_;          ///< 是否收到过RC消息（启动保护）
+
+  // 低电量状态
+  double battery_percentage_;           ///< 最新电量百分比
+  bool low_battery_active_;             ///< 是否处于低电量确认判定中
+  double low_battery_start_time_;       ///< 低电量开始时间
+  bool low_battery_triggered_;          ///< 是否已确认低电量触发（锁存，不可逆）
+  bool has_received_battery_;           ///< 是否收到过电池消息（启动保护）
 
   // 当前RC通道值
   std::vector<uint16_t> current_channels_;

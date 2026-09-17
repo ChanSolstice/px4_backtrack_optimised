@@ -16,7 +16,12 @@ TriggerEvaluator::TriggerEvaluator(const TriggerConfig& config)
     rc_loss_debouncing_(false),
     rc_loss_debounce_start_time_(0.0),
     rc_loss_triggered_(false),
-    has_received_rc_(false)
+    has_received_rc_(false),
+    battery_percentage_(1.0),
+    low_battery_active_(false),
+    low_battery_start_time_(0.0),
+    low_battery_triggered_(false),
+    has_received_battery_(false)
 {
 }
 
@@ -197,6 +202,58 @@ bool TriggerEvaluator::isRCLost() const {
     return false;
   }
   return rc_loss_triggered_;
+}
+
+void TriggerEvaluator::updateBattery(double percentage) {
+  battery_percentage_ = percentage;
+  has_received_battery_ = true;
+  // 注意：与 RC loss 不同，电量回升不重置 low_battery_triggered_。
+  // 电池电量是不可逆消耗的资源，波动回升不应取消已触发的安全返航。
+}
+
+bool TriggerEvaluator::checkLowBatteryEvent() {
+  if (!config_.enable_low_battery) {
+    return false;
+  }
+
+  // 启动保护：只有收到过电池消息后才检测
+  if (!has_received_battery_) {
+    return false;
+  }
+
+  // 已触发过，不再重复触发（边沿语义）
+  if (low_battery_triggered_) {
+    return false;
+  }
+
+  bool is_low = (battery_percentage_ < config_.low_battery_threshold);
+
+  if (is_low) {
+    if (!low_battery_active_) {
+      // 开始确认计时
+      low_battery_active_ = true;
+      low_battery_start_time_ = now_;
+    }
+
+    // 检查确认时间
+    double duration = now_ - low_battery_start_time_;
+    if (duration >= config_.low_battery_confirm_s) {
+      low_battery_triggered_ = true;
+      return true;  // 边沿触发，仅此一次
+    }
+  } else {
+    // 电量回到阈值以上时重置"确认中"状态（但不重置已触发的锁存）
+    low_battery_active_ = false;
+  }
+
+  return false;
+}
+
+bool TriggerEvaluator::isLowBattery() const {
+  if (!config_.enable_low_battery) {
+    return false;
+  }
+  return low_battery_triggered_;
 }
 
 }  // namespace domain
