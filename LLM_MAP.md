@@ -4,7 +4,7 @@
 
 这份文档不是给最终用户看的，而是给后续阅读、解释或修改本仓库的 LLM/自动化代理看的。目标是让模型先建立正确的代码地图，再动手改动，减少把旧版 Python 文档误当成现状、或者只改一层没改全链路的风险。
 
-## 先记住这 11 条
+## 先记住这 12 条
 
 1. 这是 ROS1 `catkin` 工程，不是 ROS2。
 2. 当前主实现入口是 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp)。
@@ -17,13 +17,14 @@
 9. 需要判断“行为真相”时，优先级是：`src/*.cpp` + `include/*.hpp` > `config/*.yaml` > `launch/` > `doc/reference/返航实现技术文档.md` > 旧版 Python 文档。
 10. 当前代码有开发中痕迹，写说明或补丁前要先检查接口是否自洽。
 11. 仓库现在已经有基础 `gtest` 单元测试，优先先跑 `RecordingBuffer` / `TriggerEvaluator` / `StateMachine` / `RejoinPolicy` / `TrajectorySession`，不要再默认“完全没有测试”。
+12. 触发方式现包括 `CH7` 长按、`CH18` 故障确认、RC 消息丢失和低电量触发；低电量采用边沿触发与持续锁存，Paused 状态不自动恢复返航，通过 `/px4_backtrack/low_battery` 广播状态。
 
 ## 真正的入口与控制流
 
 控制流从 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp) 开始：
 
 1. `ConfigLoader::loadFromROS()` 读取 ROS 参数和 `trajectory_core` 配置。
-   其中 `CH7` / `CH18` / `RC loss` 触发参数是必填参数，缺失会直接抛异常，不会回退到 `TriggerConfig` 头文件默认值。
+   其中 `CH7` / `CH18` / `RC loss` / `Low battery` 触发参数是必填参数，缺失会直接抛异常，不会回退到 `TriggerConfig` 头文件默认值。
 2. 构造 ROS adapters：
    - `StateSubscriber`
    - `OdomSubscriber`
@@ -96,11 +97,11 @@
 
 - [`include/px4_backtrack/adapters/ros_subscribers.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/adapters/ros_subscribers.hpp)
 - [`src/adapters/ros_subscribers.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/adapters/ros_subscribers.cpp)
-  封装 3 个订阅器，默认话题分别是 `/mavros/state`、`/Odometry_px4`、`/mavros/rc/in`。
+  封装 4 个订阅器，默认话题分别是 `/mavros/state`、`/Odometry_px4`、`/mavros/rc/in`、`/mavros/battery`。
 
 - [`include/px4_backtrack/adapters/ros_publishers.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/adapters/ros_publishers.hpp)
 - [`src/adapters/ros_publishers.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/adapters/ros_publishers.cpp)
-  封装 `/mavros/setpoint_raw/local`、`/px4_backtrack/state`、`/status_rc_loss`。
+  封装 `/mavros/setpoint_raw/local`、`/px4_backtrack/state`、`/status_rc_loss`、`/px4_backtrack/low_battery`。
 
 - [`include/px4_backtrack/adapters/ros_services.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/adapters/ros_services.hpp)
 - [`src/adapters/ros_services.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/adapters/ros_services.cpp)
@@ -221,6 +222,14 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 ### 9. 返航开始前必须完成路径切向 yaw 对准
 
 轨迹生成后，`ReturnPreOffboard` 保持触发位置，但将 hold yaw 更新为 `evaluateByArcLength(0).yaw`。只有 OFFBOARD、轨迹就绪且 yaw 误差不大于 15° 时才进入 `ReturnActive`；10s 超时只报错并继续悬停，不允许带大角度误差开始平移。暂停恢复使用保留路径目标的 yaw，语义相同。
+
+### 10. 低电量返航触发语义与竞态防护
+
+低电量触发具备以下关键语义：
+- **边沿触发与确认延时**：电量百分比（来自 `/mavros/battery` 的 `percentage`，0~1）必须持续低于阈值达到 `low_battery_confirm_s`（默认 3.0s），`checkLowBatteryEvent()` 仅在确认瞬间返回一次 `true`。
+- **不可逆锁存**：一旦触发，`isLowBattery()` 持续返回 `true`，即使后续电压回弹也不取消已触发标记。
+- **优先级与时序隔离**：`Recording` 下排在 RC loss 之后；在每个 tick 开头统一读取一次事件边沿并在主线程中消费，避免并发竞态。
+- **Paused 状态行为**：暂停状态下低电量**不自动恢复返航**，仅持续通过 `/px4_backtrack/low_battery` 广播电平状态供前端弹窗提示。
 
 ## 常见改动应该改哪里
 
