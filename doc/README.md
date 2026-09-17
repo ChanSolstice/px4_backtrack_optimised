@@ -20,6 +20,7 @@
 ## 参考说明
 
 - [系统总览](reference/SYSTEM_OVERVIEW.md)
+- [前端对接开发文档](reference/前端对接开发文档.md)：地面站/Web 监控端数据对接、状态映射、告警弹窗及可视化接入指南。
 - [返航实现技术文档](reference/返航实现技术文档.md)
 - [trajectory_core API 接口参考](reference/API接口文档.md)：本仓库保留的集成参考；库接口以 [trajectory_core 文档导航](../../trajectory_core/doc/README.md) 和该库实际头文件为准。
 
