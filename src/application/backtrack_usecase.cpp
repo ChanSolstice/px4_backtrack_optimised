@@ -116,6 +116,7 @@ TickOutput BacktrackUseCase::tick(double now) {
   output.mode_request = state_machine_.getModeRequest();
   output.current_state = state_machine_.getCurrentState();
   output.rc_loss = trigger_evaluator_.isRCLost();
+  output.low_battery = trigger_evaluator_.isLowBattery();
 
   // 计算setpoint
   if (output.should_publish_setpoint) {
@@ -151,6 +152,10 @@ void BacktrackUseCase::onRCReceived(const std::vector<uint16_t>& channels) {
 void BacktrackUseCase::onStateReceived(bool armed, const std::string& mode) {
   current_armed_ = armed;
   current_mode_ = mode;
+}
+
+void BacktrackUseCase::onBatteryReceived(double percentage) {
+  trigger_evaluator_.updateBattery(percentage);
 }
 
 // ============================================================================
@@ -245,6 +250,7 @@ void BacktrackUseCase::handleTriggers(double now) {
   }
 
   bool rc_loss_event = trigger_evaluator_.checkRCLossEvent();
+  bool low_battery_event = trigger_evaluator_.checkLowBatteryEvent();
 
   // 在Recording状态检测返航触发
   if (current_state == domain::State::Recording) {
@@ -271,6 +277,14 @@ void BacktrackUseCase::handleTriggers(double now) {
       handleReturnTrigger(domain::Event::RCLossTriggered,
                           has_min_points,
                           "RC loss");
+      return;
+    }
+
+    // 低电量触发检测（边沿触发，仅触发一次）
+    if (low_battery_event) {
+      handleReturnTrigger(domain::Event::LowBatteryTriggered,
+                          has_min_points,
+                          "Low battery");
       return;
     }
   }
