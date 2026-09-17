@@ -37,6 +37,9 @@ private:
   /// 加载RC丢失参数
   static void loadRCLossParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
 
+  /// 加载低电量参数
+  static void loadLowBatteryParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
+
   /// 加载OFFBOARD参数
   static void loadOffboardParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
 
