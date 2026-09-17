@@ -103,6 +103,9 @@ enum class Event {
   /// RC消息丢失
   RCLossTriggered,
 
+  /// 低电量触发
+  LowBatteryTriggered,
+
   /// 15s悬停等待结束
   HoverWaitElapsed,
 
