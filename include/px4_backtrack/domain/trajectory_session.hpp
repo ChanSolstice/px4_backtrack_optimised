@@ -11,7 +11,7 @@ namespace domain {
 // TrajectorySession类
 // ============================================================================
 
-/// 轨迹会话管理（生成、进度跟踪、评估）
+/// 轨迹会话管理（生成、空间进度跟踪、目标查询）
 class TrajectorySession {
 public:
   enum class FailureKind {
@@ -34,16 +34,28 @@ public:
   bool generate(const std::vector<RecordPoint>& points,
                 const trajectory_core::TrajectoryConfig& config);
 
-  /// 评估当前时刻的轨迹状态
-  /// @param current_walltime 当前wall time (s)
-  /// @return 轨迹状态
-  trajectory_core::TrajectoryState evaluate(double current_walltime);
-
-  /// 检查时间进度结束且飞机已进入终点位置容差
+  /// 根据飞机实际位置更新路径投影进度和预瞄目标
   /// @param current_position 飞机当前位置
+  /// @param lookahead_time_s 预瞄时间
+  /// @return 本周期投影是否成功；失败时保留上一个合法目标
+  bool updateProgress(const Vec3& current_position,
+                      double lookahead_time_s);
+
+  /// Rejoin 低速模式下更新路径进度：扩大局部前向窗口并随偏离缩短预瞄
+  bool updateRejoinProgress(const Vec3& current_position,
+                            double lookahead_time_s,
+                            double trigger_distance_m);
+
+  /// 获取当前预瞄目标状态
+  const trajectory_core::TrajectoryState& getTargetState() const;
+
+  /// 检查空间进度、终点位置和水平速度是否均已收敛
+  /// @param current_position 飞机当前位置
+  /// @param current_velocity 飞机当前速度
   /// @param position_tolerance_m 终点位置容差
   /// @return 是否完成
   bool isFinished(const Vec3& current_position,
+                  const Vec3& current_velocity,
                   double position_tolerance_m) const;
 
   /// 检查轨迹是否有效
@@ -54,20 +66,17 @@ public:
   /// @return 轨迹对象指针（可能为nullptr）
   const trajectory_core::Trajectory* getTrajectory() const;
 
-  /// 获取当前进度时间
-  /// @return 进度时间 (s)
-  double getProgress() const;
+  /// 获取实际位置在路径上的投影弧长
+  double getProjectedArcLength() const;
 
-  /// 设置进度时间（用于暂停/恢复）
-  /// @param t_progress 进度时间 (s)
-  void setProgress(double t_progress);
+  /// 获取当前预瞄目标弧长
+  double getTargetArcLength() const;
 
-  /// 冻结进度（暂停时调用）
-  void freezeProgress();
+  /// 获取最近一次有效投影的横向距离
+  double getCrossTrackError() const;
 
-  /// 恢复进度（从暂停恢复时调用）
-  /// @param current_walltime 当前wall time (s)
-  void resumeProgress(double current_walltime);
+  /// 最近一次路径投影是否有效
+  bool hasValidProjection() const;
 
   /// 获取最近一次生成轨迹的耗时
   /// @return 耗时 (ms)
@@ -84,17 +93,23 @@ private:
   /// 轨迹对象
   std::unique_ptr<trajectory_core::Trajectory> traj_;
 
-  /// 当前进度时间（轨迹内部时间）
-  double t_progress_;
+  /// 实际位置在路径上的单调投影进度
+  double projected_s_;
 
-  /// 开始执行时的wall time
-  double t_start_walltime_;
+  /// 当前发布目标的路径进度
+  double target_s_;
 
-  /// 进度是否冻结（暂停时为true）
-  bool progress_frozen_;
+  /// 最近一次有效投影的横向距离
+  double cross_track_error_;
 
-  /// 冻结时的进度时间
-  double frozen_progress_;
+  /// 是否已有有效投影
+  bool projection_valid_;
+
+  /// 当前预瞄目标状态；投影失败时保持最后合法值
+  trajectory_core::TrajectoryState target_state_;
+
+  /// 生成轨迹所用的最大速度，用于约束局部投影窗口
+  double trajectory_v_max_m_s_;
 
   /// 最近一次生成轨迹的耗时 (ms)
   double last_generate_cost_ms_;
@@ -104,6 +119,12 @@ private:
 
   /// 轨迹生成器（复用）
   trajectory_core::TrajectoryGenerator generator_;
+
+  /// 空间进度更新的共用实现
+  bool updateProgressImpl(const Vec3& current_position,
+                          double lookahead_time_s,
+                          double forward_window_scale,
+                          double lookahead_scale_distance_m);
 };
 
 }  // namespace domain

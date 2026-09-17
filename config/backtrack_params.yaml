@@ -75,8 +75,8 @@ pre_offboard_setpoint_count: 20
 # 触发回归的偏离距离 (m)
 rejoin_trigger_dist_m: 0.5
 
-# 成功回归的距离阈值 (m)
-rejoin_success_dist_m: 0.2
+# 成功回到安全走廊的距离阈值 (m)，须小于触发距离
+rejoin_success_dist_m: 0.4
 
 # 回归时的最大速度 (m/s)
 rejoin_v_max_m_s: 0.3

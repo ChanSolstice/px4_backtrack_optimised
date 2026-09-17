@@ -2,26 +2,27 @@
 
 `px4_backtrack_optimised` 是一个基于 ROS1 `catkin` 的 PX4 返航节点，采用接近 DDD 的分层结构实现。节点在飞行中录制航迹，在满足触发条件后使用 `trajectory_core` 生成逆序返航轨迹，并通过 MAVROS 下发 `PositionTarget` 与模式切换请求。
 
-这份 README 面向开发者和集成人员，重点说明仓库现状、模块职责、ROS 接口、配置与启动方式。更细的设计背景见 [`doc/返航实现技术文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/返航实现技术文档.md)。
+这份 README 面向开发者和集成人员，重点说明仓库现状、模块职责、ROS 接口、配置与启动方式。更细的设计背景见 [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)。
 
 ## 核心能力
 
 - 飞行周期复位后延时开始录制航迹
 - 支持 3 类返航触发：`CH7` 长按、`CH18` 故障确认、RC 消息丢失
 - 使用 `trajectory_core` 从录制点逆序生成平滑返航轨迹
-- 返航中支持偏离检测与 rejoin
+- 按实际位置的局部路径投影推进弧长，不依赖 wall time 追赶参考点
+- 返航中支持与正常跟随共用路径目标的低速 rejoin
 - 轨迹生成前会对停顿/悬停形成的高密度录制点做空间抽稀，低于阈值的中间点直接忽略，减小停顿点附近抽动并避免低速段被截断
 - 返航中支持暂停，再次触发后恢复
 - rejoin 进入/退出支持持续判定，避免单帧误差导致状态来回切换
 - 触发时若录制点数不足，自动降级为原地降落
 - 轨迹生成失败时，可恢复的非几何退化场景自动切换为 waypoint 退化返航；点过近时原地降落；非法配置不会被 fallback 掩盖
-- 返航结束后先固定点悬停，再发起 `POSCTL -> AUTO.LAND` 过渡（非 OFFBOARD 时直接请求 `AUTO.LAND`）
+- 返航结束后先固定点悬停，再发起 `POSCTL -> AUTO.LAND` 过渡（非 OFFBOARD 时直接请求 `AUTO.LAND`）；飞控接管后进入 `AutoLandYield` 直到 DISARM
 - 发布内部状态与 RC 丢失持续状态，便于联调
 - 可选 debug 模式：轨迹生成后自动导出录制航点与返航轨迹 CSV，并可在 rviz 中实时查看
 
 ## 仓库现状
 
-当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp)。`doc/TECHNICAL_DOCUMENTATION.md` 与 [`doc/backtrack_node.py`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/backtrack_node.py) 描述的是旧版 Python 基线；阅读当前工程时，应优先以 C++ 源码和 [`doc/返航实现技术文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/返航实现技术文档.md) 为准。
+当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp)。`doc/archive/TECHNICAL_DOCUMENTATION.md` 与 [`doc/archive/backtrack_node.py`](doc/archive/backtrack_node.py) 描述的是旧版 Python 基线；阅读当前工程时，应优先以 C++ 源码和 [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md) 为准。
 
 ## 架构概览
 
@@ -43,7 +44,7 @@
 1. 启动节点后，`ConfigLoader` 从参数服务器读取返航参数，再加载 `trajectory_config.yaml`。
 2. `BacktrackNode` 建立 `/mavros/state`、`/Odometry_px4`、`/mavros/rc/in` 订阅，以及 setpoint、状态发布器和 `/mavros/set_mode` 客户端。
 3. 订阅回调把状态、里程计和 RC 数据送入 `BacktrackUseCase`。
-4. 20Hz 定时器调用 `BacktrackUseCase::tick()`，由它依次处理飞行周期复位、录制延时、触发检测、轨迹生成、rejoin 与状态机推进。
+4. 20Hz 定时器调用 `BacktrackUseCase::tick()`，由它依次处理飞行周期复位、录制延时、触发检测、轨迹生成、实际位置局部投影、rejoin 与状态机推进。
 5. `BacktrackStateMachine` 决定当前是否应该发布 setpoint、是否请求切换 `OFFBOARD` / `POSCTL` / `AUTO.LAND`。
 6. Adapters 层把领域层的 `SetpointTarget` 转成 `mavros_msgs/PositionTarget` 并发布。
 
@@ -54,7 +55,7 @@
 | 接口 | 类型 | 作用 |
 | --- | --- | --- |
 | `/mavros/state` | `mavros_msgs/State` | 获取 `armed` 与当前飞控模式 |
-| `/Odometry_px4` | `nav_msgs/Odometry` | 提供当前位置、航向和录制时间戳 |
+| `/Odometry_px4` | `nav_msgs/Odometry` | 提供当前位置、线速度、航向和录制时间戳 |
 | `/mavros/rc/in` | `mavros_msgs/RCIn` | 提供 `CH7`、`CH18` 和 RC 消息时序 |
 
 ### 输出
@@ -76,6 +77,7 @@
 说明：
 
 - 坐标约定使用 ENU；`SetpointPublisher` 将 ENU 值直接填入 `FRAME_LOCAL_NED` 的 `PositionTarget`，依赖 MAVROS 完成坐标转换。
+- `/Odometry_px4` 的 pose 位于父 ENU，twist 按 `nav_msgs/Odometry` 语义位于 `child_frame_id`；订阅适配器会先将线速度旋转到父 ENU，再交给终点和 Rejoin 判定。
 - `/status_rc_loss` 是电平语义：RC 丢失期间持续为 `true`，RC 恢复后自动回到 `false`。
 
 ## 配置
@@ -89,8 +91,12 @@
 - `CH7` / `CH18` / `RC loss` 触发参数现在以 `backtrack_params.yaml` 为唯一运行时来源
 - `ConfigLoader` 会从 ROS 参数服务器强制读取这些触发参数；如果 launch 没有把它们加载进来，节点会在启动时报错退出
 - `TriggerConfig` 头文件不再提供业务默认值，避免“头文件默认值”和 YAML 配置并存导致行为不一致
-- rejoin 进入/退出除距离阈值外，还支持持续时间阈值；调试“频繁 rejoin”时不要只盯距离参数
-- `ReturnRejoin` 当前直接回拉到进入 rejoin 时冻结的轨迹进度点，速度为指向冻结点的比例收敛速度并受 `rejoin_v_max_m_s` 限幅；`rejoin_lookahead_time_s` 保留为兼容参数，但当前冻结点回拉链路不使用它
+- 正常返航按飞机实际位置在路径上的局部投影推进弧长，`rejoin_lookahead_time_s` 同时用于正常预瞄和 Rejoin 缩短预瞄，不再由 wall time 推进参考点
+- rejoin 进入/退出使用当前位置到三维局部投影点的距离和持续时间阈值；退出还要求实际速度、已发布目标速度都接近恢复后的路径速度
+- `ReturnRejoin` 与正常返航复用同一个弧长跟随器，只扩大局部前向搜索窗口并平滑限制速度；位置和 yaw 始终来自路径预瞄点
+- 生产配置以 `0.5 m` 触发 Rejoin、以 `0.4 m` 回到安全走廊；最终到点精度独立固定为 `0.2 m`，二者不能再共用阈值
+- 轨迹生成成功后，`ReturnPreOffboard` 保持触发位置并先对准返航起始切向 yaw；误差大于 15° 时不会开始水平返航
+- 起始对准会一次设置目标 yaw，当前节点不生成原地转向的 yaw 斜坡；`trajectory_config.yaml` 的 `yaw_rate_max` 只约束运动轨迹，原地转速由 PX4（如 `MC_YAWRATE_MAX`）限制
 
 主要分组：
 
@@ -215,13 +221,12 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 │       ├── test_waypoint_fallback_session.cpp
 │       └── test_backtrack_usecase.cpp
 └── doc/
-    ├── SYSTEM_OVERVIEW.md
-    ├── 单元测试文档.md
-    ├── 返航实现技术文档.md
-    ├── 实现任务清单.md
-    ├── TECHNICAL_DOCUMENTATION.md
-    ├── API接口文档.md
-    └── backtrack_node.py
+    ├── README.md        # 文档导航
+    ├── reference/       # 系统与接口说明
+    ├── design/          # 设计方案与任务计划
+    ├── testing/         # 测试方法和执行记录
+    ├── reviews/         # 架构审核与待处理问题
+    └── archive/         # 历史问题和 Python 基线
 ```
 
 ## 测试
@@ -248,17 +253,19 @@ catkin_test_results
 
 ## 相关文档
 
-- [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md)
+- [文档导航](doc/README.md)：按用途分类的完整索引。
+- [双仓库架构与运行边界审核（2026-09-07）](doc/reviews/双仓库架构与运行边界审核_2026-09-07.md)：当前审核基线、问题证据、修复顺序和适用边界。
+- [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)
   基于当前 C++ 代码整理的系统级总览，含状态机迁移图与主要处理流程
-- [`doc/单元测试文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/单元测试文档.md)
+- [`doc/testing/单元测试文档.md`](doc/testing/单元测试文档.md)
   当前单元测试范围、运行方式、结果判读和扩展建议
-- [`doc/返航实现技术文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/返航实现技术文档.md)
+- [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)
   当前 C++ 方案的设计说明，最接近本仓库目标结构
-- [`doc/实现任务清单.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/实现任务清单.md)
+- [`doc/design/实现任务清单.md`](doc/design/实现任务清单.md)
   分阶段实现计划，适合回看模块拆分意图
-- [`doc/API接口文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/API接口文档.md)
+- [`doc/reference/API接口文档.md`](doc/reference/API接口文档.md)
   `trajectory_core` 的接口说明
-- [`doc/TECHNICAL_DOCUMENTATION.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/TECHNICAL_DOCUMENTATION.md)
+- [`doc/archive/TECHNICAL_DOCUMENTATION.md`](doc/archive/TECHNICAL_DOCUMENTATION.md)
   旧版 Python 节点行为文档，仅可作为历史对照
 
 ## 已知注意点

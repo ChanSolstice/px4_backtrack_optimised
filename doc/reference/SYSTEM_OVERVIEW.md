@@ -216,31 +216,33 @@
 1. 发布锁定位置的固定点 setpoint。
 2. 累积 `pre_offboard_setpoint_count` 次预发送。
 3. 满足次数后，以 1 秒节流频率请求切换到 `OFFBOARD`。
-4. 当模式已进入 `OFFBOARD` 且轨迹已就绪时，进入 `ReturnActive`。
+4. 当模式已进入 `OFFBOARD`、轨迹已就绪且实际 yaw 与返航起始切向误差不大于 `15°` 时，进入 `ReturnActive`。
 
 进入 `ReturnActive` 后：
 
 1. 若当前是退化返航，则直接从 `WaypointFallbackSession` 取当前位置对应的 sparse waypoint 目标。
-2. 否则，`computeSetpoint()` 调用 `trajectory_session_.evaluate(now)`。
-3. 将轨迹状态或 waypoint 目标转成 `SetpointTarget`。
-4. 通过 `/mavros/setpoint_raw/local` 持续下发。
-5. 当正常轨迹或退化 waypoint 会话完成时，进入 `LandingHover`。
+2. 否则，`TrajectorySession` 将当前位置投影到局部路径窗口，单调推进 `projected_s`，并在前方选择预瞄 `target_s`。
+3. `computeSetpoint()` 通过 `evaluateByArcLength(target_s)` 取得位置、速度和路径切向 yaw。
+4. 将轨迹状态或 waypoint 目标转成 `SetpointTarget`。
+5. 通过 `/mavros/setpoint_raw/local` 持续下发。
+6. 当剩余弧长、实际终点距离 `<=0.2 m` 和实际水平低速条件同时满足，或退化 waypoint 会话完成时，进入 `LandingHover`。
 
 ### 4.7 偏离检测与回归阶段
 
-在 `ReturnActive` 中，系统会将“当前位置”和“轨迹当前进度点位置”做欧氏距离比较：
+系统会计算当前位置到局部路径投影点的三维欧氏距离：
 
-- 大于 `rejoin_trigger_dist_m`，进入 `ReturnRejoin`
-- 小于 `rejoin_success_dist_m`，退出 `ReturnRejoin` 回到 `ReturnActive`
+- `ReturnActive` 中大于 `rejoin_trigger_dist_m`，进入 `ReturnRejoin`
+- `ReturnRejoin` 中小于 `rejoin_success_dist_m` 且速度连续，退出回到 `ReturnActive`
 
-`ReturnRejoin` 的 setpoint 由 `RejoinPolicy` 计算：
+`ReturnRejoin` 继续使用同一个弧长路径跟随器：
 
-1. 使用进入 rejoin 时冻结的轨迹进度点作为目标位置。
-2. 速度方向从当前位置指向冻结点。
-3. 速度大小采用比例收敛：`speed = min(rejoin_v_max_m_s, 1.0 * distance)`。
-4. yaw 和 yaw_rate 复用冻结点上的轨迹姿态，不额外计算朝向。
+1. 局部投影前向搜索窗口扩大，但不做全路径最近点搜索。
+2. 偏差增大时缩短预瞄距离。
+3. `RejoinPolicy` 对路径目标速度平滑限幅；偏差较大时限到 `rejoin_v_max_m_s`，接近安全走廊后恢复路径速度。
+4. 位置、yaw 和 yaw_rate 始终来自路径预瞄点，不朝横向回拉向量转头。
+5. 退出还要求实际速度和已发布目标速度接近恢复后的路径目标速度，并持续满足 `rejoin_success_hold_s`。
 
-这样 `ReturnRejoin` 的 setpoint 目标和退出判据使用同一个轨迹点，避免“控制目标追最近点预瞄，退出判据看冻结点”的不一致。
+生产配置以 `0.5 m` 触发、以 `0.4 m` 退出；最终到点仍独立要求 `0.2 m`。
 
 ### 4.8 暂停、恢复与降落阶段
 
@@ -249,7 +251,7 @@
 在 `Ch18HoverWait`、`ReturnPreOffboard`、`ReturnActive`、`ReturnRejoin` 中：
 
 - 若检测到 `CH7` 按下事件，则进入 `Paused`
-- 同时冻结轨迹进度 `trajectory_session_.freezeProgress()`
+- 停止更新空间投影进度，自然保留最后合法的 `projected_s` 和目标状态
 - 状态机会请求 `POSCTL`
 
 #### 4.8.2 恢复
@@ -263,8 +265,8 @@
 
 1. 重新锁定当前位置
 2. 调用 `triggerReturn(...)`
-3. 调用 `trajectory_session_.resumeProgress(now)`
-4. 再次经过 `ReturnPreOffboard`
+3. 用保留路径目标的切向 yaw 更新悬停航向
+4. 再次经过 `ReturnPreOffboard`，对准后由实际位置继续局部投影
 
 #### 4.8.3 降落
 
@@ -279,7 +281,7 @@
 - 若当前仍在 `OFFBOARD`，先请求 `POSCTL`
 - 等待 1 秒后再请求 `AUTO.LAND`
 
-另外，`AUTO.LAND` 在状态机中具有全局高优先级。一旦检测到当前模式已经是 `AUTO.LAND`，系统会清理返航控制输出并让控制权让渡给飞控。
+另外，`AUTO.LAND` 在状态机中具有全局高优先级。一旦检测到当前模式已经是 `AUTO.LAND`，系统会清理返航控制输出，进入 `AutoLandYield` 并保持到 DISARM。
 
 ## 5. 模块划分与职责
 
@@ -307,7 +309,7 @@
 - 维护系统级上下文快照
 - 串联录制、触发、轨迹生成、rejoin、状态机
 - 决定什么时候请求轨迹生成
-- 决定什么时候冻结/恢复轨迹进度
+- 按实际位置编排局部投影、Rejoin 与终点完成判定
 - 计算最终 setpoint 输出
 
 这一层是整个系统的编排中心。
@@ -447,7 +449,7 @@
 
 - 走廊偏差约束：`max_deviation_m`
 - 拐角处理参数：`corner_angle_threshold_deg`、`corner_blend_len_m`、`corner_blend_ratio`
-- yaw 平滑与 yaw 速率限制：`enable_yaw_smooth`、`max_yaw_deviation_rad`、`yaw_rate_max`
+- 生成后运动轨迹的 yaw 平滑与速率限制：`enable_yaw_smooth`、`max_yaw_deviation_rad`、`yaw_rate_max`；不包括 `ReturnPreOffboard` 的原地起始对准
 - 末端收敛参数：`enable_end_converge`、`s_stop_m`、`r_stop_m`、`v_end_max`
 - 速度约束：`v_max`、`vz_max`
 - 加速度约束：`a_tan_max`、`a_lat_max`、`az_up_max`、`az_down_max`
@@ -519,6 +521,7 @@ stateDiagram-v2
     Paused --> IdleDisarmed: DISARM
     LandingHover --> IdleDisarmed: DISARM
     LandingTransition --> IdleDisarmed: DISARM
+    AutoLandYield --> IdleDisarmed: DISARM
 ```
 
 ### 8.2 全局覆盖规则
@@ -530,13 +533,14 @@ flowchart TD
     A[任意运行中状态] -->|检测到 DISARM| B[IdleDisarmed]
 
     C[Ch18HoverWait / ReturnPreOffboard / ReturnActive / ReturnRejoin / Paused / LandingHover / LandingTransition]
-    C -->|mode == AUTO.LAND 且 armed == true| D[Recording]
+    C -->|mode == AUTO.LAND 且 armed == true| D[AutoLandYield]
     C -->|mode == AUTO.LAND 且 armed == false| B
+    D -->|DISARM| B
 ```
 
 说明：
 
-- `AUTO.LAND` 的这条全局覆盖规则不会作用于 `IdleDisarmed`、`WaitRecordDelay`、`Recording`。
+- `AUTO.LAND` 的这条全局覆盖规则不会作用于 `IdleDisarmed` 和 `AutoLandYield`。
 - 一旦命中 `AUTO.LAND`，状态机会清空 setpoint 与 mode request，把控制权让渡给飞控。
 
 ### 8.3 `LandingTransition` 内部阶段

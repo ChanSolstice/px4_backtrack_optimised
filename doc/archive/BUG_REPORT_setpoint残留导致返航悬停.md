@@ -49,7 +49,7 @@
 
 ### 2.1 核心机制
 
-`computeSetpoint()`（[backtrack_usecase.cpp:323-329](../src/application/backtrack_usecase.cpp#L323-L329)）有一个优先级判断：
+`computeSetpoint()`（[backtrack_usecase.cpp:323-329](../../src/application/backtrack_usecase.cpp#L323-L329)）有一个优先级判断：
 
 ```cpp
 auto state_machine_setpoint = state_machine_.getSetpointTarget();

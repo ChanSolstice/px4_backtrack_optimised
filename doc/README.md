@@ -1,0 +1,52 @@
+# 文档导航
+
+按用途增加一级目录。判断当前行为时以源码和实际配置为准；设计方案与历史报告保留原始基线，不把旧缺陷或计划中的能力当作当前实现。
+
+| 目录 | 内容 |
+| --- | --- |
+| `reference/` | 系统说明、接口参考 |
+| `design/` | 实施方案和任务计划，包含已完成方案的设计背景 |
+| `testing/` | 测试方法、清单和执行记录 |
+| `reviews/` | 架构审核及待处理问题 |
+| `archive/` | 历史问题、已修复 Bug 报告、旧 Python 基线 |
+
+## 建议阅读顺序
+
+1. [系统总览](reference/SYSTEM_OVERVIEW.md)：理解主要模块和状态机。
+2. [弧长驱动返航路径跟随改造方案](design/弧长驱动返航路径跟随改造方案.md)：理解当前进度策略与重构范围。
+3. [双仓库架构与运行边界审核（2026-09-07）](reviews/双仓库架构与运行边界审核_2026-09-07.md)：当前审核基线、实际问题、修复顺序和使用边界。
+4. [当前版本返航飞行测试清单](testing/当前版本返航飞行测试清单.md)：查看已执行测试及剩余验证项。
+
+## 参考说明
+
+- [系统总览](reference/SYSTEM_OVERVIEW.md)
+- [返航实现技术文档](reference/返航实现技术文档.md)
+- [trajectory_core API 接口参考](reference/API接口文档.md)：本仓库保留的集成参考；库接口以 [trajectory_core 文档导航](../../trajectory_core/doc/README.md) 和该库实际头文件为准。
+
+## 设计方案
+
+- [弧长驱动返航路径跟随改造方案](design/弧长驱动返航路径跟随改造方案.md)：已完成方案，保留设计背景与完成态边界。
+- [C++ 实现任务清单](design/实现任务清单.md)：原始分阶段规划，不作为当前进度的唯一依据。
+
+## 测试记录
+
+- [单元测试文档](testing/单元测试文档.md)
+- [返航功能测试文档](testing/返航功能测试文档.md)
+- [当前版本返航飞行测试清单](testing/当前版本返航飞行测试清单.md)：含编译、SITL 和起始 yaw 参数试验记录。
+
+## 审核意见
+
+- [双仓库架构与运行边界审核（2026-09-07）](reviews/双仓库架构与运行边界审核_2026-09-07.md)：两个仓库共用的审核正文，问题尚未因本次文档整理得到修复。
+
+## 历史资料
+
+以下文档用于追溯，不代表当前版本仍有同名缺陷；修复状态和复测结论按各文档当时记录阅读。
+
+- [历史返航算法问题清单](archive/当前返航算法问题清单.md)
+- [Rejoin 最近点目标与冻结退出点不一致](archive/BUG_REPORT_ReturnRejoin最近点预瞄目标与冻结退出点不一致.md)
+- [低速录制抽稀导致路径截断](archive/BUG_REPORT_低速连续飞行抽稀锚点覆盖导致返航路径截断.md)
+- [单帧越阈值导致 Rejoin 反复切换](archive/BUG_REPORT_rejoin单帧越阈值导致状态反复切换.md)
+- [停顿点高密度录制导致返航抽动](archive/BUG_REPORT_停顿点高密度录制导致返航抽动.md)
+- [Rejoin 进度未冻结](archive/BUG_REPORT_rejoin进度未冻结导致轨迹跟踪失败.md)
+- [Setpoint 残留导致悬停](archive/BUG_REPORT_setpoint残留导致返航悬停.md)
+- [Python 技术文档](archive/TECHNICAL_DOCUMENTATION.md)、[Python 基线代码](archive/backtrack_node.py)

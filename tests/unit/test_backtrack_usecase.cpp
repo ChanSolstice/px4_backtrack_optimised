@@ -1,9 +1,14 @@
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "px4_backtrack/application/backtrack_usecase.hpp"
 
 namespace px4_backtrack::application {
 namespace {
+
+const domain::Vec3 kZeroVelocity = domain::Vec3::Zero();
+constexpr double kPi = 3.14159265358979323846;
 
 UseCaseConfig makeConfig() {
   UseCaseConfig config;
@@ -45,9 +50,9 @@ TEST(BacktrackUseCaseTest, FallsBackToImmediateLandingWhenTrajectoryGenerationFa
   output = usecase.tick(0.2);
   EXPECT_EQ(output.current_state, domain::State::Recording);
 
-  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), 0.0, 1.0);
-  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), 0.0, 1.1);
-  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), 0.0, 1.2);
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.2);
 
   usecase.onRCReceived(makeRcChannels(1000));
   output = usecase.tick(0.3);
@@ -77,9 +82,9 @@ TEST(BacktrackUseCaseTest, DoesNotFallbackWhenTrajectoryConfigurationIsInvalid) 
   output = usecase.tick(0.2);
   EXPECT_EQ(output.current_state, domain::State::Recording);
 
-  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), 0.0, 1.0);
-  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), 0.0, 1.1);
-  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), 0.0, 1.2);
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, kPi, 1.2);
 
   usecase.onRCReceived(makeRcChannels(1000));
   output = usecase.tick(0.3);
@@ -107,9 +112,9 @@ TEST(BacktrackUseCaseTest, AutoLandYieldSuppressesRetriggerUntilDisarm) {
   output = usecase.tick(0.2);
   EXPECT_EQ(output.current_state, domain::State::Recording);
 
-  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), 0.0, 1.0);
-  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), 0.0, 1.1);
-  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), 0.0, 1.2);
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, kPi, 1.2);
 
   usecase.onRCReceived(makeRcChannels(1000));
   output = usecase.tick(0.3);
@@ -124,7 +129,7 @@ TEST(BacktrackUseCaseTest, AutoLandYieldSuppressesRetriggerUntilDisarm) {
 
   usecase.onStateReceived(true, "AUTO.LAND");
   output = usecase.tick(0.5);
-  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_EQ(output.current_state, domain::State::AutoLandYield);
   EXPECT_FALSE(output.should_publish_setpoint);
   EXPECT_FALSE(output.mode_request.has_value());
 
@@ -132,18 +137,18 @@ TEST(BacktrackUseCaseTest, AutoLandYieldSuppressesRetriggerUntilDisarm) {
   usecase.onStateReceived(true, "POSCTL");
   usecase.onRCReceived(makeRcChannels(1500));
   output = usecase.tick(0.6);
-  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_EQ(output.current_state, domain::State::AutoLandYield);
   EXPECT_FALSE(output.should_publish_setpoint);
   EXPECT_FALSE(output.mode_request.has_value());
 
   usecase.onRCReceived(makeRcChannels(1000));
   output = usecase.tick(0.7);
-  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_EQ(output.current_state, domain::State::AutoLandYield);
   EXPECT_FALSE(output.should_publish_setpoint);
   EXPECT_FALSE(output.mode_request.has_value());
 
   output = usecase.tick(0.8);
-  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_EQ(output.current_state, domain::State::AutoLandYield);
   EXPECT_FALSE(output.should_publish_setpoint);
   EXPECT_FALSE(output.mode_request.has_value());
 
@@ -154,7 +159,7 @@ TEST(BacktrackUseCaseTest, AutoLandYieldSuppressesRetriggerUntilDisarm) {
   EXPECT_FALSE(output.mode_request.has_value());
 }
 
-TEST(BacktrackUseCaseTest, DoesNotFinishTimedTrajectoryBeforeReachingReturnGoal) {
+TEST(BacktrackUseCaseTest, WallTimeCannotAdvanceSpatialTrajectory) {
   BacktrackUseCase usecase(makeConfig());
 
   usecase.onStateReceived(false, "");
@@ -163,24 +168,217 @@ TEST(BacktrackUseCaseTest, DoesNotFinishTimedTrajectoryBeforeReachingReturnGoal)
   usecase.tick(0.1);
   usecase.tick(0.2);
 
-  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), 0.0, 1.0);
-  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), 0.0, 1.1);
-  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), 0.0, 1.2);
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, kPi, 1.2);
 
   usecase.onRCReceived(makeRcChannels(1000));
   usecase.tick(0.3);
   auto output = usecase.tick(0.4);
   ASSERT_EQ(output.current_state, domain::State::ReturnActive);
 
-  // 即使时间剖面已经结束，未到达返航终点也不能进入降落。
+  // 无论 wall time 跳变多大，实际位置未前进时空间进度都不会结束。
   output = usecase.tick(20000.0);
   EXPECT_EQ(output.current_state, domain::State::ReturnActive);
   EXPECT_TRUE(output.should_publish_setpoint);
 
-  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), 0.0, 20000.1);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, kPi, 20000.1);
   output = usecase.tick(20000.1);
+  EXPECT_EQ(output.current_state, domain::State::ReturnActive);
+
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, kPi, 20000.2);
+  output = usecase.tick(20000.2);
   EXPECT_EQ(output.current_state, domain::State::LandingHover);
   EXPECT_TRUE(output.should_publish_setpoint);
+}
+
+TEST(BacktrackUseCaseTest, ReturnEndToleranceIsIndependentFromRejoinSuccessDistance) {
+  auto config = makeConfig();
+  config.rejoin_config.success_dist_m = 0.4;
+  BacktrackUseCase usecase(config);
+
+  usecase.onStateReceived(false, "");
+  usecase.tick(0.0);
+  usecase.onStateReceived(true, "OFFBOARD");
+  usecase.tick(0.1);
+  usecase.tick(0.2);
+
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, kPi, 1.2);
+  usecase.onRCReceived(makeRcChannels(1000));
+  usecase.tick(0.3);
+  ASSERT_EQ(usecase.tick(0.4).current_state, domain::State::ReturnActive);
+
+  // 回到 Rejoin 的 0.4m 安全走廊不等于到达终点，终点仍要求 0.2m。
+  usecase.onOdomReceived(
+      domain::Vec3(0.0, 0.0, 1.3), kZeroVelocity, kPi, 1.3);
+  auto output = usecase.tick(0.5);
+  EXPECT_EQ(output.current_state, domain::State::ReturnActive);
+
+  usecase.onOdomReceived(
+      domain::Vec3(0.0, 0.0, 1.19), kZeroVelocity, kPi, 1.4);
+  output = usecase.tick(0.6);
+  EXPECT_EQ(output.current_state, domain::State::LandingHover);
+}
+
+TEST(BacktrackUseCaseTest, AlignsStartYawBeforeHorizontalReturn) {
+  BacktrackUseCase usecase(makeConfig());
+
+  usecase.onStateReceived(false, "");
+  usecase.tick(0.0);
+  usecase.onStateReceived(true, "OFFBOARD");
+  usecase.tick(0.1);
+  usecase.tick(0.2);
+
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.2);
+
+  usecase.onRCReceived(makeRcChannels(1000));
+  usecase.tick(0.3);
+  auto output = usecase.tick(0.4);
+
+  ASSERT_EQ(output.current_state, domain::State::ReturnPreOffboard);
+  ASSERT_TRUE(output.setpoint.has_value());
+  EXPECT_TRUE(output.setpoint->position.isApprox(domain::Vec3(2.0, 0.0, 1.0)));
+  EXPECT_TRUE(output.setpoint->velocity.isApprox(kZeroVelocity));
+  EXPECT_NEAR(output.setpoint->yaw, kPi, 1e-3);
+
+  // 对准超时也不允许带着大航向误差开始平移。
+  output = usecase.tick(20.0);
+  EXPECT_EQ(output.current_state, domain::State::ReturnPreOffboard);
+  ASSERT_TRUE(output.setpoint.has_value());
+  EXPECT_TRUE(output.setpoint->velocity.isApprox(kZeroVelocity));
+
+  usecase.onOdomReceived(
+      domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, kPi, 20.1);
+  output = usecase.tick(20.1);
+  EXPECT_EQ(output.current_state, domain::State::ReturnActive);
+}
+
+TEST(BacktrackUseCaseTest, RejoinUsesPathYawAndWaitsForVelocityConvergence) {
+  auto config = makeConfig();
+  config.rejoin_config.trigger_dist_m = 0.3;
+  config.rejoin_config.success_dist_m = 0.1;
+  config.rejoin_config.trigger_hold_s = 0.0;
+  config.rejoin_config.success_hold_s = 0.0;
+  config.trajectory_config.enable_end_converge = false;
+  config.trajectory_config.v_max = 1.0;
+  config.trajectory_config.v_end_max = 1.0;
+  config.trajectory_config.v_start_m_s = 1.0;
+  config.trajectory_config.v_end_m_s = 1.0;
+  BacktrackUseCase usecase(config);
+
+  usecase.onStateReceived(false, "");
+  usecase.tick(0.0);
+  usecase.onStateReceived(true, "OFFBOARD");
+  usecase.tick(0.1);
+  usecase.tick(0.2);
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, kPi, 1.2);
+  usecase.onRCReceived(makeRcChannels(1000));
+  usecase.tick(0.3);
+  auto active_output = usecase.tick(0.4);
+  ASSERT_EQ(active_output.current_state, domain::State::ReturnActive);
+  ASSERT_TRUE(active_output.setpoint.has_value());
+
+  usecase.onOdomReceived(
+      domain::Vec3(1.9, 0.8, 1.0), kZeroVelocity, kPi, 1.3);
+  auto rejoin_output = usecase.tick(0.5);
+  ASSERT_EQ(rejoin_output.current_state, domain::State::ReturnRejoin);
+  ASSERT_TRUE(rejoin_output.setpoint.has_value());
+  EXPECT_NEAR(rejoin_output.setpoint->yaw, kPi, 1e-3);
+  EXPECT_LE((rejoin_output.setpoint->velocity -
+             active_output.setpoint->velocity).norm(),
+            0.3 + 1e-9);
+
+  // 位置已回到路径但速度尚未恢复时，不能退出 Rejoin。
+  usecase.onOdomReceived(
+      domain::Vec3(1.8, 0.0, 1.0), kZeroVelocity, kPi, 1.4);
+  rejoin_output = usecase.tick(0.6);
+  EXPECT_EQ(rejoin_output.current_state, domain::State::ReturnRejoin);
+
+  usecase.onOdomReceived(
+      domain::Vec3(1.8, 0.0, 1.0), domain::Vec3(-1.0, 0.0, 0.0), kPi, 1.5);
+  auto recovered_output = usecase.tick(0.7);
+  EXPECT_EQ(recovered_output.current_state, domain::State::ReturnActive);
+  ASSERT_TRUE(recovered_output.setpoint.has_value());
+  EXPECT_NEAR(recovered_output.setpoint->yaw, kPi, 1e-3);
+  EXPECT_LE((recovered_output.setpoint->velocity -
+             rejoin_output.setpoint->velocity).norm(),
+            0.3 + 1e-9);
+  EXPECT_TRUE(recovered_output.setpoint->position.isApprox(
+      rejoin_output.setpoint->position, 1e-6));
+}
+
+TEST(BacktrackUseCaseTest, ResumeAlignsToRetainedPathTargetYaw) {
+  BacktrackUseCase usecase(makeConfig());
+
+  usecase.onStateReceived(false, "");
+  usecase.tick(0.0);
+  usecase.onStateReceived(true, "OFFBOARD");
+  usecase.tick(0.1);
+  usecase.tick(0.2);
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, kPi, 1.2);
+  usecase.onRCReceived(makeRcChannels(1000));
+  usecase.tick(0.3);
+  ASSERT_EQ(usecase.tick(0.4).current_state, domain::State::ReturnActive);
+
+  usecase.onRCReceived(makeRcChannels(1500));
+  EXPECT_EQ(usecase.tick(0.5).current_state, domain::State::ReturnActive);
+  usecase.onRCReceived(makeRcChannels(1000));
+  EXPECT_EQ(usecase.tick(0.6).current_state, domain::State::Paused);
+
+  usecase.onRCReceived(makeRcChannels(1500));
+  EXPECT_EQ(usecase.tick(0.7).current_state, domain::State::Paused);
+  usecase.onOdomReceived(
+      domain::Vec3(1.9, 0.0, 1.0), kZeroVelocity, 0.0, 1.3);
+  usecase.onRCReceived(makeRcChannels(1000));
+  EXPECT_EQ(usecase.tick(0.8).current_state, domain::State::Paused);
+  auto output = usecase.tick(0.9);
+
+  ASSERT_EQ(output.current_state, domain::State::ReturnPreOffboard);
+  ASSERT_TRUE(output.setpoint.has_value());
+  EXPECT_TRUE(output.setpoint->position.isApprox(domain::Vec3(1.9, 0.0, 1.0)));
+  EXPECT_TRUE(output.setpoint->velocity.isApprox(kZeroVelocity));
+  EXPECT_NEAR(output.setpoint->yaw, kPi, 1e-3);
+
+  usecase.onOdomReceived(
+      domain::Vec3(1.9, 0.0, 1.0), kZeroVelocity, kPi, 1.4);
+  EXPECT_EQ(usecase.tick(1.0).current_state, domain::State::ReturnActive);
+}
+
+TEST(BacktrackUseCaseTest, ProjectionFailureEntersRejoinAndKeepsLastTarget) {
+  BacktrackUseCase usecase(makeConfig());
+
+  usecase.onStateReceived(false, "");
+  usecase.tick(0.0);
+  usecase.onStateReceived(true, "OFFBOARD");
+  usecase.tick(0.1);
+  usecase.tick(0.2);
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, kPi, 1.2);
+  usecase.onRCReceived(makeRcChannels(1000));
+  usecase.tick(0.3);
+  const auto initial_output = usecase.tick(0.4);
+  ASSERT_EQ(initial_output.current_state, domain::State::ReturnActive);
+  ASSERT_TRUE(initial_output.setpoint.has_value());
+
+  domain::Vec3 invalid_position = domain::Vec3::Zero();
+  invalid_position.x() = std::numeric_limits<double>::quiet_NaN();
+  usecase.onOdomReceived(invalid_position, kZeroVelocity, kPi, 1.3);
+  const auto failed_output = usecase.tick(0.5);
+
+  EXPECT_EQ(failed_output.current_state, domain::State::ReturnRejoin);
+  ASSERT_TRUE(failed_output.setpoint.has_value());
+  EXPECT_TRUE(failed_output.setpoint->position.isApprox(
+      initial_output.setpoint->position));
+  EXPECT_FALSE(failed_output.setpoint->position.isApprox(domain::Vec3::Zero()));
 }
 
 }  // namespace

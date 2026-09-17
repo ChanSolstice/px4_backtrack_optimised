@@ -6,6 +6,22 @@
 namespace px4_backtrack {
 namespace adapters {
 
+domain::Vec3 velocityInParentFrame(const nav_msgs::Odometry& msg) {
+  const tf2::Quaternion orientation(
+      msg.pose.pose.orientation.x,
+      msg.pose.pose.orientation.y,
+      msg.pose.pose.orientation.z,
+      msg.pose.pose.orientation.w);
+  const tf2::Vector3 velocity_child(
+      msg.twist.twist.linear.x,
+      msg.twist.twist.linear.y,
+      msg.twist.twist.linear.z);
+  const tf2::Vector3 velocity_parent =
+      tf2::Matrix3x3(orientation) * velocity_child;
+  return domain::Vec3(
+      velocity_parent.x(), velocity_parent.y(), velocity_parent.z());
+}
+
 // ============================================================================
 // StateSubscriber实现
 // ============================================================================
@@ -60,6 +76,7 @@ void StateSubscriber::stateCallback(const mavros_msgs::State::ConstPtr& msg) {
 
 OdomSubscriber::OdomSubscriber(ros::NodeHandle& nh, const std::string& topic)
   : position_(domain::Vec3::Zero()),
+    velocity_(domain::Vec3::Zero()),
     yaw_(0.0),
     stamp_(0.0),
     has_data_(false)
@@ -68,18 +85,26 @@ OdomSubscriber::OdomSubscriber(ros::NodeHandle& nh, const std::string& topic)
   ROS_INFO("[OdomSubscriber] Subscribed to: %s", topic.c_str());
 }
 
-bool OdomSubscriber::getLatest(domain::Vec3& position, double& yaw, double& stamp) const {
+bool OdomSubscriber::getLatest(domain::Vec3& position,
+                               domain::Vec3& velocity,
+                               double& yaw,
+                               double& stamp) const {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!has_data_) {
     return false;
   }
   position = position_;
+  velocity = velocity_;
   yaw = yaw_;
   stamp = stamp_;
   return true;
 }
 
-void OdomSubscriber::setCallback(std::function<void(const domain::Vec3&, double, double)> callback) {
+void OdomSubscriber::setCallback(
+    std::function<void(const domain::Vec3&,
+                       const domain::Vec3&,
+                       double,
+                       double)> callback) {
   std::lock_guard<std::mutex> lock(mutex_);
   external_callback_ = callback;
 }
@@ -89,6 +114,8 @@ void OdomSubscriber::odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
   domain::Vec3 pos(msg->pose.pose.position.x,
                    msg->pose.pose.position.y,
                    msg->pose.pose.position.z);
+  // nav_msgs/Odometry 规定 twist 位于 child_frame_id；领域层统一使用父 ENU。
+  const domain::Vec3 velocity = velocityInParentFrame(*msg);
 
   // 提取yaw角（从四元数转换）
   tf2::Quaternion q(msg->pose.pose.orientation.x,
@@ -106,14 +133,23 @@ void OdomSubscriber::odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     position_ = pos;
+    velocity_ = velocity;
     yaw_ = yaw;
     stamp_ = stamp;
     has_data_ = true;
   }
 
   // 调用外部回调（如果设置）
-  if (external_callback_) {
-    external_callback_(pos, yaw, stamp);
+  std::function<void(const domain::Vec3&,
+                     const domain::Vec3&,
+                     double,
+                     double)> cb;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    cb = external_callback_;
+  }
+  if (cb) {
+    cb(pos, velocity, yaw, stamp);
   }
 }
 

@@ -5,105 +5,77 @@
 namespace px4_backtrack::domain {
 namespace {
 
-std::unique_ptr<trajectory_core::Trajectory> makeStraightTrajectory() {
-  trajectory_core::TrajectoryGenerator generator;
-  trajectory_core::TrajectoryConfig config;
-
-  std::vector<trajectory_core::Waypoint> waypoints;
-  waypoints.emplace_back(0.0, 0.0, 1.0, 0.0, 0.0);
-  waypoints.emplace_back(2.0, 0.0, 1.0, 0.0, 1.0);
-  waypoints.emplace_back(4.0, 0.0, 1.0, 0.0, 2.0);
-
-  auto result = generator.generate(waypoints, config);
-  EXPECT_TRUE(result.isSuccess());
-  EXPECT_NE(result.traj, nullptr);
-  return std::move(result.traj);
-}
-
-TEST(RejoinPolicyTest, TriggerAndExitUseConfiguredDistanceThresholds) {
+TEST(RejoinPolicyTest, TriggerAndExitRequireDistanceAndVelocityConvergence) {
   RejoinConfig config;
   config.trigger_dist_m = 0.5;
   config.success_dist_m = 0.1;
   RejoinPolicy policy(config);
 
-  EXPECT_TRUE(policy.shouldTriggerRejoin(Vec3(1.0, 0.0, 0.0), Vec3(0.0, 0.0, 0.0)));
-  EXPECT_FALSE(policy.shouldTriggerRejoin(Vec3(0.2, 0.0, 0.0), Vec3(0.0, 0.0, 0.0)));
+  EXPECT_TRUE(policy.shouldTriggerRejoin(1.0));
+  EXPECT_FALSE(policy.shouldTriggerRejoin(0.2));
 
-  EXPECT_TRUE(policy.shouldExitRejoin(Vec3(0.05, 0.0, 0.0), Vec3(0.0, 0.0, 0.0)));
-  EXPECT_FALSE(policy.shouldExitRejoin(Vec3(0.2, 0.0, 0.0), Vec3(0.0, 0.0, 0.0)));
+  const Vec3 path_velocity(0.6, 0.0, 0.0);
+  EXPECT_TRUE(policy.shouldExitRejoin(
+      0.05, Vec3(0.4, 0.0, 0.0), path_velocity, path_velocity));
+  EXPECT_FALSE(policy.shouldExitRejoin(
+      0.2, path_velocity, path_velocity, path_velocity));
+  EXPECT_FALSE(policy.shouldExitRejoin(
+      0.05, Vec3::Zero(), path_velocity, path_velocity));
+  EXPECT_FALSE(policy.shouldExitRejoin(
+      0.05, path_velocity, path_velocity, Vec3::Zero()));
 }
 
-TEST(RejoinPolicyTest, FindsNearestTimeAndLimitsVelocityForRejoinTarget) {
+TEST(RejoinPolicyTest, FarDeviationLimitsSpeedWithoutChangingPathPose) {
   RejoinConfig config;
-  config.lookahead_time_s = 0.5;
-  config.v_max_m_s = 0.1;
-  RejoinPolicy policy(config);
-
-  auto traj = makeStraightTrajectory();
-  ASSERT_TRUE(traj);
-  ASSERT_TRUE(traj->isValid());
-
-  const Vec3 current_pos(2.1, 0.05, 1.0);
-  const double nearest_time = policy.findNearestTime(current_pos, traj.get());
-
-  EXPECT_GE(nearest_time, 0.0);
-  EXPECT_LE(nearest_time, traj->duration());
-
-  auto target = policy.computeRejoinTarget(current_pos, traj.get(), nearest_time);
-  EXPECT_GE(target.t, nearest_time);
-  EXPECT_LE(target.t, traj->duration());
-  EXPECT_LE(target.velocity.norm(), config.v_max_m_s + 1e-6);
-  EXPECT_NEAR(target.position.z(), 1.0, 1e-6);
-}
-
-TEST(RejoinPolicyTest, InvalidTrajectoryReturnsZeroTimeAndDefaultState) {
-  RejoinPolicy policy{RejoinConfig()};
-
-  EXPECT_DOUBLE_EQ(policy.findNearestTime(Vec3(0.0, 0.0, 0.0), nullptr), 0.0);
-
-  auto target = policy.computeRejoinTarget(Vec3(0.0, 0.0, 0.0), nullptr, 1.0);
-  EXPECT_DOUBLE_EQ(target.t, 0.0);
-  EXPECT_TRUE(target.position.isApprox(Vec3::Zero()));
-  EXPECT_TRUE(target.velocity.isApprox(Vec3::Zero()));
-}
-
-TEST(RejoinPolicyTest, FrozenPointTargetPullsTowardFrozenPositionWithProportionalSpeed) {
-  RejoinConfig config;
+  config.trigger_dist_m = 0.5;
+  config.success_dist_m = 0.1;
   config.v_max_m_s = 0.3;
   RejoinPolicy policy(config);
 
-  trajectory_core::TrajectoryState frozen_state;
-  frozen_state.position = Vec3(1.0, 0.0, 1.0);
-  frozen_state.velocity = Vec3(0.0, 0.0, 0.0);
-  frozen_state.yaw = 0.7;
-  frozen_state.yaw_rate = 0.2;
+  trajectory_core::TrajectoryState path_target;
+  path_target.position = Vec3(1.0, 2.0, 1.0);
+  path_target.velocity = Vec3(1.0, 0.0, 0.0);
+  path_target.yaw = 1.2;
+  path_target.yaw_rate = 0.2;
 
-  auto far_target = policy.computeFrozenPointTarget(
-      Vec3(0.0, 0.0, 1.0), frozen_state);
-  EXPECT_TRUE(far_target.position.isApprox(frozen_state.position));
-  EXPECT_NEAR(far_target.velocity.norm(), config.v_max_m_s, 1e-6);
-  EXPECT_GT(far_target.velocity.x(), 0.0);
-  EXPECT_NEAR(far_target.yaw, frozen_state.yaw, 1e-6);
-  EXPECT_NEAR(far_target.yaw_rate, frozen_state.yaw_rate, 1e-6);
+  auto limited = policy.applyRejoinLimits(
+      path_target, 0.8, path_target.velocity);
+  EXPECT_TRUE(limited.position.isApprox(path_target.position));
+  EXPECT_DOUBLE_EQ(limited.yaw, path_target.yaw);
+  EXPECT_DOUBLE_EQ(limited.yaw_rate, path_target.yaw_rate);
+  EXPECT_LE((limited.velocity - path_target.velocity).norm(), 0.3 + 1e-9);
+  EXPECT_LT(limited.velocity.norm(), path_target.velocity.norm());
+  EXPECT_FALSE(limited.acceleration.has_value());
 
-  auto near_target = policy.computeFrozenPointTarget(
-      Vec3(0.8, 0.0, 1.0), frozen_state);
-  EXPECT_NEAR(near_target.velocity.norm(), 0.2, 1e-6);
-  EXPECT_GT(near_target.velocity.x(), 0.0);
+  auto converged = limited;
+  for (int i = 0; i < 4; ++i) {
+    converged = policy.applyRejoinLimits(
+        path_target, 0.8, converged.velocity);
+  }
+  EXPECT_NEAR(converged.velocity.norm(), config.v_max_m_s, 1e-9);
 }
 
-TEST(RejoinPolicyTest, FrozenPointTargetStopsWhenAlreadyAtFrozenPosition) {
+TEST(RejoinPolicyTest, SpeedRecoversSmoothlyAsCrossTrackErrorConverges) {
   RejoinConfig config;
+  config.trigger_dist_m = 0.5;
+  config.success_dist_m = 0.1;
   config.v_max_m_s = 0.3;
   RejoinPolicy policy(config);
 
-  trajectory_core::TrajectoryState frozen_state;
-  frozen_state.position = Vec3(1.0, 0.0, 1.0);
-  frozen_state.velocity = Vec3(0.3, 0.0, 0.0);
+  trajectory_core::TrajectoryState path_target;
+  path_target.velocity = Vec3(1.0, 0.0, 0.0);
 
-  auto target = policy.computeFrozenPointTarget(frozen_state.position, frozen_state);
-  EXPECT_TRUE(target.position.isApprox(frozen_state.position));
-  EXPECT_TRUE(target.velocity.isApprox(Vec3::Zero()));
+  const auto far = policy.applyRejoinLimits(
+      path_target, 0.5, Vec3(0.3, 0.0, 0.0));
+  const auto middle = policy.applyRejoinLimits(
+      path_target, 0.3, far.velocity);
+  const auto near = policy.applyRejoinLimits(
+      path_target, 0.05, Vec3(0.8, 0.0, 0.0));
+
+  EXPECT_NEAR(far.velocity.norm(), 0.3, 1e-9);
+  EXPECT_GT(middle.velocity.norm(), far.velocity.norm());
+  EXPECT_LT(middle.velocity.norm(), path_target.velocity.norm());
+  EXPECT_NEAR(near.velocity.norm(), path_target.velocity.norm(), 1e-9);
 }
 
 }  // namespace

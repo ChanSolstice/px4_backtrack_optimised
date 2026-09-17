@@ -96,9 +96,13 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
   }
 
   // 5. 设置订阅者回调（可选，用于实时数据传递）
-  odom_sub_->setCallback([this](const domain::Vec3& position, double yaw, double stamp) {
-    usecase_->onOdomReceived(position, yaw, stamp);
-  });
+  odom_sub_->setCallback(
+      [this](const domain::Vec3& position,
+             const domain::Vec3& velocity,
+             double yaw,
+             double stamp) {
+        usecase_->onOdomReceived(position, velocity, yaw, stamp);
+      });
 
   rc_sub_->setCallback([this](const std::vector<uint16_t>& channels) {
     usecase_->onRCReceived(channels);

@@ -3,11 +3,20 @@
 #include <ros/console.h>
 #include <chrono>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace px4_backtrack {
 namespace domain {
 
 namespace {
+
+constexpr double kLookaheadMinM = 0.15;
+constexpr double kLookaheadMaxM = 0.80;
+constexpr double kProjectionBackwardWindowM = 0.30;
+constexpr double kProjectionCycleHorizonS = 0.50;
+constexpr double kProjectionWindowMarginM = 0.20;
+constexpr double kEndHorizontalSpeedToleranceMps = 0.20;
 
 std::vector<RecordPoint> thinRecordedPointsForGeneration(
     const std::vector<RecordPoint>& points,
@@ -29,10 +38,16 @@ std::vector<RecordPoint> thinRecordedPointsForGeneration(
     }
   }
 
-  if ((points.back().position - reduced.back().position).norm() > 1e-9) {
-    reduced.push_back(points.back());
+  const auto& endpoint = points.back();
+  while (reduced.size() > 1 &&
+         (endpoint.position - reduced.back().position).norm() < min_spacing_m) {
+    reduced.pop_back();
+  }
+
+  if ((endpoint.position - reduced.back().position).norm() > 1e-9) {
+    reduced.push_back(endpoint);
   } else {
-    reduced.back() = points.back();
+    reduced.back() = endpoint;
   }
 
   return reduced;
@@ -42,10 +57,11 @@ std::vector<RecordPoint> thinRecordedPointsForGeneration(
 
 TrajectorySession::TrajectorySession()
   : traj_(nullptr),
-    t_progress_(0.0),
-    t_start_walltime_(0.0),
-    progress_frozen_(false),
-    frozen_progress_(0.0),
+    projected_s_(0.0),
+    target_s_(0.0),
+    cross_track_error_(std::numeric_limits<double>::infinity()),
+    projection_valid_(false),
+    trajectory_v_max_m_s_(0.0),
     last_generate_cost_ms_(0.0),
     last_failure_kind_(FailureKind::None)
 {
@@ -53,10 +69,12 @@ TrajectorySession::TrajectorySession()
 
 void TrajectorySession::reset() {
   traj_.reset();
-  t_progress_ = 0.0;
-  t_start_walltime_ = 0.0;
-  progress_frozen_ = false;
-  frozen_progress_ = 0.0;
+  projected_s_ = 0.0;
+  target_s_ = 0.0;
+  cross_track_error_ = std::numeric_limits<double>::infinity();
+  projection_valid_ = false;
+  target_state_ = trajectory_core::TrajectoryState();
+  trajectory_v_max_m_s_ = 0.0;
   last_failure_kind_ = FailureKind::None;
 }
 
@@ -163,10 +181,13 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
   // 保存轨迹
   traj_ = std::move(result.traj);
 
-  // 重置进度
-  t_progress_ = 0.0;
-  progress_frozen_ = false;
-  frozen_progress_ = 0.0;
+  // 初始化空间进度和首个合法目标。首次 odometry 投影将在 ReturnActive 中更新。
+  projected_s_ = 0.0;
+  target_s_ = 0.0;
+  cross_track_error_ = std::numeric_limits<double>::infinity();
+  projection_valid_ = false;
+  target_state_ = traj_->evaluateByArcLength(0.0);
+  trajectory_v_max_m_s_ = config.v_max;
 
   // 输出INFO日志（用于验收和debug）
   ROS_INFO("[TrajectorySession] Trajectory generated successfully!");
@@ -187,42 +208,92 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
   return true;
 }
 
-trajectory_core::TrajectoryState TrajectorySession::evaluate(double current_walltime) {
-  if (!traj_ || !traj_->isValid()) {
-    // 返回空状态
-    return trajectory_core::TrajectoryState();
+bool TrajectorySession::updateProgress(const Vec3& current_position,
+                                       double lookahead_time_s) {
+  return updateProgressImpl(current_position, lookahead_time_s, 1.0, 0.0);
+}
+
+bool TrajectorySession::updateRejoinProgress(
+    const Vec3& current_position,
+    double lookahead_time_s,
+    double trigger_distance_m) {
+  return updateProgressImpl(
+      current_position, lookahead_time_s, 2.0, trigger_distance_m);
+}
+
+bool TrajectorySession::updateProgressImpl(
+    const Vec3& current_position,
+    double lookahead_time_s,
+    double forward_window_scale,
+    double lookahead_scale_distance_m) {
+  if (!traj_ || !traj_->isValid() || !current_position.allFinite() ||
+      !std::isfinite(lookahead_time_s) ||
+      !std::isfinite(forward_window_scale) ||
+      !std::isfinite(lookahead_scale_distance_m) ||
+      forward_window_scale <= 0.0) {
+    projection_valid_ = false;
+    return false;
   }
 
-  // 更新进度时间（如果未冻结）
-  if (!progress_frozen_) {
-    if (t_start_walltime_ == 0.0) {
-      // 首次评估，记录开始时间
-      t_start_walltime_ = current_walltime;
-      t_progress_ = 0.0;
-    } else {
-      // 基于wall time推进进度
-      t_progress_ = current_walltime - t_start_walltime_;
-    }
-  } else {
-    // 冻结状态，使用冻结的进度
-    t_progress_ = frozen_progress_;
+  const double path_length = traj_->pathLength();
+  const double forward_window = std::max(
+      kLookaheadMaxM,
+      trajectory_v_max_m_s_ * kProjectionCycleHorizonS +
+          kProjectionWindowMarginM);
+  const double s_min = std::max(0.0, projected_s_ - kProjectionBackwardWindowM);
+  const double s_max = std::min(
+      path_length, projected_s_ + forward_window * forward_window_scale);
+  const auto projection = traj_->projectPosition(current_position, s_min, s_max);
+  if (!projection.valid) {
+    projection_valid_ = false;
+    return false;
   }
 
-  // 评估轨迹状态
-  return traj_->evaluate(t_progress_);
+  // 正常路径跟随只允许空间进度前进，避免噪声和自交附近投影导致回退。
+  projected_s_ = std::max(projected_s_, projection.arc_length);
+  cross_track_error_ = projection.distance;
+  projection_valid_ = true;
+
+  const auto projected_state = traj_->evaluateByArcLength(projected_s_);
+  double lookahead_scale = 1.0;
+  if (lookahead_scale_distance_m > 0.0) {
+    lookahead_scale = std::clamp(
+        1.0 - cross_track_error_ / lookahead_scale_distance_m, 0.0, 1.0);
+  }
+  const double lookahead_m = std::clamp(
+      projected_state.velocity.norm() * std::max(0.0, lookahead_time_s) *
+          lookahead_scale,
+      kLookaheadMinM,
+      kLookaheadMaxM);
+  const double candidate_target_s =
+      std::min(projected_s_ + lookahead_m, path_length);
+  // 目标弧长同样不回退，Rejoin 通过实际进度追上旧预瞄目标来平滑缩短预瞄。
+  target_s_ = std::max(target_s_, candidate_target_s);
+  target_state_ = traj_->evaluateByArcLength(target_s_);
+  return true;
+}
+
+const trajectory_core::TrajectoryState& TrajectorySession::getTargetState() const {
+  return target_state_;
 }
 
 bool TrajectorySession::isFinished(const Vec3& current_position,
+                                   const Vec3& current_velocity,
                                    double position_tolerance_m) const {
-  if (!traj_ || !traj_->isValid()) {
+  if (!traj_ || !traj_->isValid() || !projection_valid_ ||
+      position_tolerance_m < 0.0 || !current_position.allFinite() ||
+      !current_velocity.allFinite()) {
     return false;
   }
 
-  if (t_progress_ < traj_->duration() || position_tolerance_m < 0.0) {
+  const double remaining_s = std::max(0.0, traj_->pathLength() - projected_s_);
+  if (remaining_s > position_tolerance_m) {
     return false;
   }
 
-  return (current_position - traj_->goalPosition()).norm() <= position_tolerance_m;
+  const double horizontal_speed = current_velocity.head<2>().norm();
+  return (current_position - traj_->goalPosition()).norm() <= position_tolerance_m &&
+         horizontal_speed <= kEndHorizontalSpeedToleranceMps;
 }
 
 bool TrajectorySession::isValid() const {
@@ -233,24 +304,20 @@ const trajectory_core::Trajectory* TrajectorySession::getTrajectory() const {
   return traj_.get();
 }
 
-double TrajectorySession::getProgress() const {
-  return t_progress_;
+double TrajectorySession::getProjectedArcLength() const {
+  return projected_s_;
 }
 
-void TrajectorySession::setProgress(double t_progress) {
-  t_progress_ = t_progress;
+double TrajectorySession::getTargetArcLength() const {
+  return target_s_;
 }
 
-void TrajectorySession::freezeProgress() {
-  progress_frozen_ = true;
-  frozen_progress_ = t_progress_;
+double TrajectorySession::getCrossTrackError() const {
+  return cross_track_error_;
 }
 
-void TrajectorySession::resumeProgress(double current_walltime) {
-  progress_frozen_ = false;
-  // 重新设置开始时间，使进度从frozen_progress_继续
-  t_start_walltime_ = current_walltime - frozen_progress_;
-  t_progress_ = frozen_progress_;
+bool TrajectorySession::hasValidProjection() const {
+  return projection_valid_;
 }
 
 double TrajectorySession::getLastGenerateCostMs() const {

@@ -1,8 +1,10 @@
 # LLM_MAP
 
+文档入口见 [doc/README.md](doc/README.md)。文档已分为 `reference/`、`design/`、`testing/`、`reviews/` 和 `archive/`；当前跨仓库审核见 [2026-09-07 审核记录](doc/reviews/双仓库架构与运行边界审核_2026-09-07.md)。`archive/` 内是历史基线，不能据其恢复旧的执行策略。
+
 这份文档不是给最终用户看的，而是给后续阅读、解释或修改本仓库的 LLM/自动化代理看的。目标是让模型先建立正确的代码地图，再动手改动，减少把旧版 Python 文档误当成现状、或者只改一层没改全链路的风险。
 
-## 先记住这 10 条
+## 先记住这 11 条
 
 1. 这是 ROS1 `catkin` 工程，不是 ROS2。
 2. 当前主实现入口是 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp)。
@@ -11,8 +13,8 @@
 5. 返航轨迹由 `trajectory_core` 生成，配置来自 [`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)。
 6. 坐标语义按 ENU 处理，但 setpoint 通过 `mavros_msgs/PositionTarget` 发到 `/mavros/setpoint_raw/local`。
 7. 录制点保留相对时间戳；生成轨迹时会在逆序后把时间戳镜像成新的单调递增序列，以保留原始 dt 间隔用于 `trajectory_core` 的时间质量诊断。
-8. `doc/TECHNICAL_DOCUMENTATION.md` 和 [`doc/backtrack_node.py`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/backtrack_node.py) 是旧版 Python 基线，不要把它们当成当前代码的直接事实来源。
-9. 需要判断“行为真相”时，优先级是：`src/*.cpp` + `include/*.hpp` > `config/*.yaml` > `launch/` > `doc/返航实现技术文档.md` > 旧版 Python 文档。
+8. `doc/archive/TECHNICAL_DOCUMENTATION.md` 和 [`doc/archive/backtrack_node.py`](doc/archive/backtrack_node.py) 是旧版 Python 基线，不要把它们当成当前代码的直接事实来源。
+9. 需要判断“行为真相”时，优先级是：`src/*.cpp` + `include/*.hpp` > `config/*.yaml` > `launch/` > `doc/reference/返航实现技术文档.md` > 旧版 Python 文档。
 10. 当前代码有开发中痕迹，写说明或补丁前要先检查接口是否自洽。
 11. 仓库现在已经有基础 `gtest` 单元测试，优先先跑 `RecordingBuffer` / `TriggerEvaluator` / `StateMachine` / `RejoinPolicy` / `TrajectorySession`，不要再默认“完全没有测试”。
 
@@ -58,7 +60,7 @@
 这里是最重要的编排层，职责包括：
 
 - 持有所有核心 domain 对象
-- 缓存当前 `armed/mode/position/yaw`
+- 缓存当前 `armed/mode/position/velocity/yaw`
 - 处理飞行周期复位和录制延时
 - 检测触发条件
 - 请求轨迹生成
@@ -84,11 +86,11 @@
 
 - [`include/px4_backtrack/domain/trajectory_session.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/trajectory_session.hpp)
 - [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp)
-  封装 `trajectory_core::TrajectoryGenerator`、轨迹对象、执行进度、暂停/恢复。
+  封装 `trajectory_core::TrajectoryGenerator`、轨迹对象、局部路径投影、单调弧长进度和预瞄目标。执行进度只由实际位置推进，不再维护 wall-time 秒表或冻结/恢复接口。
 
 - [`include/px4_backtrack/domain/rejoin_policy.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/rejoin_policy.hpp)
 - [`src/domain/rejoin_policy.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/rejoin_policy.cpp)
-  负责偏离判定和回归目标计算。当前 `ReturnRejoin` 主链路直接回拉到冻结进度点，速度为指向冻结点的比例收敛速度并受 `rejoin_v_max_m_s` 限幅；最近点搜索/预瞄接口仅保留给测试和后续策略扩展。
+  负责三维路径偏离阈值、Rejoin 平滑限速和退出速度连续性判定。`ReturnRejoin` 与正常返航复用 `TrajectorySession` 的局部弧长投影目标，不存在全轨迹最近时间搜索或冻结点回拉接口。
 
 ### Adapters 层
 
@@ -172,20 +174,22 @@ RC 丢失检测已拆分为两个方法：
 暂停时：
 
 - `state_machine_.triggerPause()`
-- `trajectory_session_.freezeProgress()`
+- 空间进度自然停止更新，保留最后合法的 `projected_s` 和目标状态
 
 恢复时：
 
 - `state_machine_.triggerReturn(Event::Ch7LongPress)`
-- `trajectory_session_.resumeProgress(now)`
+- 固定当前位置，并把悬停 yaw 更新为保留路径目标的切向 yaw
 
-因此恢复路径会重新走 `ReturnPreOffboard`，而不是直接跳回 `ReturnActive`。
+因此恢复路径会重新走 `ReturnPreOffboard` 完成航向对准，而不是直接跳回 `ReturnActive`；进入 `ReturnActive` 后再由实际位置重新投影，不需要修正任何时间基准。
+
+注意：`ReturnPreOffboard` 的保持位置 setpoint 会一步切换到目标路径 yaw，应用层只用 `15°` 误差门限和 `10 s` 超时做放行检查，没有 yaw 斜坡或角速度限制器。`trajectory_config.yaml::yaw_rate_max` 只作用于生成后的运动轨迹；原地对准速度由 PX4（如 `MC_YAWRATE_MAX`）及飞控内环约束。
 
 ### 5. AUTO.LAND 是全局让步分支，并在 UseCase 层锁存到 DISARM
 
 `BacktrackUseCase::handleAutoLandYield()` 一旦看到 armed 状态下 `mode == "AUTO.LAND"`，会锁存 `auto_land_yield_active_`，清理轨迹/退化返航/rejoin 临时状态，并在 DISARM 之前跳过录制延时、触发检测、轨迹生成、fallback 推进和 rejoin 处理。这样即使 PX4/MAVROS 模式短暂跳出 `AUTO.LAND`，节点也不会重新触发返航或请求 `OFFBOARD`。
 
-`BacktrackStateMachine::tick()` 一开始也检查 `mode == "AUTO.LAND"`。如果命中，会清理 setpoint 和 mode request；armed 时从返航相关状态退回 `Recording`，disarmed 时进入 `IdleDisarmed`。不要把 armed 的 `AUTO.LAND` 直接改成 `IdleDisarmed`，否则如果外部取消降落且飞机仍 armed，状态机可能因为没有新的 DISARM->ARM 边沿而卡在 idle。
+`BacktrackStateMachine::tick()` 一开始也检查 `mode == "AUTO.LAND"`。如果命中，会清理 setpoint 和 mode request；armed 时进入专用 `AutoLandYield`，disarmed 时进入 `IdleDisarmed`。`AutoLandYield` 不执行录制或返航，仅准确表达飞控已接管降落；不要把 armed 的 `AUTO.LAND` 直接改成 `IdleDisarmed`。
 
 如果你改降落逻辑，必须评估这条全局分支是否还成立。
 
@@ -204,16 +208,19 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 
 `DebugDumper` 和 `DebugPublisher` 通过 `setDebugDumper()` / `setDebugPublisher()` 注入 `BacktrackUseCase`，默认为 `nullptr`（不启用）。`performDebugDump()` 在 `handleTrajectoryGeneration()` 成功后调用，内部先判空再执行。这意味着 debug 功能对正常飞行路径零侵入——不启用时没有任何额外开销。
 
-### 8. rejoin 现在不再是“单帧越阈值立即切换”
+### 8. rejoin 是同一路径跟随器的低速模式
 
-当前实现里，rejoin 的进入/退出除了距离阈值，还带持续时间判定：
+当前实现里，偏离距离是当前位置到局部路径投影点的三维距离，不是到 wall-time 参考点的位置差。rejoin 的进入/退出除了距离阈值，还带持续时间判定：
 
-- 进入：`dist > rejoin_trigger_dist_m` 持续达到 `rejoin_trigger_hold_s`
-- 退出：`dist < rejoin_success_dist_m` 持续达到 `rejoin_success_hold_s`
+- 进入：`cross_track_error > rejoin_trigger_dist_m` 持续达到 `rejoin_trigger_hold_s`
+- 执行：扩大局部前向投影窗口、随横向误差缩短预瞄，速度向 `rejoin_v_max_m_s` 平滑限幅；位置和 yaw 仍取自路径目标
+- 退出：横向误差、实际速度误差、已发布目标速度连续性同时满足，并持续达到 `rejoin_success_hold_s`
 
-如果你看到日志里频繁刷 `ReturnActive -> ReturnRejoin`，先检查这两个 hold 参数是否和 YAML 对齐，而不是只调距离阈值。
+生产配置的触发/退出距离分别为 `0.5 m / 0.4 m`。最终到点仍独立要求 `0.2 m`，不要为了 Rejoin 调参而同步放宽终点精度。不要重新引入全轨迹最近点搜索、冻结时间点或固定冷却时间来处理 Rejoin。
 
-当前 `ReturnRejoin` 的 setpoint 与退出判据使用同一个冻结进度点：进入 rejoin 时冻结 `TrajectorySession` 进度，回归目标位置就是该冻结点，速度为 `min(rejoin_v_max_m_s, distance)` 方向指向冻结点，yaw/yaw_rate 复用冻结点轨迹姿态。不要在主链路里重新改回“最近点 + lookahead”，否则目标点和 `shouldExitRejoin()` 的判据点会再次不一致。
+### 9. 返航开始前必须完成路径切向 yaw 对准
+
+轨迹生成后，`ReturnPreOffboard` 保持触发位置，但将 hold yaw 更新为 `evaluateByArcLength(0).yaw`。只有 OFFBOARD、轨迹就绪且 yaw 误差不大于 15° 时才进入 `ReturnActive`；10s 超时只报错并继续悬停，不允许带大角度误差开始平移。暂停恢复使用保留路径目标的 yaw，语义相同。
 
 ## 常见改动应该改哪里
 
@@ -245,18 +252,19 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 1. [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp) 和 `src/**`
 2. [`include/px4_backtrack/**`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack)
 3. [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml) 与 [`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)
-4. [`doc/返航实现技术文档.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/返航实现技术文档.md)
-5. [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md)
-6. [`doc/实现任务清单.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/实现任务清单.md)
-7. [`doc/TECHNICAL_DOCUMENTATION.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/TECHNICAL_DOCUMENTATION.md) 与 [`doc/backtrack_node.py`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/backtrack_node.py)
+4. [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)
+5. [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)
+6. [`doc/design/实现任务清单.md`](doc/design/实现任务清单.md)
+7. [`doc/archive/TECHNICAL_DOCUMENTATION.md`](doc/archive/TECHNICAL_DOCUMENTATION.md) 与 [`doc/archive/backtrack_node.py`](doc/archive/backtrack_node.py)
 
 ## 当前容易踩坑的地方
 
 - `AUTO.LAND` 让步检查必须早于 `checkRCLossEvent()`。非 `AUTO.LAND` 下，`checkRCLossEvent()` 仍应放在状态分支之前；如果挪到 `Recording` 分支内部，`isRCLost()` 在某些状态下会失真。
 - `auto_land_yield_active_` 是“直到 DISARM”的锁存，不是只看当前 tick 的 `mode == "AUTO.LAND"`。不要为了允许中途恢复返航而直接删除它；如果需求变化，需要先定义清楚外部取消降落后的安全语义。
+- `nav_msgs/Odometry.twist` 按消息语义位于 `child_frame_id`。`OdomSubscriber` 会用姿态四元数将其旋转到父 ENU；不要再次把这份速度当作机体系速度，也不要跳过旋转直接用于 Rejoin 速度判据。
 - `handleReturnTrigger()` 在点数不足时调用 `triggerLanding()`，这会跳过 `ReturnPreOffboard` 直接进 `LandingTransition`。如果你在 `LandingTransition` 之前加了新逻辑，要评估这条直达路径是否会绕过它。
 - 当前代码有四类“不可直接走平滑轨迹”的分支：一类是触发时点数不足，直接降落；一类是点数足够但几何路径退化为“点过近/起终点近乎重合”，轨迹生成失败后直接降落；一类是其它可恢复轨迹生成失败，会切到 waypoint 退化返航；最后一类是非法轨迹配置，这时不会走 fallback，而是停留在 `ReturnPreOffboard` 并停止重试。
-- [`doc/SYSTEM_OVERVIEW.md`](/home/channing/Drone/Projects/px4_backtrack_optimised/doc/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp) 为准。
+- [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp) 为准。
 - 仓库已有 `tests/unit/`，但目前主要覆盖领域层和轻集成逻辑，还没有 ROS topic 级 mock/rostest。涉及 adapters、launch、参数装配时，仍然要做一次编译和联调。
 
 ## 测试地图
@@ -268,13 +276,13 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 - [`tests/unit/test_state_machine.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_state_machine.cpp)
   覆盖主状态迁移和 `AUTO.LAND` 高优先级
 - [`tests/unit/test_rejoin_policy.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_rejoin_policy.cpp)
-  覆盖偏离/回归阈值、最近点搜索、预瞄兼容接口，以及冻结点回拉的比例速度限幅和 yaw 复用
+  覆盖偏离/回归阈值、路径目标平滑限速、接近路径后的速度恢复与退出速度连续性
 - [`tests/unit/test_trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_trajectory_session.cpp)
-  覆盖轨迹生成、逆序语义、暂停恢复进度、高密度停顿点云团不会把路径长度拉爆，以及慢速连续直线不会被抽稀截断
+  覆盖轨迹生成、逆序语义、局部投影、单调弧长进度、自交分支、高密度停顿点云团、末端抽稀和空间完成判定
 - [`tests/unit/test_waypoint_fallback_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_waypoint_fallback_session.cpp)
   覆盖退化 waypoint 路径的逆序稀疏化、单步推进与 restart 语义
 - [`tests/unit/test_backtrack_usecase.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_backtrack_usecase.cpp)
-  轻集成覆盖“点过近失败直接降落”和“非法配置不进入 waypoint fallback”两条用例层分支
+  轻集成覆盖轨迹失败分流、AUTO.LAND 让步、wall time 不推进空间轨迹、起始 yaw 对准、Rejoin 连续恢复、终点精度与 Rejoin 走廊解耦
 
 运行方式：
 

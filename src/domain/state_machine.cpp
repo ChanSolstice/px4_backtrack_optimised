@@ -29,11 +29,9 @@ void BacktrackStateMachine::tick(const TickInput& input) {
       return;
     }
 
-    if (current_state_ != State::IdleDisarmed &&
-        current_state_ != State::WaitRecordDelay &&
-        current_state_ != State::Recording) {
+    if (current_state_ != State::AutoLandYield) {
       ROS_WARN("[StateMachine] AUTO.LAND detected, yielding control");
-      enterState(State::Recording, input);
+      enterState(State::AutoLandYield, input);
     }
 
     last_input_ = input;
@@ -74,6 +72,8 @@ void BacktrackStateMachine::tick(const TickInput& input) {
       break;
     case State::LandingTransition:
       tickLandingTransition(input);
+      break;
+    case State::AutoLandYield:
       break;
   }
 
@@ -456,6 +456,12 @@ void BacktrackStateMachine::enterState(State new_state, const TickInput& input) 
       state_data_.landing_transition_stage = input.mode == "OFFBOARD" ? 0 : 1;
       state_data_.last_landing_mode_attempt_time =
           input.now - config_.offboard_attempt_interval_s;
+      break;
+
+    case State::AutoLandYield:
+      current_setpoint_ = std::nullopt;
+      current_mode_request_ = std::nullopt;
+      should_publish_setpoint_ = false;
       break;
   }
 }

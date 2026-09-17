@@ -98,9 +98,13 @@ public:
 
   /// 里程计回调
   /// @param position 位置 (ENU, m)
+  /// @param velocity 线速度 (ENU, m/s)
   /// @param yaw Yaw角 (rad)
   /// @param stamp 时间戳 (s)
-  void onOdomReceived(const domain::Vec3& position, double yaw, double stamp);
+  void onOdomReceived(const domain::Vec3& position,
+                      const domain::Vec3& velocity,
+                      double yaw,
+                      double stamp);
 
   /// RC回调
   /// @param channels RC通道数组
@@ -133,6 +137,7 @@ private:
   bool current_armed_;
   std::string current_mode_;
   domain::Vec3 current_position_;
+  domain::Vec3 current_velocity_;
   double current_yaw_;
 
   // 飞行周期复位检测
@@ -149,6 +154,14 @@ private:
   // Rejoin持续判定计时
   double rejoin_trigger_candidate_start_time_;
   double rejoin_success_candidate_start_time_;
+
+  // 返航前起始航向对准计时
+  double yaw_alignment_start_time_;
+  bool yaw_alignment_timeout_reported_;
+
+  // 上周期已发布的路径目标速度，用于 Rejoin 速度连续性
+  domain::Vec3 last_path_target_velocity_;
+  bool has_last_path_target_velocity_;
 
   // AUTO.LAND让步锁存：一旦外部降落接管，直到DISARM前都不再触发返航
   bool auto_land_yield_active_;
@@ -171,16 +184,22 @@ private:
                            const char* trigger_name);
 
   /// 轨迹生成处理
-  void handleTrajectoryGeneration();
+  void handleTrajectoryGeneration(double now);
 
   /// 退化 waypoint 会话执行进度处理
   void handleWaypointFallbackProgress();
+
+  /// 按实际位置更新弧长路径进度
+  void handleTrajectoryProgress();
+
+  /// 轨迹是否已完成起始航向对准，可进入 ReturnActive
+  bool isTrajectoryActivationReady(double now);
 
   /// 偏离检测与回归处理
   void handleRejoin(double now);
 
   /// 计算setpoint输出
-  domain::SetpointTarget computeSetpoint(double now);
+  domain::SetpointTarget computeSetpoint();
 
   /// 检查点数是否足够
   bool checkMinPoints() const;
