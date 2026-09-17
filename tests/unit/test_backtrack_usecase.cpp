@@ -23,6 +23,9 @@ UseCaseConfig makeConfig() {
   config.trigger_config.ch7_hold_s = 0.0;
   config.trigger_config.enable_ch18 = false;
   config.trigger_config.enable_rc_loss = false;
+  config.trigger_config.enable_low_battery = false;
+  config.trigger_config.low_battery_threshold = 0.15;
+  config.trigger_config.low_battery_confirm_s = 0.0;
 
   config.trajectory_config.ds_m = 0.1;
   config.trajectory_config.min_point_dist_m = 0.01;
@@ -379,6 +382,126 @@ TEST(BacktrackUseCaseTest, ProjectionFailureEntersRejoinAndKeepsLastTarget) {
   EXPECT_TRUE(failed_output.setpoint->position.isApprox(
       initial_output.setpoint->position));
   EXPECT_FALSE(failed_output.setpoint->position.isApprox(domain::Vec3::Zero()));
+}
+
+TEST(BacktrackUseCaseTest, LowBatteryTriggersReturnDuringRecording) {
+  auto config = makeConfig();
+  config.trigger_config.enable_ch7 = false;
+  config.trigger_config.enable_low_battery = true;
+  config.trigger_config.low_battery_threshold = 0.15;
+  config.trigger_config.low_battery_confirm_s = 0.5;
+
+  BacktrackUseCase usecase(config);
+
+  usecase.onStateReceived(false, "");
+  usecase.tick(0.0);
+  usecase.onStateReceived(true, "OFFBOARD");
+  usecase.tick(0.1);
+  auto output = usecase.tick(0.2);
+  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_FALSE(output.low_battery);
+
+  // 记录足够点数
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, kPi, 1.2);
+
+  // 收到低电量消息
+  usecase.onBatteryReceived(0.10);
+  output = usecase.tick(0.3);
+  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_FALSE(output.low_battery);
+
+  // 确认延时未达到
+  output = usecase.tick(0.5);
+  EXPECT_EQ(output.current_state, domain::State::Recording);
+  EXPECT_FALSE(output.low_battery);
+
+  // 达到确认延时 (0.8 - 0.3 = 0.5s)
+  output = usecase.tick(0.8);
+  EXPECT_EQ(output.current_state, domain::State::ReturnActive);
+  EXPECT_TRUE(output.low_battery);
+  EXPECT_TRUE(output.should_publish_setpoint);
+}
+
+TEST(BacktrackUseCaseTest, LowBatteryFallsBackToLandingWithInsufficientPoints) {
+  auto config = makeConfig();
+  config.record_min_points = 10;
+  config.trigger_config.enable_ch7 = false;
+  config.trigger_config.enable_low_battery = true;
+  config.trigger_config.low_battery_threshold = 0.15;
+  config.trigger_config.low_battery_confirm_s = 0.0;
+
+  BacktrackUseCase usecase(config);
+
+  usecase.onStateReceived(false, "");
+  usecase.tick(0.0);
+  usecase.onStateReceived(true, "POSCTL");
+  usecase.tick(0.1);
+  usecase.tick(0.2);
+
+  // 只记录2个点 (< 10)
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+
+  usecase.onBatteryReceived(0.08);
+  usecase.tick(0.3);
+  auto output = usecase.tick(0.4);
+
+  // 点数不足降级为直接降落
+  EXPECT_EQ(output.current_state, domain::State::LandingTransition);
+  EXPECT_TRUE(output.low_battery);
+  EXPECT_FALSE(output.should_publish_setpoint);
+  ASSERT_TRUE(output.mode_request.has_value());
+  EXPECT_EQ(*output.mode_request, domain::ModeRequest::AUTO_LAND);
+}
+
+TEST(BacktrackUseCaseTest, LowBatteryInPausedBroadcastsButDoesNotResume) {
+  auto config = makeConfig();
+  config.trigger_config.enable_ch7 = true;
+  config.trigger_config.enable_low_battery = true;
+  config.trigger_config.low_battery_threshold = 0.15;
+  config.trigger_config.low_battery_confirm_s = 0.0;
+
+  BacktrackUseCase usecase(config);
+
+  usecase.onStateReceived(false, "");
+  usecase.tick(0.0);
+  usecase.onStateReceived(true, "OFFBOARD");
+  usecase.tick(0.1);
+  usecase.tick(0.2);
+
+  usecase.onOdomReceived(domain::Vec3(0.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.0);
+  usecase.onOdomReceived(domain::Vec3(1.0, 0.0, 1.0), kZeroVelocity, 0.0, 1.1);
+  usecase.onOdomReceived(domain::Vec3(2.0, 0.0, 1.0), kZeroVelocity, kPi, 1.2);
+
+  // CH7长按触发返航
+  usecase.onRCReceived(makeRcChannels(1000));
+  usecase.tick(0.3);
+  auto output = usecase.tick(0.4);
+  ASSERT_EQ(output.current_state, domain::State::ReturnActive);
+
+  // 释放CH7，再单击暂停
+  usecase.onRCReceived(makeRcChannels(1500));
+  usecase.tick(0.5);
+  usecase.onRCReceived(makeRcChannels(1000));
+  output = usecase.tick(0.6);
+  ASSERT_EQ(output.current_state, domain::State::Paused);
+  EXPECT_FALSE(output.low_battery);
+
+  // 释放按键，避免长按逻辑再次触发恢复
+  usecase.onRCReceived(makeRcChannels(1500));
+
+  // 在 Paused 状态下收到低电量报警
+  usecase.onBatteryReceived(0.09);
+  output = usecase.tick(0.7);
+  // 核心业务设计：Paused状态下不自动恢复返航，但广播低电量状态供前端弹窗
+  EXPECT_EQ(output.current_state, domain::State::Paused);
+  EXPECT_TRUE(output.low_battery);
+
+  output = usecase.tick(1.0);
+  EXPECT_EQ(output.current_state, domain::State::Paused);
+  EXPECT_TRUE(output.low_battery);
 }
 
 }  // namespace
