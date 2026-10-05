@@ -68,7 +68,7 @@ TEST(BacktrackUseCaseTest, FallsBackToImmediateLandingWhenTrajectoryGenerationFa
   EXPECT_EQ(*output.mode_request, domain::ModeRequest::AUTO_LAND);
 }
 
-TEST(BacktrackUseCaseTest, DoesNotFallbackWhenTrajectoryConfigurationIsInvalid) {
+TEST(BacktrackUseCaseTest, FallsBackWhenTrajectoryConfigurationIsInvalid) {
   auto config = makeConfig();
   config.trajectory_config.v_end_max = config.trajectory_config.v_max + 1.0;
 
@@ -94,7 +94,7 @@ TEST(BacktrackUseCaseTest, DoesNotFallbackWhenTrajectoryConfigurationIsInvalid) 
   EXPECT_EQ(output.current_state, domain::State::Recording);
 
   output = usecase.tick(0.4);
-  EXPECT_EQ(output.current_state, domain::State::ReturnPreOffboard);
+  EXPECT_EQ(output.current_state, domain::State::ReturnActive);
   EXPECT_TRUE(output.should_publish_setpoint);
   ASSERT_TRUE(output.setpoint.has_value());
   EXPECT_NEAR(output.setpoint->position.x(), 2.0, 1e-6);

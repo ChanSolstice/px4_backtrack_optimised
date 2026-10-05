@@ -407,15 +407,7 @@ void BacktrackUseCase::handleTrajectoryGeneration(double now) {
       ROS_INFO("[BacktrackUseCase] Trajectory generation successful");
       performDebugDump();
     } else {
-      if (trajectory_session_.getLastFailureKind() ==
-          domain::TrajectorySession::FailureKind::TooCloseGeometry) {
-        ROS_ERROR("[BacktrackUseCase] Trajectory generation failed due to too-close geometry, degrading to immediate landing");
-        triggerImmediateLanding();
-      } else if (trajectory_session_.getLastFailureKind() ==
-                 domain::TrajectorySession::FailureKind::InvalidConfig) {
-        trajectory_generation_requested_ = false;
-        ROS_ERROR("[BacktrackUseCase] Trajectory generation failed due to invalid trajectory config");
-      } else if (waypoint_fallback_session_.build(recording_buffer_.getPoints())) {
+      if (waypoint_fallback_session_.build(recording_buffer_.getPoints())) {
         trajectory_generation_requested_ = false;
         rejoin_trigger_candidate_start_time_ = -1.0;
         rejoin_success_candidate_start_time_ = -1.0;
