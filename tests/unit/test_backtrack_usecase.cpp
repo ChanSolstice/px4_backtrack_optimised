@@ -122,6 +122,15 @@ TEST(BacktrackUseCaseTest, LowBatteryReturnInsufficientPointsAndPausePolicy) {
   c.record_delay_s=15; Flight h(c); h.usecase.onBatteryReceived(0.10);
   out=h.step(); EXPECT_TRUE(out.low_battery); EXPECT_EQ(out.current_state,domain::State::WaitRecordDelay);
 }
+TEST(BacktrackUseCaseTest, ExternalOffboardExitYieldsAndOnlyExplicitValidResumeCanContinue) {
+  Flight f; f.recordLine(); ASSERT_EQ(f.start().current_state,domain::State::ReturnActive);
+  f.mode="POSCTL"; auto out=f.step();
+  EXPECT_EQ(out.current_state,domain::State::ControlYield); EXPECT_FALSE(out.mode_request); EXPECT_FALSE(out.setpoint);
+  for(int i=0;i<100;++i) { out=f.step(); EXPECT_FALSE(out.mode_request); EXPECT_FALSE(out.setpoint); }
+  EXPECT_EQ(f.resume().current_state,domain::State::ReturnPreOffboard);
+  f.mode="OFFBOARD"; EXPECT_EQ(f.step().current_state,domain::State::ReturnActive);
+}
+
 TEST(BacktrackUseCaseTest, RejectsInvalidEngineeringLimits) {
   auto c=makeConfig(); c.route_braking_m_s2=0;
   EXPECT_THROW(BacktrackUseCase usecase(c),std::invalid_argument);

@@ -210,5 +210,17 @@ TEST(StateMachineTest, LandingTransitionRetriesUntilActualModeChanges) {
   EXPECT_EQ(*machine.getModeRequest(), ModeRequest::AUTO_LAND);
 }
 
+TEST(StateMachineSafetyTest, ExternalExitWinsOverCompletion) {
+  BacktrackStateMachine sm(StateMachineConfig{});
+  TickInput input; input.armed=true; input.mode="OFFBOARD";
+  sm.tick(input); sm.startRecording(); sm.triggerReturn(Event::Ch7LongPress);
+  input.trajectory_ready=true;
+  for(int i=0;i<25;++i) sm.tick(input);
+  ASSERT_EQ(sm.getCurrentState(),State::ReturnActive);
+  input.mode="ALTCTL"; input.trajectory_finished=true; sm.tick(input);
+  EXPECT_EQ(sm.getCurrentState(),State::ControlYield);
+  EXPECT_FALSE(sm.shouldPublishSetpoint()); EXPECT_FALSE(sm.getModeRequest());
+}
+
 }  // namespace
 }  // namespace px4_backtrack::domain

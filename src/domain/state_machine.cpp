@@ -38,6 +38,11 @@ void BacktrackStateMachine::tick(const TickInput& input) {
     return;
   }
 
+  const bool owned=current_state_==State::ReturnActive || current_state_==State::ReturnRejoin ||
+      current_state_==State::LandingHover ||
+      ((current_state_==State::ReturnPreOffboard || current_state_==State::Ch18HoverWait) && last_input_.mode=="OFFBOARD");
+  if (input.armed && owned && input.mode!="OFFBOARD") yieldControl();
+
   // 正常状态转移处理
   handleStateTransition(input);
 
@@ -74,6 +79,7 @@ void BacktrackStateMachine::tick(const TickInput& input) {
       tickLandingTransition(input);
       break;
     case State::AutoLandYield:
+    case State::ControlYield:
       break;
   }
 
@@ -119,6 +125,11 @@ void BacktrackStateMachine::triggerPause() {
 
   // 进入Paused状态
   enterState(State::Paused, last_input_);
+}
+
+void BacktrackStateMachine::yieldControl() {
+  enterState(State::ControlYield,last_input_);
+  current_setpoint_.reset(); current_mode_request_.reset(); should_publish_setpoint_=false;
 }
 
 void BacktrackStateMachine::lockPosition(const Vec3& position, double yaw) {
@@ -328,7 +339,7 @@ void BacktrackStateMachine::tickPaused(const TickInput& input) {
   // Paused状态：暂停，不发布setpoint
 
   current_setpoint_ = std::nullopt;
-  current_mode_request_ = ModeRequest::POSCTL;  // 切到POSCTL
+  current_mode_request_ = input.mode=="OFFBOARD" ? std::optional<ModeRequest>(ModeRequest::POSCTL) : std::nullopt;
   should_publish_setpoint_ = false;
 
   // 恢复逻辑由外部调用triggerReturn()完成（Ch7长按）
@@ -459,6 +470,7 @@ void BacktrackStateMachine::enterState(State new_state, const TickInput& input) 
       break;
 
     case State::AutoLandYield:
+    case State::ControlYield:
       current_setpoint_ = std::nullopt;
       current_mode_request_ = std::nullopt;
       should_publish_setpoint_ = false;

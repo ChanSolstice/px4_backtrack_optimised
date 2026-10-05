@@ -52,7 +52,10 @@ enum class State {
   LandingTransition,
 
   /// AUTO.LAND 已由飞控接管，停止发布控制量并等待 DISARM
-  AutoLandYield
+  AutoLandYield,
+
+  /// 外部离开 OFFBOARD，保持任务进度但让出控制；只能显式恢复
+  ControlYield
 };
 
 /// 状态转换为字符串（用于日志输出）
@@ -69,6 +72,7 @@ inline std::string stateToString(State state) {
     case State::LandingHover: return "LandingHover";
     case State::LandingTransition: return "LandingTransition";
     case State::AutoLandYield: return "AutoLandYield";
+    case State::ControlYield: return "ControlYield";
     default: return "Unknown";
   }
 }
@@ -363,6 +367,9 @@ public:
 
   /// 触发暂停（外部调用，例如Ch7按下事件）
   void triggerPause();
+
+  /// 外部接管后立即清除控制输出
+  void yieldControl();
 
   /// 锁定当前位置（用于固定点悬停）
   /// @param position 位置 (ENU, m)

@@ -163,6 +163,7 @@ private:
   // 当前状态快照
   bool current_armed_;
   std::string current_mode_;
+  std::string last_confirmed_mode_;
   domain::Vec3 current_position_;
   domain::Vec3 current_velocity_;
   double current_yaw_;

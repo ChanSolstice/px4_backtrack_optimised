@@ -96,6 +96,19 @@ TickOutput BacktrackUseCase::tick(double now) {
   }
   if (clock_reset || !inputsFresh(now)) return holdForInvalidInput(now);
 
+  const auto state_before_control=state_machine_.getCurrentState();
+  const bool owned=state_before_control==domain::State::ReturnActive || state_before_control==domain::State::ReturnRejoin ||
+      state_before_control==domain::State::LandingHover ||
+      ((state_before_control==domain::State::ReturnPreOffboard || state_before_control==domain::State::Ch18HoverWait) &&
+       last_confirmed_mode_=="OFFBOARD");
+  last_confirmed_mode_=current_mode_;
+  if (owned && current_mode_!="OFFBOARD") {
+    trajectory_generation_requested_=false;
+    trajectory_session_.suspend(); last_progress_time_=-1.0;
+    route_safety_hold_=input_hold_=false;
+    state_machine_.yieldControl();
+  }
+
   // 更新TriggerEvaluator的当前时间（用于RC丢失检测）
   trigger_evaluator_.updateNow(now);
 
@@ -416,10 +429,10 @@ void BacktrackUseCase::handleTriggers(double now) {
   }
 
   // 在Paused状态时，检测RC丢失和Ch7长按（恢复）
-  if (current_state == domain::State::Paused) {
+  if (current_state == domain::State::Paused || current_state == domain::State::ControlYield) {
     bool has_min_points = checkMinPoints() && canResumeReturn();
 
-    if (rc_loss_event && !route_safety_hold_ && !input_hold_) {
+    if (rc_loss_event && current_state==domain::State::Paused && !route_safety_hold_ && !input_hold_) {
       if (has_min_points) {
         ROS_WARN("[BacktrackUseCase] RC loss detected while paused, resuming return");
         route_safety_hold_=input_hold_=false;
@@ -452,11 +465,8 @@ void BacktrackUseCase::handleTriggers(double now) {
         state_machine_.triggerReturn(domain::Event::Ch7LongPress);
         yaw_alignment_start_time_ = now;
         yaw_alignment_timeout_reported_ = false;
-      } else if (!route_safety_hold_) {
-        ROS_WARN("[BacktrackUseCase] Ch7 long press detected while paused but only %zu points recorded (< %d), triggering AUTO.LAND",
-                 recording_buffer_.size(),
-                 config_.record_min_points);
-        triggerImmediateLanding();
+      } else {
+        ROS_WARN("[BacktrackUseCase] Resume rejected: remaining route unavailable or aircraft outside resume corridor");
       }
       return;
     }
