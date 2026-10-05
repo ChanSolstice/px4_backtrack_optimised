@@ -36,7 +36,7 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   loadDebugParams(nh, config);
 
   nh.param("odom_timeout_s",config.odom_timeout_s,0.25);
-  nh.param("state_timeout_s",config.state_timeout_s,0.50);
+  nh.param("state_timeout_s",config.state_timeout_s,1.50);
   nh.param("route_normal_limit_m",config.route_normal_limit_m,0.30);
   nh.param("route_hard_limit_m",config.route_hard_limit_m,0.50);
   nh.param("route_uncertainty_m",config.route_uncertainty_m,0.05);

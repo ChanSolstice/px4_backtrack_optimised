@@ -164,7 +164,9 @@ TEST(BacktrackUseCaseTest, StaleOdometryFreezesAndRequiresExplicitResume) {
   EXPECT_EQ(f.resume().current_state, domain::State::ReturnActive);
 }
 TEST(BacktrackUseCaseTest, StaleModeCannotActivateOrIssueModeRequests) {
-  Flight f;
+  auto config = makeConfig();
+  config.state_timeout_s = 0.50;
+  Flight f(config);
   f.recordLine();
   f.start();
   auto out = f.step(0.60, true, false);
@@ -478,6 +480,25 @@ TEST(BacktrackUseCaseTest, MaximumRecordingSnapshotAndBlockedPlanningKeepControl
 #endif
   std::cout << "MAX_RECORDING points=" << points_seen << " max_control_tick_s=" << max_tick_s
             << std::endl;
+}
+
+TEST(BacktrackUseCaseTest, DefaultTimeoutAcceptsOneHertzFcuHeartbeatAndDetectsLoss) {
+  Flight f;
+  f.recordLine();
+  auto out = f.start();
+  ASSERT_EQ(out.current_state, domain::State::ReturnActive);
+  f.release();
+  for (int i = 0; i < 100; ++i) {
+    out = f.step(0.05, true, i % 20 == 0);
+    ASSERT_EQ(out.current_state, domain::State::ReturnActive) << i;
+    ASSERT_TRUE(out.should_publish_setpoint);
+  }
+  for (int i = 0; i < 31; ++i)
+    out = f.step(0.05, true, false);
+  EXPECT_EQ(out.current_state, domain::State::Paused);
+  ASSERT_TRUE(out.setpoint);
+  EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(), 0);
+  EXPECT_FALSE(out.mode_request); // 无新鲜 mode 确认时不发出模式请求。
 }
 
 TEST(BacktrackUseCaseTest, RejectsInvalidEngineeringLimits) {

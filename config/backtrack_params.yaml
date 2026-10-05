@@ -142,4 +142,4 @@ route_braking_m_s2: 0.50
 
 # steady 接收时钟的新鲜度，消息 stamp 另行检查
 odom_timeout_s: 0.25
-state_timeout_s: 0.50
+state_timeout_s: 1.50

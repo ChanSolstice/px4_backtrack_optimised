@@ -46,7 +46,7 @@ struct UseCaseConfig {
   domain::RejoinConfig rejoin_config;
 
   double odom_timeout_s = 0.25;
-  double state_timeout_s = 0.50;
+  double state_timeout_s = 1.50; // MAVROS 的 FCU heartbeat 默认 1 Hz，保留抖动余量。
 
   // 原路三维偏离预算；制动值是实际飞机的保守能力，须实测验收。
   double route_normal_limit_m = 0.30;
