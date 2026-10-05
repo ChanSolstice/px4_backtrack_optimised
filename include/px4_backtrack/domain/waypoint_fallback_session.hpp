@@ -27,9 +27,6 @@ public:
   /// 清空退化会话
   void reset();
 
-  /// 从头开始执行退化路径（暂停恢复时使用）
-  void restart();
-
   /// 根据当前位置推进 waypoint 索引
   void updateProgress(const Vec3& current_position,
                       const Vec3& current_velocity, double current_yaw);

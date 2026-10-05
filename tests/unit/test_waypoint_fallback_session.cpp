@@ -48,7 +48,7 @@ TEST(WaypointFallbackSessionTest, YawFollowsCurvedReturnPathDirection) {
   EXPECT_NEAR(target.yaw, -kPi / 2.0, 1e-6);
 }
 
-TEST(WaypointFallbackSessionTest, ProgressAdvancesAndCanRestartFromHead) {
+TEST(WaypointFallbackSessionTest, RetainsRemainingTargetAcrossPause) {
   WaypointFallbackSession session(0.5, 0.25);
   ASSERT_TRUE(session.build(makeRecordedLine()));
 
@@ -56,9 +56,11 @@ TEST(WaypointFallbackSessionTest, ProgressAdvancesAndCanRestartFromHead) {
   auto target = session.currentTarget();
   EXPECT_LT(target.position.x(), 2.0);
 
-  session.restart();
+  const auto retained_index = session.currentIndex();
   target = session.currentTarget();
-  EXPECT_NEAR(target.position.x(), 2.0, 1e-6);
+  EXPECT_NEAR(target.position.x(), 1.5, 1e-6);
+  advance(session, Vec3(2.0, 0.0, 1.0));
+  EXPECT_EQ(session.currentIndex(), retained_index);
 }
 
 TEST(WaypointFallbackSessionTest, ProgressAdvancesAtMostOneWaypointPerTick) {

@@ -318,9 +318,6 @@ void BacktrackUseCase::handleTriggers(double now) {
         state_machine_.triggerReturn(domain::Event::RCLossTriggered);
         yaw_alignment_start_time_ = now;
         yaw_alignment_timeout_reported_ = false;
-        if (waypoint_fallback_session_.isValid()) {
-          waypoint_fallback_session_.restart();
-        }
       } else {
         ROS_WARN("[BacktrackUseCase] RC loss detected while paused but only %zu points recorded (< %d), triggering AUTO.LAND",
                  recording_buffer_.size(),
@@ -340,9 +337,6 @@ void BacktrackUseCase::handleTriggers(double now) {
         state_machine_.triggerReturn(domain::Event::Ch7LongPress);
         yaw_alignment_start_time_ = now;
         yaw_alignment_timeout_reported_ = false;
-        if (waypoint_fallback_session_.isValid()) {
-          waypoint_fallback_session_.restart();
-        }
       } else {
         ROS_WARN("[BacktrackUseCase] Ch7 long press detected while paused but only %zu points recorded (< %d), triggering AUTO.LAND",
                  recording_buffer_.size(),

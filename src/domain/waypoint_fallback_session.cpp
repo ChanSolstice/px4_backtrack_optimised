@@ -83,14 +83,6 @@ void WaypointFallbackSession::reset() {
   finished_ = false;
 }
 
-void WaypointFallbackSession::restart() {
-  if (!isValid()) {
-    return;
-  }
-  current_index_ = 0;
-  finished_ = false;
-}
-
 void WaypointFallbackSession::updateProgress(const Vec3& current_position,
                                              const Vec3& current_velocity,
                                              double current_yaw) {
