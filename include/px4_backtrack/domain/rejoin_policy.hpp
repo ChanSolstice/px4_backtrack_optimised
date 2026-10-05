@@ -57,15 +57,6 @@ public:
                         const Vec3& path_target_velocity,
                         const Vec3& published_target_velocity) const;
 
-  /// 对路径目标施加 Rejoin 平滑限速，不改变位置和路径切向 yaw
-  /// @param path_target 原始路径目标
-  /// @param cross_track_error 当前横向误差
-  /// @param previous_target_velocity 上周期已发布的目标速度
-  trajectory_core::TrajectoryState applyRejoinLimits(
-      const trajectory_core::TrajectoryState& path_target,
-      double cross_track_error,
-      const Vec3& previous_target_velocity) const;
-
 private:
   /// 配置参数
   RejoinConfig config_;

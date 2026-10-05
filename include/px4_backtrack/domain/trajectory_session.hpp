@@ -39,12 +39,16 @@ public:
   /// @param lookahead_time_s 预瞄时间
   /// @return 本周期投影是否成功；失败时保留上一个合法目标
   bool updateProgress(const Vec3& current_position,
-                      double lookahead_time_s);
+                      double lookahead_time_s, double dt_s = 0.05);
 
   /// Rejoin 低速模式下更新路径进度：扩大局部前向窗口并随偏离缩短预瞄
   bool updateRejoinProgress(const Vec3& current_position,
                             double lookahead_time_s,
-                            double trigger_distance_m);
+                            double trigger_distance_m, double dt_s = 0.05,
+                            double speed_limit_m_s = 0.3);
+
+  /// 暂停参考时钟，保留路径位置；恢复从零参考速度继续。
+  void suspend();
 
   /// 获取当前预瞄目标状态
   const trajectory_core::TrajectoryState& getTargetState() const;
@@ -120,11 +124,18 @@ private:
   /// 轨迹生成器（复用）
   trajectory_core::TrajectoryGenerator generator_;
 
+  double reference_time_ = 0.0; // 名义剖面的连续执行时钟，可被跟踪误差减速
+  double clock_rate_ = 0.0;     // d(reference_time)/dt，范围 [0,1]
+  double clock_acc_limit_ = 0.0;
+  bool output_acceleration_ = false;
+  double arcAtTime(double time) const;
+
   /// 空间进度更新的共用实现
   bool updateProgressImpl(const Vec3& current_position,
                           double lookahead_time_s,
                           double forward_window_scale,
-                          double lookahead_scale_distance_m);
+                          double lookahead_scale_distance_m,
+                          double dt_s, double speed_limit_m_s);
 };
 
 }  // namespace domain

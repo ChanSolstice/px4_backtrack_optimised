@@ -81,7 +81,7 @@ TickOutput BacktrackUseCase::tick(double now) {
 
   // 正常返航按实际位置更新空间进度
   if (!auto_land_yielding) {
-    handleTrajectoryProgress();
+    handleTrajectoryProgress(now);
   }
 
   // 偏离检测与回归处理
@@ -299,6 +299,8 @@ void BacktrackUseCase::handleTriggers(double now) {
 
     if (trigger_evaluator_.checkCh7PressEvent()) {
       ROS_INFO("[BacktrackUseCase] Ch7 press event detected, pausing");
+      trajectory_session_.suspend();
+      last_progress_time_ = -1.0;
       state_machine_.triggerPause();
       return;
     }
@@ -425,7 +427,7 @@ void BacktrackUseCase::handleWaypointFallbackProgress() {
   waypoint_fallback_session_.updateProgress(current_position_, current_velocity_, current_yaw_);
 }
 
-void BacktrackUseCase::handleTrajectoryProgress() {
+void BacktrackUseCase::handleTrajectoryProgress(double now) {
   const auto state = state_machine_.getCurrentState();
   if ((state != domain::State::ReturnActive &&
        state != domain::State::ReturnRejoin) ||
@@ -433,13 +435,19 @@ void BacktrackUseCase::handleTrajectoryProgress() {
     return;
   }
 
+  const double dt = last_progress_time_ < 0.0 ? 0.05 : now-last_progress_time_;
+  last_progress_time_ = now;
+  if (!std::isfinite(dt) || dt <= 0.0 || dt > 0.10) {
+    trajectory_session_.suspend();
+    return;
+  }
   const bool projection_ok = state == domain::State::ReturnRejoin
       ? trajectory_session_.updateRejoinProgress(
             current_position_,
             config_.rejoin_config.lookahead_time_s,
-            config_.rejoin_config.trigger_dist_m)
+            config_.rejoin_config.trigger_dist_m, dt, config_.rejoin_config.v_max_m_s)
       : trajectory_session_.updateProgress(
-            current_position_, config_.rejoin_config.lookahead_time_s);
+            current_position_, config_.rejoin_config.lookahead_time_s, dt);
   if (!projection_ok) {
     ROS_ERROR_THROTTLE(1.0,
                        "[BacktrackUseCase] Local path projection failed; holding last valid target");
@@ -592,19 +600,12 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint() {
   if (current_state == domain::State::ReturnRejoin) {
     if (trajectory_session_.isValid()) {
       const auto& path_state = trajectory_session_.getTargetState();
-      const domain::Vec3 previous_velocity = has_last_path_target_velocity_
-          ? last_path_target_velocity_
-          : path_state.velocity;
-      auto rejoin_state = rejoin_policy_.applyRejoinLimits(
-          path_state,
-          trajectory_session_.getCrossTrackError(),
-          previous_velocity);
 
       domain::SetpointTarget target;
-      target.position = rejoin_state.position;
-      target.velocity = rejoin_state.velocity;
-      target.yaw = rejoin_state.yaw;
-      target.yaw_rate = rejoin_state.yaw_rate;
+      target.position = path_state.position;
+      target.velocity = path_state.velocity;
+      target.yaw = path_state.yaw;
+      target.yaw_rate = path_state.yaw_rate;
       target.acceleration = std::nullopt;
       target.type_mask = domain::position_target_mask::kIgnoreAcceleration;
       target.coordinate_frame = 1;  // FRAME_LOCAL_NED

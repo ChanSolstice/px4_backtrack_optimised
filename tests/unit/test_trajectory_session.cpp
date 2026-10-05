@@ -140,7 +140,7 @@ TEST(TrajectorySessionTest, SlowAlongTrackMotionKeepsCrossTrackErrorNearZero) {
   ASSERT_TRUE(session.updateProgress(Vec3(1.9, 0.0, 1.0), 0.5));
   EXPECT_NEAR(session.getCrossTrackError(), 0.0, 1e-5);
   EXPECT_GT(session.getProjectedArcLength(), 0.05);
-  EXPECT_GT(session.getTargetArcLength(), session.getProjectedArcLength());
+  EXPECT_GT(session.getTargetArcLength(), 0.0);
 }
 
 TEST(TrajectorySessionTest, ProjectedProgressDoesNotMoveBackward) {
@@ -194,7 +194,7 @@ TEST(TrajectorySessionTest, RejoinDoesNotMoveTargetArcLengthBackward) {
   ASSERT_TRUE(session.generate(makeRecordPoints(), config));
   ASSERT_TRUE(session.updateProgress(Vec3(2.0, 0.0, 1.0), 0.5));
   const double normal_target_s = session.getTargetArcLength();
-  ASSERT_GT(normal_target_s, 0.4);
+  ASSERT_GT(normal_target_s, 0.0);
 
   ASSERT_TRUE(session.updateRejoinProgress(
       Vec3(2.0, 1.0, 1.0), 0.5, 0.5));
@@ -216,7 +216,7 @@ TEST(TrajectorySessionTest, ProjectionFailureKeepsLastValidTarget) {
   EXPECT_FALSE(session.hasValidProjection());
   EXPECT_DOUBLE_EQ(session.getTargetArcLength(), previous_target_s);
   EXPECT_TRUE(session.getTargetState().position.isApprox(previous_target.position));
-  EXPECT_TRUE(session.getTargetState().velocity.isApprox(previous_target.velocity));
+  EXPECT_DOUBLE_EQ(session.getTargetState().velocity.norm(), 0.0);
 }
 
 TEST(TrajectorySessionTest, DensePauseClusterDoesNotBlowUpPathLength) {
@@ -286,6 +286,41 @@ TEST(TrajectorySessionTest, ReversingEndpointRemovesConflictingRetainedPoint) {
   ASSERT_TRUE(session.generate(points, config));
   const auto start = session.getTrajectory()->evaluate(0.0);
   EXPECT_TRUE(start.position.isApprox(points.back().position, 1e-6));
+}
+
+TEST(TrajectorySessionTest, StationaryVehicleStopsReferenceBeforeNominalDurationAndCanResume) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  ASSERT_TRUE(session.generate(makeRecordPoints(), config));
+  for (int i=0; i<4000; ++i) ASSERT_TRUE(session.updateProgress(Vec3(2,0,1),0.5,0.05));
+  EXPECT_LT(session.getTargetArcLength(), 0.201);
+  EXPECT_LT(session.getTargetState().velocity.norm(), 1e-5);
+  EXPECT_FALSE(session.isFinished(Vec3(2,0,1), Vec3::Zero(),0.2));
+  for (int i=0; i<100; ++i) ASSERT_TRUE(session.updateProgress(Vec3(1.8,0,1),0.5,0.05));
+  EXPECT_GT(session.getTargetArcLength(), 0.25);
+}
+
+TEST(TrajectorySessionTest, ReferencePositionAndVelocityAgreeAndRejoinScalesYaw) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  config.enable_output_acc=true;
+  ASSERT_TRUE(session.generate(makeRecordPoints(), config));
+  auto previous=session.getTargetState();
+  for (int i=0; i<100; ++i) {
+    ASSERT_TRUE(session.updateRejoinProgress(previous.position,0.5,0.3,0.01,0.2));
+    const auto target=session.getTargetState();
+    EXPECT_LE(target.velocity.norm(),0.2+1e-6);
+    EXPECT_LT(((target.position-previous.position)/0.01 -
+        0.5*(target.velocity+previous.velocity)).norm(),0.01);
+    const auto nominal=session.getTrajectory()->evaluateByArcLength(session.getTargetArcLength());
+    if (nominal.velocity.norm()>1e-6) EXPECT_NEAR(target.yaw_rate,
+        nominal.yaw_rate*target.velocity.norm()/nominal.velocity.norm(),1e-6);
+    previous=target;
+  }
+  const auto retained=previous.position;
+  session.suspend();
+  EXPECT_TRUE(session.getTargetState().position.isApprox(retained));
+  EXPECT_DOUBLE_EQ(session.getTargetState().velocity.norm(),0.0);
 }
 
 TEST(TrajectorySessionTest, FinishedRequiresArcPositionAndLowHorizontalSpeed) {

@@ -299,12 +299,12 @@ TEST(BacktrackUseCaseTest, RejoinUsesPathYawAndWaitsForVelocityConvergence) {
 
   // 位置已回到路径但速度尚未恢复时，不能退出 Rejoin。
   usecase.onOdomReceived(
-      domain::Vec3(1.8, 0.0, 1.0), kZeroVelocity, kPi, 1.4);
+      domain::Vec3(1.8, 0.0, 1.0), domain::Vec3(0.5,0,0), kPi, 1.4);
   rejoin_output = usecase.tick(0.6);
   EXPECT_EQ(rejoin_output.current_state, domain::State::ReturnRejoin);
 
   usecase.onOdomReceived(
-      domain::Vec3(1.8, 0.0, 1.0), domain::Vec3(-1.0, 0.0, 0.0), kPi, 1.5);
+      domain::Vec3(1.8, 0.0, 1.0), rejoin_output.setpoint->velocity, kPi, 1.5);
   auto recovered_output = usecase.tick(0.7);
   EXPECT_EQ(recovered_output.current_state, domain::State::ReturnActive);
   ASSERT_TRUE(recovered_output.setpoint.has_value());
@@ -312,8 +312,8 @@ TEST(BacktrackUseCaseTest, RejoinUsesPathYawAndWaitsForVelocityConvergence) {
   EXPECT_LE((recovered_output.setpoint->velocity -
              rejoin_output.setpoint->velocity).norm(),
             0.3 + 1e-9);
-  EXPECT_TRUE(recovered_output.setpoint->position.isApprox(
-      rejoin_output.setpoint->position, 1e-6));
+  EXPECT_LE((recovered_output.setpoint->position-
+      rejoin_output.setpoint->position).norm(), 0.1);
 }
 
 TEST(BacktrackUseCaseTest, ResumeAlignsToRetainedPathTargetYaw) {

@@ -76,6 +76,7 @@ void TrajectorySession::reset() {
   target_state_ = trajectory_core::TrajectoryState();
   trajectory_v_max_m_s_ = 0.0;
   last_failure_kind_ = FailureKind::None;
+  reference_time_ = clock_rate_ = 0.0;
 }
 
 bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
@@ -146,7 +147,13 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
            waypoints.size());
 
   // 调用trajectory_core生成轨迹
-  auto result = generator_.generate(waypoints, config);
+  // 给执行时钟的加减速留一半切向/竖直加速度预算。
+  auto execution_config = config;
+  execution_config.a_tan_max *= 0.5;
+  execution_config.az_up_max *= 0.5;
+  execution_config.az_down_max *= 0.5;
+  execution_config.enable_output_acc = true;
+  auto result = generator_.generate(waypoints, execution_config);
 
   // 记录结束时间并计算耗时
   auto end_time = std::chrono::high_resolution_clock::now();
@@ -186,7 +193,11 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
   target_s_ = 0.0;
   cross_track_error_ = std::numeric_limits<double>::infinity();
   projection_valid_ = false;
-  target_state_ = traj_->evaluateByArcLength(0.0);
+  reference_time_ = clock_rate_ = 0.0;
+  clock_acc_limit_ = 0.5 * std::min({config.a_tan_max, config.az_up_max, config.az_down_max}) / config.v_max;
+  output_acceleration_ = config.enable_output_acc;
+  target_state_ = traj_->evaluateProgress({0.0, 0.0, 0.0, 0.0});
+  if (!output_acceleration_) target_state_.acceleration.reset();
   trajectory_v_max_m_s_ = config.v_max;
 
   // 输出INFO日志（用于验收和debug）
@@ -208,68 +219,91 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
   return true;
 }
 
+void TrajectorySession::suspend() {
+  clock_rate_ = 0.0;
+  target_state_.velocity.setZero();
+  target_state_.yaw_rate = 0.0;
+  if (target_state_.acceleration) target_state_.acceleration->setZero();
+}
+
+double TrajectorySession::arcAtTime(double time) const {
+  if (time <= 0.0) return 0.0;
+  if (time >= traj_->duration()) return traj_->pathLength();
+  double lo = 0.0, hi = traj_->pathLength();
+  for (int i = 0; i < 45; ++i) {
+    const double mid = (lo + hi) * 0.5;
+    if (traj_->evaluateByArcLength(mid).t < time) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) * 0.5;
+}
+
 bool TrajectorySession::updateProgress(const Vec3& current_position,
-                                       double lookahead_time_s) {
-  return updateProgressImpl(current_position, lookahead_time_s, 1.0, 0.0);
+                                       double lookahead_time_s, double dt_s) {
+  return updateProgressImpl(current_position, lookahead_time_s, 1.0, 0.0,
+                            dt_s, trajectory_v_max_m_s_);
 }
 
 bool TrajectorySession::updateRejoinProgress(
-    const Vec3& current_position,
-    double lookahead_time_s,
-    double trigger_distance_m) {
-  return updateProgressImpl(
-      current_position, lookahead_time_s, 2.0, trigger_distance_m);
+    const Vec3& current_position, double lookahead_time_s,
+    double trigger_distance_m, double dt_s, double speed_limit_m_s) {
+  return updateProgressImpl(current_position, lookahead_time_s, 2.0,
+                            trigger_distance_m, dt_s, speed_limit_m_s);
 }
 
 bool TrajectorySession::updateProgressImpl(
-    const Vec3& current_position,
-    double lookahead_time_s,
-    double forward_window_scale,
-    double lookahead_scale_distance_m) {
-  if (!traj_ || !traj_->isValid() || !current_position.allFinite() ||
-      !std::isfinite(lookahead_time_s) ||
-      !std::isfinite(forward_window_scale) ||
-      !std::isfinite(lookahead_scale_distance_m) ||
-      forward_window_scale <= 0.0) {
+    const Vec3& current_position, double lookahead_time_s,
+    double forward_window_scale, double lookahead_scale_distance_m,
+    double dt_s, double speed_limit_m_s) {
+  if (!isValid() || !current_position.allFinite() ||
+      !std::isfinite(lookahead_time_s) || lookahead_time_s < 0.0 ||
+      !std::isfinite(dt_s) || dt_s <= 0.0 || dt_s > 0.10 ||
+      !std::isfinite(speed_limit_m_s) || speed_limit_m_s < 0.0) {
     projection_valid_ = false;
+    suspend();
     return false;
   }
-
   const double path_length = traj_->pathLength();
-  const double forward_window = std::max(
-      kLookaheadMaxM,
-      trajectory_v_max_m_s_ * kProjectionCycleHorizonS +
-          kProjectionWindowMarginM);
-  const double s_min = std::max(0.0, projected_s_ - kProjectionBackwardWindowM);
-  const double s_max = std::min(
-      path_length, projected_s_ + forward_window * forward_window_scale);
-  const auto projection = traj_->projectPosition(current_position, s_min, s_max);
+  const double forward_window = std::max(kLookaheadMaxM,
+      trajectory_v_max_m_s_ * kProjectionCycleHorizonS + kProjectionWindowMarginM);
+  const auto projection = traj_->projectPosition(current_position,
+      std::max(0.0, projected_s_ - kProjectionBackwardWindowM),
+      std::min(path_length, projected_s_ + forward_window * forward_window_scale));
   if (!projection.valid) {
     projection_valid_ = false;
+    suspend();
     return false;
   }
-
-  // 正常路径跟随只允许空间进度前进，避免噪声和自交附近投影导致回退。
   projected_s_ = std::max(projected_s_, projection.arc_length);
   cross_track_error_ = projection.distance;
   projection_valid_ = true;
 
-  const auto projected_state = traj_->evaluateByArcLength(projected_s_);
-  double lookahead_scale = 1.0;
-  if (lookahead_scale_distance_m > 0.0) {
-    lookahead_scale = std::clamp(
-        1.0 - cross_track_error_ / lookahead_scale_distance_m, 0.0, 1.0);
-  }
-  const double lookahead_m = std::clamp(
-      projected_state.velocity.norm() * std::max(0.0, lookahead_time_s) *
-          lookahead_scale,
-      kLookaheadMinM,
-      kLookaheadMaxM);
-  const double candidate_target_s =
-      std::min(projected_s_ + lookahead_m, path_length);
-  // 目标弧长同样不回退，Rejoin 通过实际进度追上旧预瞄目标来平滑缩短预瞄。
-  target_s_ = std::max(target_s_, candidate_target_s);
-  target_state_ = traj_->evaluateByArcLength(target_s_);
+  // 空间预瞄只决定连续时钟的前进边界，绝不直接跳变位置目标。
+  const double scale = lookahead_scale_distance_m > 0.0
+      ? std::clamp(1.0-cross_track_error_/lookahead_scale_distance_m, 0.0, 1.0) : 1.0;
+  const double preview = std::clamp(trajectory_v_max_m_s_ * lookahead_time_s * scale,
+                                  kLookaheadMinM, 0.20);
+  const double allowed_s = std::max(target_s_, std::min(path_length, projected_s_+preview));
+  const double allowed_time = traj_->evaluateByArcLength(allowed_s).t;
+  const double remaining_time = std::max(0.0, allowed_time-reference_time_);
+  const double desired_rate = std::min({1.0,
+      speed_limit_m_s / std::max(trajectory_v_max_m_s_, 1e-9),
+      std::sqrt(2.0 * clock_acc_limit_ * remaining_time)});
+  const double old_rate = clock_rate_;
+  clock_rate_ += std::clamp(desired_rate-clock_rate_,
+                           -clock_acc_limit_*dt_s, clock_acc_limit_*dt_s);
+  const double clock_acc = (clock_rate_-old_rate)/dt_s;
+  reference_time_ = std::min(allowed_time,
+      reference_time_ + 0.5*(old_rate+clock_rate_)*dt_s);
+  if (remaining_time <= 1e-10) clock_rate_ = 0.0;
+  target_s_ = arcAtTime(reference_time_);
+  const auto timed = traj_->evaluate(reference_time_);
+  const double speed = timed.velocity.norm();
+  const double nominal_tangent_acc = timed.acceleration && speed > 1e-9
+      ? timed.velocity.dot(*timed.acceleration) / speed : 0.0;
+  target_state_ = traj_->evaluateProgress({reference_time_, target_s_,
+      speed*clock_rate_, nominal_tangent_acc*clock_rate_*clock_rate_ + speed*clock_acc});
+  if (!output_acceleration_) target_state_.acceleration.reset();
   return true;
 }
 

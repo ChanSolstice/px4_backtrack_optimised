@@ -157,6 +157,8 @@ private:
   // 轨迹生成标志
   bool trajectory_generation_requested_;
 
+  double last_progress_time_ = -1.0;
+
   // Rejoin持续判定计时
   double rejoin_trigger_candidate_start_time_;
   double rejoin_success_candidate_start_time_;
@@ -196,7 +198,7 @@ private:
   void handleWaypointFallbackProgress();
 
   /// 按实际位置更新弧长路径进度
-  void handleTrajectoryProgress();
+  void handleTrajectoryProgress(double now);
 
   /// 轨迹是否已完成起始航向对准，可进入 ReturnActive
   bool isTrajectoryActivationReady(double now);
