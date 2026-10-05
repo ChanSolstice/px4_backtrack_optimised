@@ -1,0 +1,17 @@
+2026-10-05: independent PX4 native SIH instance 7, temporary rootfs, system 8.
+Both attempts failed to arm; no return executed. This is not a passed flight test.
+
+  MC_YAWRATE_MAX: curr: 200.0000 -> new: 45.0000
+  MPC_XY_VEL_MAX: curr: 12.0000 -> new: 0.6000
+  MPC_Z_VEL_MAX_UP: curr: 3.0000 -> new: 0.6000
+  MPC_Z_VEL_MAX_DN: curr: 1.5000 -> new: 0.6000
+INFO  [commander] Preflight check: FAILED
+SCENARIO_EXIT 5
+EVENT mode=POSCTL armed=False
+PASS MAVROS connected and odometry available
+SCENARIO origin=(-20.132,-9.240,-1.588) flight_z=0.412
+EVENT backtrack_state=IdleDisarmed
+REQUEST mode=OFFBOARD sent=True
+EVENT mode=OFFBOARD armed=False
+PASS PX4 entered OFFBOARD
+REQUEST arm=True success=False

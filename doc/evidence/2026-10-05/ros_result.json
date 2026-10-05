@@ -1,0 +1,11 @@
+{
+  "blocked_rpc_s": 2.0018781890394166,
+  "heartbeat_count": 40,
+  "max_publish_gap_s": 0.050121114996727556,
+  "slow_flight_speed_m_s": 0.1,
+  "endpoint_error_m": 0.19999999999999962,
+  "fallback_position_yaw_seen": true,
+  "stale_odom_pause": true,
+  "external_mode_yield": true,
+  "checks": "PASS"
+}

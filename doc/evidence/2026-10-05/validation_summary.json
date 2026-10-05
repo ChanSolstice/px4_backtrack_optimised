@@ -1,0 +1,189 @@
+{
+  "date": "2026-10-05",
+  "platform": "x86_64 host / Docker ROS_Noetic",
+  "return_release": {
+    "targets": [
+      {
+        "target": "gtest-test_async_control",
+        "testcases": 4
+      },
+      {
+        "target": "gtest-test_backtrack_usecase",
+        "testcases": 21
+      },
+      {
+        "target": "gtest-test_path_yaw",
+        "testcases": 3
+      },
+      {
+        "target": "gtest-test_recorded_route",
+        "testcases": 2
+      },
+      {
+        "target": "gtest-test_recording_buffer",
+        "testcases": 4
+      },
+      {
+        "target": "gtest-test_rejoin_policy",
+        "testcases": 1
+      },
+      {
+        "target": "gtest-test_ros_subscribers",
+        "testcases": 3
+      },
+      {
+        "target": "gtest-test_state_machine",
+        "testcases": 9
+      },
+      {
+        "target": "gtest-test_trajectory_session",
+        "testcases": 19
+      },
+      {
+        "target": "gtest-test_trigger_evaluator",
+        "testcases": 10
+      },
+      {
+        "target": "gtest-test_waypoint_fallback_session",
+        "testcases": 8
+      }
+    ],
+    "unique_cases": 84,
+    "failed": 0
+  },
+  "core_release": {
+    "targets": [
+      {
+        "target": "gtest-test_config",
+        "testcases": 7
+      },
+      {
+        "target": "gtest-test_constraints",
+        "testcases": 14
+      },
+      {
+        "target": "gtest-test_corner_blend",
+        "testcases": 7
+      },
+      {
+        "target": "gtest-test_end_convergence",
+        "testcases": 10
+      },
+      {
+        "target": "gtest-test_full_pipeline",
+        "testcases": 17
+      },
+      {
+        "target": "gtest-test_preprocess",
+        "testcases": 12
+      },
+      {
+        "target": "gtest-test_resample",
+        "testcases": 6
+      },
+      {
+        "target": "gtest-test_segment_chain",
+        "testcases": 10
+      },
+      {
+        "target": "gtest-test_segment_geometry",
+        "testcases": 11
+      },
+      {
+        "target": "gtest-test_time_param",
+        "testcases": 17
+      },
+      {
+        "target": "gtest-test_trajectory",
+        "testcases": 16
+      },
+      {
+        "target": "gtest-test_yaw_processing",
+        "testcases": 13
+      }
+    ],
+    "unique_cases": 140,
+    "failed": 0
+  },
+  "return_sanitizer_debug": {
+    "targets": [
+      {
+        "target": "gtest-test_async_control",
+        "testcases": 4
+      },
+      {
+        "target": "gtest-test_backtrack_usecase",
+        "testcases": 21
+      },
+      {
+        "target": "gtest-test_path_yaw",
+        "testcases": 3
+      },
+      {
+        "target": "gtest-test_recorded_route",
+        "testcases": 2
+      },
+      {
+        "target": "gtest-test_recording_buffer",
+        "testcases": 4
+      },
+      {
+        "target": "gtest-test_rejoin_policy",
+        "testcases": 1
+      },
+      {
+        "target": "gtest-test_ros_subscribers",
+        "testcases": 3
+      },
+      {
+        "target": "gtest-test_state_machine",
+        "testcases": 9
+      },
+      {
+        "target": "gtest-test_trajectory_session",
+        "testcases": 19
+      },
+      {
+        "target": "gtest-test_trigger_evaluator",
+        "testcases": 10
+      },
+      {
+        "target": "gtest-test_waypoint_fallback_session",
+        "testcases": 8
+      }
+    ],
+    "unique_cases": 84,
+    "failed": 0
+  },
+  "ros": {
+    "blocked_rpc_s": 2.0018781890394166,
+    "heartbeat_count": 40,
+    "max_publish_gap_s": 0.050121114996727556,
+    "slow_flight_speed_m_s": 0.1,
+    "endpoint_error_m": 0.19999999999999962,
+    "fallback_position_yaw_seen": true,
+    "stale_odom_pause": true,
+    "external_mode_yield": true,
+    "checks": "PASS"
+  },
+  "scale_release_log": [
+    "MAX_RECORDING points=54002 max_control_tick_s=0.00157432"
+  ],
+  "scale_debug_log": [
+    "MAX_RECORDING points=54002 max_control_tick_s=0.178112"
+  ],
+  "memory_sanitizer_findings": [],
+  "install_headers": true,
+  "install_node": true,
+  "sih_status": "PREARM_HEALTH_CHECK_FAILED_NO_RETURN_EXECUTED",
+  "rk3588_status": "NOT_EXECUTED",
+  "physical_deviation_status": "NOT_ACCEPTED",
+  "performance_scope": "Release only; Debug sanitizer timing is not the production budget",
+  "limitations": [
+    "mock FCU is not a PX4 dynamics test",
+    "single straight large-recording scenario on host",
+    "solver and dispatched mode RPC cannot be force-canceled"
+  ],
+  "return_code_commit": "a6af99f88faaa6f1f421553b543da1cb59051cb8",
+  "core_code_commit": "4857b87ba9902f563dcde83b4bdd46a0d31a1c17"
+}
