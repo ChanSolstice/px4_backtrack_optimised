@@ -71,6 +71,7 @@ mavros_msgs::PositionTarget SetpointPublisher::toPositionTargetMsg(
 StatusPublisher::StatusPublisher(ros::NodeHandle& nh) {
   state_pub_ = nh.advertise<std_msgs::String>("/px4_backtrack/state", 10);
   rc_loss_pub_ = nh.advertise<std_msgs::Bool>("/status_rc_loss", 10);
+  low_battery_pub_ = nh.advertise<std_msgs::Bool>("/px4_backtrack/low_battery", 10);
   ROS_INFO("[StatusPublisher] Initialized");
 }
 
@@ -84,6 +85,12 @@ void StatusPublisher::publishRCLoss(bool lost) {
   std_msgs::Bool msg;
   msg.data = lost;
   rc_loss_pub_.publish(msg);
+}
+
+void StatusPublisher::publishLowBattery(bool low_battery) {
+  std_msgs::Bool msg;
+  msg.data = low_battery;
+  low_battery_pub_.publish(msg);
 }
 
 }  // namespace adapters

@@ -29,6 +29,7 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   loadCh7Params(nh, config);
   loadCh18Params(nh, config);
   loadRCLossParams(nh, config);
+  loadLowBatteryParams(nh, config);
   loadOffboardParams(nh, config);
   loadRejoinParams(nh, config);
   loadLandingParams(nh, config);
@@ -108,6 +109,17 @@ void ConfigLoader::loadRCLossParams(ros::NodeHandle& nh, application::UseCaseCon
   ROS_INFO("  enable_trigger_rc_loss: %s", config.trigger_config.enable_rc_loss ? "true" : "false");
   ROS_INFO("  rc_loss_timeout_s: %.2f", config.trigger_config.rc_loss_timeout_s);
   ROS_INFO("  rc_loss_debounce_s: %.2f", config.trigger_config.rc_loss_debounce_s);
+}
+
+void ConfigLoader::loadLowBatteryParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
+  requireParam(nh, "enable_trigger_low_battery", config.trigger_config.enable_low_battery);
+  requireParam(nh, "low_battery_threshold", config.trigger_config.low_battery_threshold);
+  requireParam(nh, "low_battery_confirm_s", config.trigger_config.low_battery_confirm_s);
+
+  ROS_INFO("[ConfigLoader] Low battery params:");
+  ROS_INFO("  enable_trigger_low_battery: %s", config.trigger_config.enable_low_battery ? "true" : "false");
+  ROS_INFO("  low_battery_threshold: %.2f", config.trigger_config.low_battery_threshold);
+  ROS_INFO("  low_battery_confirm_s: %.1f", config.trigger_config.low_battery_confirm_s);
 }
 
 void ConfigLoader::loadOffboardParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {

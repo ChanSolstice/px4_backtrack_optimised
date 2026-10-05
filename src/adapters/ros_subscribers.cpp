@@ -196,5 +196,49 @@ void RCSubscriber::rcCallback(const mavros_msgs::RCIn::ConstPtr& msg) {
   }
 }
 
+// ============================================================================
+// BatterySubscriber实现
+// ============================================================================
+
+BatterySubscriber::BatterySubscriber(ros::NodeHandle& nh, const std::string& topic)
+  : percentage_(1.0),
+    has_data_(false)
+{
+  sub_ = nh.subscribe(topic, 10, &BatterySubscriber::batteryCallback, this);
+  ROS_INFO("[BatterySubscriber] Subscribed to: %s", topic.c_str());
+}
+
+bool BatterySubscriber::getLatest(double& percentage) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!has_data_) {
+    return false;
+  }
+  percentage = percentage_;
+  return true;
+}
+
+void BatterySubscriber::setCallback(std::function<void(double)> callback) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  external_callback_ = callback;
+}
+
+void BatterySubscriber::batteryCallback(const sensor_msgs::BatteryState::ConstPtr& msg) {
+  std::function<void(double)> cb;
+  double percentage;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    percentage_ = static_cast<double>(msg->percentage);
+    has_data_ = true;
+
+    percentage = percentage_;
+    cb = external_callback_;
+  }
+
+  if (cb) {
+    cb(percentage);
+  }
+}
+
 }  // namespace adapters
 }  // namespace px4_backtrack

@@ -5,6 +5,7 @@
 #include <mavros_msgs/State.h>
 #include <nav_msgs/Odometry.h>
 #include <mavros_msgs/RCIn.h>
+#include <sensor_msgs/BatteryState.h>
 #include <mutex>
 #include <functional>
 
@@ -140,6 +141,43 @@ private:
 
   /// ROS回调
   void rcCallback(const mavros_msgs::RCIn::ConstPtr& msg);
+};
+
+// ============================================================================
+// BatterySubscriber类
+// ============================================================================
+
+/// 电池状态订阅者（线程安全）
+class BatterySubscriber {
+public:
+  /// 构造函数
+  /// @param nh ROS节点句柄
+  /// @param topic 订阅话题名
+  explicit BatterySubscriber(ros::NodeHandle& nh, const std::string& topic = "/mavros/battery");
+
+  /// 获取最新电池电量（线程安全）
+  /// @param percentage 输出：电量百分比 (0.0~1.0)
+  /// @return 是否收到过数据
+  bool getLatest(double& percentage) const;
+
+  /// 设置外部回调（可选）
+  /// @param callback 回调函数 (percentage)
+  void setCallback(std::function<void(double)> callback);
+
+private:
+  /// ROS订阅者
+  ros::Subscriber sub_;
+
+  /// 最新数据（mutex保护）
+  mutable std::mutex mutex_;
+  double percentage_;
+  bool has_data_;
+
+  /// 外部回调（可选）
+  std::function<void(double)> external_callback_;
+
+  /// ROS回调
+  void batteryCallback(const sensor_msgs::BatteryState::ConstPtr& msg);
 };
 
 }  // namespace adapters

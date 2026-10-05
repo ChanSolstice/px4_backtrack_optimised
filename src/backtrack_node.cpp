@@ -35,6 +35,7 @@ private:
   std::unique_ptr<adapters::StateSubscriber> state_sub_;
   std::unique_ptr<adapters::OdomSubscriber> odom_sub_;
   std::unique_ptr<adapters::RCSubscriber> rc_sub_;
+  std::unique_ptr<adapters::BatterySubscriber> battery_sub_;
   std::unique_ptr<adapters::SetpointPublisher> setpoint_pub_;
   std::unique_ptr<adapters::StatusPublisher> status_pub_;
   std::unique_ptr<adapters::SetModeClient> set_mode_client_;
@@ -75,6 +76,7 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
   state_sub_ = std::make_unique<adapters::StateSubscriber>(nh_);
   odom_sub_ = std::make_unique<adapters::OdomSubscriber>(nh_);
   rc_sub_ = std::make_unique<adapters::RCSubscriber>(nh_);
+  battery_sub_ = std::make_unique<adapters::BatterySubscriber>(nh_);
   setpoint_pub_ = std::make_unique<adapters::SetpointPublisher>(nh_);
   status_pub_ = std::make_unique<adapters::StatusPublisher>(nh_);
   set_mode_client_ = std::make_unique<adapters::SetModeClient>(nh_);
@@ -112,6 +114,10 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
     usecase_->onStateReceived(armed, mode);
   });
 
+  battery_sub_->setCallback([this](double percentage) {
+    usecase_->onBatteryReceived(percentage);
+  });
+
   // 6. 创建定时器
   ROS_INFO("[BacktrackNode] Starting %.1f Hz timer...", publish_hz);
   timer_ = nh_.createTimer(ros::Duration(1.0 / publish_hz),
@@ -135,6 +141,7 @@ void BacktrackNode::timerCallback(const ros::TimerEvent& event) {
   // 发布状态信息
   status_pub_->publishState(output.current_state);
   status_pub_->publishRCLoss(output.rc_loss);
+  status_pub_->publishLowBattery(output.low_battery);
 
   // 处理setpoint发布
   if (output.should_publish_setpoint && output.setpoint.has_value()) {

@@ -71,12 +71,14 @@ struct TickOutput {
   std::optional<domain::ModeRequest> mode_request; ///< 模式切换请求
   domain::State current_state;                     ///< 当前状态（用于调试）
   bool rc_loss;                                    ///< RC丢失持续状态
+  bool low_battery;                                ///< 低电量持续状态
 
   /// 默认构造函数
   TickOutput()
     : should_publish_setpoint(false),
       current_state(domain::State::IdleDisarmed),
-      rc_loss(false)
+      rc_loss(false),
+      low_battery(false)
   {}
 };
 
@@ -114,6 +116,10 @@ public:
   /// @param armed 是否ARM
   /// @param mode 当前模式
   void onStateReceived(bool armed, const std::string& mode);
+
+  /// 电池状态回调
+  /// @param percentage 电量百分比 (0.0~1.0)
+  void onBatteryReceived(double percentage);
 
   /// 设置 CSV debug dumper（可选）
   void setDebugDumper(std::shared_ptr<infrastructure::DebugDumper> dumper);

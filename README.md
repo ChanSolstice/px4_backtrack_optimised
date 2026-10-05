@@ -7,17 +7,17 @@
 ## 核心能力
 
 - 飞行周期复位后延时开始录制航迹
-- 支持 3 类返航触发：`CH7` 长按、`CH18` 故障确认、RC 消息丢失
+- 支持 4 类返航触发：`CH7` 长按、`CH18` 故障确认、RC 消息丢失、低电量触发
 - 使用 `trajectory_core` 从录制点逆序生成平滑返航轨迹
 - 按实际位置的局部路径投影推进弧长，不依赖 wall time 追赶参考点
 - 返航中支持与正常跟随共用路径目标的低速 rejoin
 - 轨迹生成前会对停顿/悬停形成的高密度录制点做空间抽稀，低于阈值的中间点直接忽略，减小停顿点附近抽动并避免低速段被截断
-- 返航中支持暂停，再次触发后恢复
+- 返航中支持暂停，再次触发后恢复（暂停状态下低电量不自动恢复返航，通过话题广播）
 - rejoin 进入/退出支持持续判定，避免单帧误差导致状态来回切换
 - 触发时若录制点数不足，自动降级为原地降落
 - 轨迹生成失败时，可恢复的非几何退化场景自动切换为 waypoint 退化返航；点过近时原地降落；非法配置不会被 fallback 掩盖
 - 返航结束后先固定点悬停，再发起 `POSCTL -> AUTO.LAND` 过渡（非 OFFBOARD 时直接请求 `AUTO.LAND`）；飞控接管后进入 `AutoLandYield` 直到 DISARM
-- 发布内部状态与 RC 丢失持续状态，便于联调
+- 发布内部状态与 RC 丢失、低电量持续状态，便于联调与前端弹窗
 - 可选 debug 模式：轨迹生成后自动导出录制航点与返航轨迹 CSV，并可在 rviz 中实时查看
 
 ## 仓库现状
@@ -42,8 +42,8 @@
 ## 主要执行流程
 
 1. 启动节点后，`ConfigLoader` 从参数服务器读取返航参数，再加载 `trajectory_config.yaml`。
-2. `BacktrackNode` 建立 `/mavros/state`、`/Odometry_px4`、`/mavros/rc/in` 订阅，以及 setpoint、状态发布器和 `/mavros/set_mode` 客户端。
-3. 订阅回调把状态、里程计和 RC 数据送入 `BacktrackUseCase`。
+2. `BacktrackNode` 建立 `/mavros/state`、`/Odometry_px4`、`/mavros/rc/in`、`/mavros/battery` 订阅，以及 setpoint、状态发布器和 `/mavros/set_mode` 客户端。
+3. 订阅回调把状态、里程计、RC 和电池数据送入 `BacktrackUseCase`。
 4. 20Hz 定时器调用 `BacktrackUseCase::tick()`，由它依次处理飞行周期复位、录制延时、触发检测、轨迹生成、实际位置局部投影、rejoin 与状态机推进。
 5. `BacktrackStateMachine` 决定当前是否应该发布 setpoint、是否请求切换 `OFFBOARD` / `POSCTL` / `AUTO.LAND`。
 6. Adapters 层把领域层的 `SetpointTarget` 转成 `mavros_msgs/PositionTarget` 并发布。
@@ -57,6 +57,7 @@
 | `/mavros/state` | `mavros_msgs/State` | 获取 `armed` 与当前飞控模式 |
 | `/Odometry_px4` | `nav_msgs/Odometry` | 提供当前位置、线速度、航向和录制时间戳 |
 | `/mavros/rc/in` | `mavros_msgs/RCIn` | 提供 `CH7`、`CH18` 和 RC 消息时序 |
+| `/mavros/battery` | `sensor_msgs/BatteryState` | 提供电池电量百分比（`percentage`，0.0~1.0） |
 
 ### 输出
 
@@ -65,6 +66,7 @@
 | `/mavros/setpoint_raw/local` | `mavros_msgs/PositionTarget` | 发布悬停、返航和 rejoin setpoint |
 | `/px4_backtrack/state` | `std_msgs/String` | 发布内部状态机状态 |
 | `/status_rc_loss` | `std_msgs/Bool` | RC 丢失持续状态（`isRCLost()` 电平语义，丢失期间持续为 `true`） |
+| `/px4_backtrack/low_battery` | `std_msgs/Bool` | 低电量持续状态（`isLowBattery()` 电平语义，供前端弹窗提示） |
 | `/px4_backtrack/debug/waypoints` | `visualization_msgs/MarkerArray` | 录制航点可视化（latched，需启用 `debug_enable_rviz_publish`） |
 | `/px4_backtrack/debug/trajectory` | `nav_msgs/Path` | 返航轨迹可视化（latched，需启用 `debug_enable_rviz_publish`） |
 
@@ -79,6 +81,7 @@
 - 坐标约定使用 ENU；`SetpointPublisher` 将 ENU 值直接填入 `FRAME_LOCAL_NED` 的 `PositionTarget`，依赖 MAVROS 完成坐标转换。
 - `/Odometry_px4` 的 pose 位于父 ENU，twist 按 `nav_msgs/Odometry` 语义位于 `child_frame_id`；订阅适配器会先将线速度旋转到父 ENU，再交给终点和 Rejoin 判定。
 - `/status_rc_loss` 是电平语义：RC 丢失期间持续为 `true`，RC 恢复后自动回到 `false`。
+- `/px4_backtrack/low_battery` 是电平语义：低电量确认后持续锁存为 `true`，不随电压回弹而取消。
 
 ## 配置
 
@@ -88,7 +91,7 @@
 
 说明：
 
-- `CH7` / `CH18` / `RC loss` 触发参数现在以 `backtrack_params.yaml` 为唯一运行时来源
+- `CH7` / `CH18` / `RC loss` / `Low battery` 触发参数现在以 `backtrack_params.yaml` 为唯一运行时来源
 - `ConfigLoader` 会从 ROS 参数服务器强制读取这些触发参数；如果 launch 没有把它们加载进来，节点会在启动时报错退出
 - `TriggerConfig` 头文件不再提供业务默认值，避免“头文件默认值”和 YAML 配置并存导致行为不一致
 - 正常返航按飞机实际位置在路径上的局部投影推进弧长，`rejoin_lookahead_time_s` 同时用于正常预瞄和 Rejoin 缩短预瞄，不再由 wall time 推进参考点
