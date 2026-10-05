@@ -7,6 +7,7 @@
 #include "px4_backtrack/domain/waypoint_fallback_session.hpp"
 #include "px4_backtrack/domain/rejoin_policy.hpp"
 #include "px4_backtrack/domain/recorded_route.hpp"
+#include "planning_worker.hpp"
 
 #include <trajectory_core/trajectory_core.hpp>
 #include <memory>
@@ -106,7 +107,7 @@ class BacktrackUseCase {
 public:
   /// 构造函数
   /// @param config 配置参数
-  explicit BacktrackUseCase(const UseCaseConfig& config);
+  explicit BacktrackUseCase(const UseCaseConfig& config, PlanningWorker::Planner planner = {});
 
   /// 每个20Hz周期调用的tick
   /// @param now 当前时间 (s)
@@ -149,7 +150,10 @@ private:
   // Domain对象
   domain::RecordingBuffer recording_buffer_;
   domain::TriggerEvaluator trigger_evaluator_;
-  domain::TrajectorySession trajectory_session_;
+  std::unique_ptr<domain::TrajectorySession> trajectory_session_;
+  PlanningWorker planning_worker_;
+  bool planning_inflight_ = false;
+  void cancelPlanning();
   domain::WaypointFallbackSession waypoint_fallback_session_;
   domain::RejoinPolicy rejoin_policy_;
   domain::RecordedRoute recorded_route_;
@@ -243,9 +247,6 @@ private:
 
   /// 统一处理“不可返航，直接降落”的降级路径
   void triggerImmediateLanding();
-
-  /// 执行 debug 数据导出（轨迹生成成功后调用）
-  void performDebugDump();
 
   // Debug helpers（可选，nullptr 表示禁用）
   std::shared_ptr<infrastructure::DebugDumper> debug_dumper_;

@@ -1,43 +1,31 @@
 #pragma once
-
 #include "px4_backtrack/domain/state_machine.hpp"
 #include <ros/ros.h>
 #include <mavros_msgs/SetMode.h>
+#include <condition_variable>
+#include <functional>
+#include <mutex>
+#include <thread>
 
-namespace px4_backtrack {
-namespace adapters {
-
-// ============================================================================
-// SetModeClient类
-// ============================================================================
-
-/// SetMode服务客户端（带节流）
+namespace px4_backtrack::adapters {
 class SetModeClient {
 public:
-  /// 构造函数
-  /// @param nh ROS节点句柄
-  /// @param service_name 服务名
-  /// @param throttle_interval_s 节流间隔 (s)
-  explicit SetModeClient(ros::NodeHandle& nh,
-                         const std::string& service_name = "/mavros/set_mode",
-                         double throttle_interval_s = 1.0);
-
-  /// 调用SetMode服务（带节流）
-  /// @param mode_request 模式请求
-  /// @return 是否调用成功
-  bool callSetMode(domain::ModeRequest mode_request);
-
+  explicit SetModeClient(ros::NodeHandle& nh, const std::string& service_name="/mavros/set_mode",
+                         double throttle_interval_s=1.0);
+  explicit SetModeClient(std::function<bool(domain::ModeRequest)> transport,
+                         double throttle_interval_s=1.0);
+  ~SetModeClient();
+  // 非阻塞；nullopt 清掉尚未派发的旧请求。已经发给飞控的 RPC 无法撤回。
+  void request(std::optional<domain::ModeRequest> mode);
 private:
-  /// ROS服务客户端
   ros::ServiceClient client_;
-
-  /// 节流参数
+  std::function<bool(domain::ModeRequest)> transport_;
   double throttle_interval_s_;
-  double last_call_time_;
-
-  /// 将ModeRequest转换为模式字符串
-  std::string modeRequestToString(domain::ModeRequest mode_request) const;
+  std::mutex mutex_;
+  std::condition_variable wake_;
+  std::optional<domain::ModeRequest> pending_;
+  bool stopping_=false;
+  std::thread thread_;
+  void run();
 };
-
-}  // namespace adapters
-}  // namespace px4_backtrack
+}

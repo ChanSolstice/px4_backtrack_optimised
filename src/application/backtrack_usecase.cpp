@@ -23,10 +23,12 @@ double wrappedAngleError(double actual, double target) {
 
 }  // namespace
 
-BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config)
+BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config, PlanningWorker::Planner planner)
   : config_(config),
     recording_buffer_(config.record_max_hz),
     trigger_evaluator_(config.trigger_config),
+    trajectory_session_(std::make_unique<domain::TrajectorySession>()),
+    planning_worker_(std::move(planner)),
     rejoin_policy_(config.rejoin_config),
     state_machine_(config.state_machine_config),
     current_armed_(false),
@@ -80,8 +82,8 @@ TickOutput BacktrackUseCase::tick(double now) {
   if (state_fresh && !current_armed_) {
     localization_reset_=false;
     input_hold_=route_safety_hold_=false;
-    trajectory_generation_requested_=false;
-    trajectory_session_.reset(); waypoint_fallback_session_.reset(); recorded_route_.reset();
+    cancelPlanning();
+    trajectory_session_->reset(); waypoint_fallback_session_.reset(); recorded_route_.reset();
     domain::TickInput disarm; disarm.armed=false; disarm.mode=current_mode_; disarm.now=now;
     state_machine_.tick(disarm);
     handleFlightCycleReset(false);
@@ -103,8 +105,8 @@ TickOutput BacktrackUseCase::tick(double now) {
        last_confirmed_mode_=="OFFBOARD");
   last_confirmed_mode_=current_mode_;
   if (owned && current_mode_!="OFFBOARD") {
-    trajectory_generation_requested_=false;
-    trajectory_session_.suspend(); last_progress_time_=-1.0;
+    cancelPlanning();
+    trajectory_session_->suspend(); last_progress_time_=-1.0;
     route_safety_hold_=input_hold_=false;
     state_machine_.yieldControl();
   }
@@ -159,11 +161,11 @@ TickOutput BacktrackUseCase::tick(double now) {
   tick_input.current_yaw = current_yaw_;
   const auto state_before_tick = state_machine_.getCurrentState();
   tick_input.trajectory_ready = waypoint_fallback_session_.isValid() ||
-      (trajectory_session_.isValid() &&
+      (trajectory_session_->isValid() &&
        (state_before_tick != domain::State::ReturnPreOffboard ||
         isTrajectoryActivationReady(now)));
   tick_input.trajectory_finished =
-      trajectory_session_.isFinished(
+      trajectory_session_->isFinished(
           current_position_, current_velocity_,
           kReturnEndPositionToleranceM) ||
       waypoint_fallback_session_.isFinished();
@@ -208,8 +210,8 @@ TickOutput BacktrackUseCase::holdForInvalidInput(double now) {
   if (controlled) {
     safety_hold_position_=current_position_; safety_hold_yaw_=current_yaw_;
     input_hold_=true;
-    trajectory_session_.suspend();
-    trajectory_generation_requested_=false;
+    trajectory_session_->suspend();
+    cancelPlanning();
     state_machine_.triggerPause();
   }
   last_progress_time_=-1.0;
@@ -296,10 +298,10 @@ void BacktrackUseCase::handleFlightCycleReset(bool armed) {
     recorded_route_.reset();
     route_safety_hold_=false;
     last_progress_time_=-1.0;
-    trajectory_session_.reset();
+    trajectory_session_->reset();
     waypoint_fallback_session_.reset();
     record_delay_started_ = false;
-    trajectory_generation_requested_ = false;
+    cancelPlanning();
     rejoin_trigger_candidate_start_time_ = -1.0;
     rejoin_success_candidate_start_time_ = -1.0;
     yaw_alignment_start_time_ = -1.0;
@@ -323,8 +325,8 @@ bool BacktrackUseCase::handleAutoLandYield() {
 
   if (current_mode_ == "AUTO.LAND" && !auto_land_yield_active_) {
     ROS_WARN("[BacktrackUseCase] AUTO.LAND detected, yielding until DISARM");
-    trajectory_generation_requested_ = false;
-    trajectory_session_.reset();
+    cancelPlanning();
+    trajectory_session_->reset();
     waypoint_fallback_session_.reset();
     rejoin_trigger_candidate_start_time_ = -1.0;
     rejoin_success_candidate_start_time_ = -1.0;
@@ -421,7 +423,8 @@ void BacktrackUseCase::handleTriggers(double now) {
 
     if (trigger_evaluator_.checkCh7PressEvent()) {
       ROS_INFO("[BacktrackUseCase] Ch7 press event detected, pausing");
-      trajectory_session_.suspend();
+      cancelPlanning();
+      trajectory_session_->suspend();
       last_progress_time_ = -1.0;
       state_machine_.triggerPause();
       return;
@@ -436,11 +439,11 @@ void BacktrackUseCase::handleTriggers(double now) {
       if (has_min_points) {
         ROS_WARN("[BacktrackUseCase] RC loss detected while paused, resuming return");
         route_safety_hold_=input_hold_=false;
-        const double hold_yaw = trajectory_session_.isValid()
-            ? trajectory_session_.getTargetState().yaw
+        const double hold_yaw = trajectory_session_->isValid()
+            ? trajectory_session_->getTargetState().yaw
             : current_yaw_;
         state_machine_.lockPosition(current_position_, hold_yaw);
-        trajectory_generation_requested_=!trajectory_session_.isValid() && !waypoint_fallback_session_.isValid();
+        trajectory_generation_requested_=!trajectory_session_->isValid() && !waypoint_fallback_session_.isValid();
         state_machine_.triggerReturn(domain::Event::RCLossTriggered);
         yaw_alignment_start_time_ = now;
         yaw_alignment_timeout_reported_ = false;
@@ -457,11 +460,11 @@ void BacktrackUseCase::handleTriggers(double now) {
       if (has_min_points) {
         ROS_INFO("[BacktrackUseCase] Ch7 long press detected, resuming");
         route_safety_hold_=input_hold_=false;
-        const double hold_yaw = trajectory_session_.isValid()
-            ? trajectory_session_.getTargetState().yaw
+        const double hold_yaw = trajectory_session_->isValid()
+            ? trajectory_session_->getTargetState().yaw
             : current_yaw_;
         state_machine_.lockPosition(current_position_, hold_yaw);
-        trajectory_generation_requested_=!trajectory_session_.isValid() && !waypoint_fallback_session_.isValid();
+        trajectory_generation_requested_=!trajectory_session_->isValid() && !waypoint_fallback_session_.isValid();
         state_machine_.triggerReturn(domain::Event::Ch7LongPress);
         yaw_alignment_start_time_ = now;
         yaw_alignment_timeout_reported_ = false;
@@ -478,7 +481,8 @@ void BacktrackUseCase::handleReturnTrigger(domain::Event event,
                                            const char* trigger_name) {
   if (has_min_points) {
     ROS_INFO("[BacktrackUseCase] %s detected", trigger_name);
-    trajectory_session_.reset();
+    cancelPlanning();
+    trajectory_session_->reset();
     waypoint_fallback_session_.reset();
     route_safety_hold_=false;
     last_progress_time_=-1.0;
@@ -496,51 +500,37 @@ void BacktrackUseCase::handleReturnTrigger(domain::Event event,
   triggerImmediateLanding();
 }
 
+void BacktrackUseCase::cancelPlanning() {
+  trajectory_generation_requested_=false;
+  planning_inflight_=false;
+  planning_worker_.cancel();
+}
+
 void BacktrackUseCase::handleTrajectoryGeneration(double now) {
-  // 在ReturnPreOffboard状态且轨迹生成被请求时，执行轨迹生成
-  auto current_state = state_machine_.getCurrentState();
-
-  if (current_state == domain::State::ReturnPreOffboard &&
-      trajectory_generation_requested_ &&
-      !trajectory_session_.isValid() &&
-      !waypoint_fallback_session_.isValid()) {
-
-    ROS_INFO("[BacktrackUseCase] Generating trajectory from %zu points",
-             recording_buffer_.size());
-
-    // 生成轨迹
-    bool success = trajectory_session_.generate(
-        recording_buffer_.getPoints(),
-        config_.trajectory_config);
-
-    if (success) {
-      trajectory_generation_requested_ = false;
-      waypoint_fallback_session_.reset();
-      rejoin_trigger_candidate_start_time_ = -1.0;
-      rejoin_success_candidate_start_time_ = -1.0;
-      yaw_alignment_start_time_ = now;
-      yaw_alignment_timeout_reported_ = false;
-      has_last_path_target_velocity_ = false;
-      const domain::Vec3 locked_position =
-          state_machine_.getStateData().locked_position;
-      state_machine_.lockPosition(
-          locked_position,
-          trajectory_session_.getTargetState().yaw);
-      ROS_INFO("[BacktrackUseCase] Trajectory generation successful");
-      performDebugDump();
-    } else {
-      if (waypoint_fallback_session_.build(recording_buffer_.getPoints())) {
-        trajectory_generation_requested_ = false;
-        rejoin_trigger_candidate_start_time_ = -1.0;
-        rejoin_success_candidate_start_time_ = -1.0;
-        ROS_WARN("[BacktrackUseCase] Trajectory generation failed, switching to waypoint fallback return (%zu sparse waypoints)",
-                 waypoint_fallback_session_.size());
-      } else {
-        ROS_ERROR("[BacktrackUseCase] Trajectory generation failed and waypoint fallback construction also failed");
-        triggerImmediateLanding();
-      }
-    }
+  if (state_machine_.getCurrentState()!=domain::State::ReturnPreOffboard) return;
+  if (trajectory_generation_requested_ && !trajectory_session_->isValid() && !waypoint_fallback_session_.isValid()) {
+    PlanningInput input;
+    input.points=recording_buffer_.getPointsCopy(); input.config=config_.trajectory_config;
+    input.debug_sample_dt=config_.debug_trajectory_sample_dt;
+    input.dumper=debug_dumper_; input.publisher=debug_publisher_;
+    planning_worker_.request(std::move(input));
+    trajectory_generation_requested_=false; planning_inflight_=true;
   }
+  if (!planning_inflight_) return;
+  auto result=planning_worker_.takeResult();
+  if (!result) return;
+  planning_inflight_=false;
+  // 结果仅在本任务、准备态且输入新鲜时接收。worker 换代已阻止旧任务结果交付。
+  if (!inputsFresh(now)) { cancelPlanning(); return; }
+  trajectory_session_=std::move(result->trajectory);
+  waypoint_fallback_session_=std::move(result->fallback);
+  rejoin_trigger_candidate_start_time_=rejoin_success_candidate_start_time_=-1.0;
+  yaw_alignment_start_time_=now; yaw_alignment_timeout_reported_=false;
+  has_last_path_target_velocity_=false; last_progress_time_=-1.0;
+  if (trajectory_session_->isValid()) {
+    const auto locked=state_machine_.getStateData().locked_position;
+    state_machine_.lockPosition(locked,trajectory_session_->getTargetState().yaw);
+  } else if (!waypoint_fallback_session_.isValid()) triggerImmediateLanding();
 }
 
 void BacktrackUseCase::handleWaypointFallbackProgress() {
@@ -557,22 +547,22 @@ void BacktrackUseCase::handleTrajectoryProgress(double now) {
   const auto state = state_machine_.getCurrentState();
   if ((state != domain::State::ReturnActive &&
        state != domain::State::ReturnRejoin) ||
-      !trajectory_session_.isValid()) {
+      !trajectory_session_->isValid()) {
     return;
   }
 
   const double dt = last_progress_time_ < 0.0 ? 0.05 : now-last_progress_time_;
   last_progress_time_ = now;
   if (!std::isfinite(dt) || dt <= 0.0 || dt > 0.1001) {
-    trajectory_session_.suspend();
+    trajectory_session_->suspend();
     return;
   }
   const bool projection_ok = state == domain::State::ReturnRejoin
-      ? trajectory_session_.updateRejoinProgress(
+      ? trajectory_session_->updateRejoinProgress(
             current_position_,
             config_.rejoin_config.lookahead_time_s,
             config_.rejoin_config.trigger_dist_m, std::min(0.10,dt), config_.rejoin_config.v_max_m_s)
-      : trajectory_session_.updateProgress(
+      : trajectory_session_->updateProgress(
             current_position_, config_.rejoin_config.lookahead_time_s, std::min(0.10,dt));
   if (!projection_ok) {
     ROS_ERROR_THROTTLE(1.0,
@@ -588,7 +578,7 @@ void BacktrackUseCase::handleTrajectoryProgress(double now) {
 bool BacktrackUseCase::canResumeReturn() {
   if (!recorded_route_.valid() || !recorded_route_.update(current_position_) ||
       recorded_route_.distance()>config_.rejoin_config.success_dist_m) return false;
-  trajectory_session_.suspend();
+  trajectory_session_->suspend();
   last_progress_time_=-1.0;
   return true;
 }
@@ -608,7 +598,8 @@ void BacktrackUseCase::handleRouteSafety() {
               recorded_route_.distance(),predicted);
     safety_hold_position_=current_position_; safety_hold_yaw_=current_yaw_;
     route_safety_hold_=true;
-    trajectory_session_.suspend();
+    cancelPlanning();
+    trajectory_session_->suspend();
     state_machine_.triggerPause();
   } else if (recorded_route_.distance()>=config_.rejoin_config.trigger_dist_m) {
     state_machine_.enterRejoin();
@@ -616,12 +607,12 @@ void BacktrackUseCase::handleRouteSafety() {
 }
 
 bool BacktrackUseCase::isTrajectoryActivationReady(double now) {
-  if (!trajectory_session_.isValid()) {
+  if (!trajectory_session_->isValid()) {
     return false;
   }
 
   const double yaw_error = wrappedAngleError(
-      current_yaw_, trajectory_session_.getTargetState().yaw);
+      current_yaw_, trajectory_session_->getTargetState().yaw);
   if (yaw_error <= kYawAlignmentToleranceRad) {
     return true;
   }
@@ -650,17 +641,17 @@ void BacktrackUseCase::handleRejoin(double now) {
     }
 
     rejoin_success_candidate_start_time_ = -1.0;
-    if (!trajectory_session_.isValid()) {
+    if (!trajectory_session_->isValid()) {
       return;
     }
 
-    if (!trajectory_session_.hasValidProjection()) {
+    if (!trajectory_session_->hasValidProjection()) {
       return;
     }
 
     // 只使用当前位置到局部路径投影点的横向距离，纵向速度落后不触发回归。
     if (rejoin_policy_.shouldTriggerRejoin(
-            trajectory_session_.getCrossTrackError())) {
+            trajectory_session_->getCrossTrackError())) {
       if (rejoin_trigger_candidate_start_time_ < 0.0) {
         rejoin_trigger_candidate_start_time_ = now;
       }
@@ -681,17 +672,17 @@ void BacktrackUseCase::handleRejoin(double now) {
   // 在ReturnRejoin状态检测回归成功
   if (current_state == domain::State::ReturnRejoin) {
     rejoin_trigger_candidate_start_time_ = -1.0;
-    if (!trajectory_session_.isValid() ||
-        !trajectory_session_.hasValidProjection()) {
+    if (!trajectory_session_->isValid() ||
+        !trajectory_session_->hasValidProjection()) {
       return;
     }
 
-    const auto& path_target = trajectory_session_.getTargetState();
+    const auto& path_target = trajectory_session_->getTargetState();
     const domain::Vec3 published_target_velocity = has_last_path_target_velocity_
         ? last_path_target_velocity_
         : path_target.velocity;
     if (rejoin_policy_.shouldExitRejoin(
-            trajectory_session_.getCrossTrackError(),
+            trajectory_session_->getCrossTrackError(),
             current_velocity_,
             path_target.velocity,
             published_target_velocity)) {
@@ -731,8 +722,8 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint() {
       return waypoint_fallback_session_.currentTarget();
     }
 
-    if (trajectory_session_.isValid()) {
-      const auto& traj_state = trajectory_session_.getTargetState();
+    if (trajectory_session_->isValid()) {
+      const auto& traj_state = trajectory_session_->getTargetState();
 
       domain::SetpointTarget target;
       target.position = traj_state.position;
@@ -754,8 +745,8 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint() {
 
   // ReturnRejoin状态：从回归策略计算
   if (current_state == domain::State::ReturnRejoin) {
-    if (trajectory_session_.isValid()) {
-      const auto& path_state = trajectory_session_.getTargetState();
+    if (trajectory_session_->isValid()) {
+      const auto& path_state = trajectory_session_->getTargetState();
 
       domain::SetpointTarget target;
       target.position = path_state.position;
@@ -788,8 +779,8 @@ bool BacktrackUseCase::checkMinPoints() const {
 }
 
 void BacktrackUseCase::triggerImmediateLanding() {
-  trajectory_generation_requested_ = false;
-  trajectory_session_.reset();
+  cancelPlanning();
+  trajectory_session_->reset();
   waypoint_fallback_session_.reset();
   rejoin_trigger_candidate_start_time_ = -1.0;
   rejoin_success_candidate_start_time_ = -1.0;
@@ -808,26 +799,6 @@ void BacktrackUseCase::setDebugDumper(
 void BacktrackUseCase::setDebugPublisher(
     std::shared_ptr<adapters::DebugPublisher> publisher) {
   debug_publisher_ = std::move(publisher);
-}
-
-void BacktrackUseCase::performDebugDump() {
-  if (!debug_dumper_ && !debug_publisher_) return;
-
-  const auto* traj = trajectory_session_.getTrajectory();
-  if (!traj || !traj->isValid()) return;
-
-  auto states = traj->sample(config_.debug_trajectory_sample_dt);
-  const auto& waypoints = recording_buffer_.getPoints();
-
-  if (debug_dumper_) {
-    debug_dumper_->dumpWaypoints(waypoints);
-    debug_dumper_->dumpTrajectory(states);
-  }
-
-  if (debug_publisher_) {
-    debug_publisher_->publishWaypoints(waypoints);
-    debug_publisher_->publishTrajectory(states);
-  }
 }
 
 }  // namespace application

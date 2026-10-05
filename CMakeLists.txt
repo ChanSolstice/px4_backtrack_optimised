@@ -23,6 +23,7 @@ find_package(catkin REQUIRED COMPONENTS
 
 ## Find Eigen3 (trajectory_core依赖)
 find_package(Eigen3 REQUIRED)
+find_package(Threads REQUIRED)
 
 ###################################
 ## catkin specific configuration ##
@@ -69,6 +70,7 @@ set(DOMAIN_SOURCES
 ## Application层源文件
 set(APPLICATION_SOURCES
   src/application/backtrack_usecase.cpp
+  src/application/planning_worker.cpp
 )
 
 ## Adapters层源文件
@@ -106,6 +108,7 @@ add_dependencies(${PROJECT_NAME}_lib
 target_link_libraries(${PROJECT_NAME}_lib
   ${catkin_LIBRARIES}
   stdc++fs
+  Threads::Threads
 )
 
 ## 构建主节点可执行文件
@@ -163,6 +166,11 @@ install(DIRECTORY config/
 #############
 
 if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_async_control tests/unit/test_main.cpp tests/unit/test_async_control.cpp)
+  if(TARGET test_async_control)
+    target_link_libraries(test_async_control ${PROJECT_NAME}_lib ${catkin_LIBRARIES})
+  endif()
+
   catkin_add_gtest(test_recorded_route tests/unit/test_main.cpp tests/unit/test_recorded_route.cpp)
   if(TARGET test_recorded_route)
     target_link_libraries(test_recorded_route ${PROJECT_NAME}_lib ${catkin_LIBRARIES})

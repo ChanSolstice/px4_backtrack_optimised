@@ -1,69 +1,51 @@
 #include "px4_backtrack/adapters/ros_services.hpp"
 #include <ros/console.h>
+#include <chrono>
+#include <cmath>
+#include <stdexcept>
 
-namespace px4_backtrack {
-namespace adapters {
-
-// ============================================================================
-// SetModeClient实现
-// ============================================================================
-
-SetModeClient::SetModeClient(ros::NodeHandle& nh,
-                             const std::string& service_name,
-                             double throttle_interval_s)
-  : throttle_interval_s_(throttle_interval_s),
-    last_call_time_(0.0)
-{
-  client_ = nh.serviceClient<mavros_msgs::SetMode>(service_name);
-  ROS_INFO("[SetModeClient] Initialized with service: %s, throttle: %.1f s",
-           service_name.c_str(), throttle_interval_s_);
+namespace px4_backtrack::adapters {
+SetModeClient::SetModeClient(ros::NodeHandle& nh,const std::string& service_name,double interval)
+    :throttle_interval_s_(interval) {
+  if (!std::isfinite(interval) || interval<0.0) throw std::invalid_argument("Invalid mode throttle");
+  client_=nh.serviceClient<mavros_msgs::SetMode>(service_name);
+  transport_=[this](domain::ModeRequest mode) {
+    mavros_msgs::SetMode service; service.request.custom_mode=domain::modeRequestToString(mode);
+    return client_.call(service) && service.response.mode_sent;
+  };
+  thread_=std::thread(&SetModeClient::run,this);
 }
-
-bool SetModeClient::callSetMode(domain::ModeRequest mode_request) {
-  // 节流检查
-  double now = ros::Time::now().toSec();
-  if (last_call_time_ > 0.0) {
-    double elapsed = now - last_call_time_;
-    if (elapsed < throttle_interval_s_) {
-      ROS_DEBUG("[SetModeClient] Throttled: %.2f s < %.2f s", elapsed, throttle_interval_s_);
-      return false;
+SetModeClient::SetModeClient(std::function<bool(domain::ModeRequest)> transport,double interval)
+    :transport_(std::move(transport)),throttle_interval_s_(interval) {
+  if (!transport_ || !std::isfinite(interval) || interval<0.0) throw std::invalid_argument("Invalid mode transport");
+  thread_=std::thread(&SetModeClient::run,this);
+}
+SetModeClient::~SetModeClient() {
+  { std::lock_guard<std::mutex> lock(mutex_); stopping_=true; pending_.reset(); }
+  wake_.notify_one(); client_.shutdown(); thread_.join();
+}
+void SetModeClient::request(std::optional<domain::ModeRequest> mode) {
+  { std::lock_guard<std::mutex> lock(mutex_); pending_=mode; }
+  wake_.notify_one();
+}
+void SetModeClient::run() {
+  using Clock=std::chrono::steady_clock;
+  auto next_attempt=Clock::now();
+  for (;;) {
+    domain::ModeRequest mode;
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      wake_.wait(lock,[this]{ return stopping_ || pending_.has_value(); });
+      if (stopping_) return;
+      if (Clock::now()<next_attempt) { wake_.wait_until(lock,next_attempt); continue; }
+      mode=*pending_; pending_.reset();
+      next_attempt=Clock::now()+std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(throttle_interval_s_));
     }
-  }
-
-  // 准备服务请求
-  mavros_msgs::SetMode srv;
-  srv.request.custom_mode = modeRequestToString(mode_request);
-
-  // 调用服务
-  if (client_.call(srv)) {
-    if (srv.response.mode_sent) {
-      ROS_INFO("[SetModeClient] Mode set to: %s", srv.request.custom_mode.c_str());
-      last_call_time_ = now;
-      return true;
-    } else {
-      ROS_WARN("[SetModeClient] Mode request sent but not accepted: %s",
-               srv.request.custom_mode.c_str());
-      last_call_time_ = now;
-      return false;
-    }
-  } else {
-    ROS_ERROR("[SetModeClient] Failed to call set_mode service");
-    return false;
+    try {
+      const bool sent=transport_(mode);
+      ROS_INFO("[SetModeClient] %s request result: %s (activation requires fresh state confirmation)",
+               domain::modeRequestToString(mode).c_str(),sent ? "sent" : "failed");
+    } catch (const std::exception& error) { ROS_ERROR("[SetModeClient] Exception: %s",error.what()); }
   }
 }
-
-std::string SetModeClient::modeRequestToString(domain::ModeRequest mode_request) const {
-  switch (mode_request) {
-    case domain::ModeRequest::OFFBOARD:
-      return "OFFBOARD";
-    case domain::ModeRequest::POSCTL:
-      return "POSCTL";
-    case domain::ModeRequest::AUTO_LAND:
-      return "AUTO.LAND";
-    default:
-      return "UNKNOWN";
-  }
 }
-
-}  // namespace adapters
-}  // namespace px4_backtrack

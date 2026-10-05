@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 #include <limits>
+#include <chrono>
+#include <thread>
+#include <future>
 #include "px4_backtrack/application/backtrack_usecase.hpp"
 namespace px4_backtrack::application {
 namespace {
@@ -20,7 +23,7 @@ struct Flight {
   std::string mode="OFFBOARD";
   domain::Vec3 position{0,0,1}, velocity=domain::Vec3::Zero();
   double yaw=std::acos(-1.0);
-  explicit Flight(UseCaseConfig c=makeConfig()):usecase(c) {
+  explicit Flight(UseCaseConfig c=makeConfig(), PlanningWorker::Planner planner={}):usecase(c,std::move(planner)) {
     step(); armed=true; step(); step();
   }
   TickOutput step(double dt=0.05, bool odom=true, bool state=true) {
@@ -36,7 +39,15 @@ struct Flight {
     std::vector<uint16_t> channels(18,1500); channels[6]=ch;
     usecase.onRCReceived(channels,now);
   }
-  TickOutput start() { rc(1000); step(); return step(); }
+  TickOutput awaitPlan(TickOutput out) {
+    for(int i=0;i<2000 && out.current_state==domain::State::ReturnPreOffboard;++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1)); out=step();
+      // 航向不对准时保留准备态，结果一旦给出返航 yaw 即返回。
+      if(out.setpoint && std::abs(out.setpoint->yaw-yaw)>0.1) break;
+    }
+    return out;
+  }
+  TickOutput start() { rc(1000); step(); return awaitPlan(step()); }
   void release() { rc(1500); step(); }
   TickOutput pause() { release(); rc(1000); return step(); }
   TickOutput resume() { release(); rc(1000); step(); return step(); }
@@ -115,7 +126,7 @@ TEST(BacktrackUseCaseTest, ThreeDimensionalRouteBudgetStopsNormalAndFallback) {
 TEST(BacktrackUseCaseTest, LowBatteryReturnInsufficientPointsAndPausePolicy) {
   auto c=makeConfig(); c.trigger_config.enable_low_battery=true; c.trigger_config.low_battery_confirm_s=0;
   Flight f(c); f.recordLine(); f.usecase.onBatteryReceived(0.10);
-  auto out=f.step(); EXPECT_TRUE(out.low_battery); EXPECT_EQ(out.current_state,domain::State::ReturnActive);
+  auto out=f.awaitPlan(f.step()); EXPECT_TRUE(out.low_battery); EXPECT_EQ(out.current_state,domain::State::ReturnActive);
   f.pause(); f.rc(1500); out=f.step(); EXPECT_TRUE(out.low_battery); EXPECT_EQ(out.current_state,domain::State::Paused);
   c.record_min_points=100; Flight g(c); g.usecase.onBatteryReceived(0.10);
   out=g.step(); EXPECT_EQ(out.current_state,domain::State::LandingTransition);
@@ -145,6 +156,32 @@ TEST(BacktrackUseCaseTest, SlowClosedLoopReturnFinishesOnlyAfterThreeDimensional
   }
   EXPECT_EQ(out.current_state,domain::State::LandingHover);
   EXPECT_LT(f.position.norm()-1.0,0.20);
+}
+
+TEST(BacktrackUseCaseTest, BlockedPlanningKeepsPublishingHoldAndAutoLandCancelsOldResult) {
+  std::promise<void> release,entered;
+  auto gate=release.get_future().share(); auto started=entered.get_future();
+  Flight f(makeConfig(),[&](auto& session,const auto& points,const auto& config) {
+    entered.set_value(); gate.wait(); return session.generate(points,config);
+  });
+  f.recordLine(); f.rc(1000); f.step(); f.step();
+  const auto ready=started.wait_for(std::chrono::seconds(2));
+  if(ready!=std::future_status::ready) { release.set_value(); FAIL()<<"Planner not started"; }
+  const auto begin=std::chrono::steady_clock::now();
+  bool safe=true;
+  for(int i=0;i<1000;++i) {
+    const auto out=f.step();
+    safe &= out.current_state==domain::State::ReturnPreOffboard && out.setpoint.has_value() &&
+        out.setpoint->position.isApprox(f.position) && out.setpoint->velocity.norm()==0.0;
+  }
+  EXPECT_TRUE(safe);
+  EXPECT_LT(std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count(),0.10);
+  f.mode="AUTO.LAND"; auto out=f.step();
+  release.set_value();
+  EXPECT_EQ(out.current_state,domain::State::AutoLandYield); EXPECT_FALSE(out.setpoint);
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  f.mode="POSCTL"; out=f.step();
+  EXPECT_EQ(out.current_state,domain::State::AutoLandYield); EXPECT_FALSE(out.setpoint); EXPECT_FALSE(out.mode_request);
 }
 
 TEST(BacktrackUseCaseTest, RejectsInvalidEngineeringLimits) {

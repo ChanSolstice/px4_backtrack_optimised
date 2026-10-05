@@ -153,9 +153,7 @@ void BacktrackNode::timerCallback(const ros::WallTimerEvent&) {
   }
 
   // 处理模式切换请求
-  if (output.mode_request.has_value()) {
-    set_mode_client_->callSetMode(output.mode_request.value());
-  }
+  set_mode_client_->request(output.mode_request);
 }
 
 }  // namespace px4_backtrack
