@@ -20,46 +20,34 @@ std::vector<FallbackWaypoint> buildSparseReverseWaypoints(
     return sparse;
   }
 
-  const size_t n = points.size();
-  sparse.emplace_back(points.back().position, points.back().yaw);
-
-  Vec3 segment_start_pos = points.back().position;
-  double distance_since_last = 0.0;
-
-  for (size_t rev_idx = n - 1; rev_idx > 0; --rev_idx) {
-    const auto& next_point = points[rev_idx - 1];
-    Vec3 segment_end_pos = next_point.position;
-    Vec3 segment_vec = segment_end_pos - segment_start_pos;
-    double segment_len = segment_vec.norm();
-
-    if (segment_len <= kEps) {
-      segment_start_pos = segment_end_pos;
-      continue;
-    }
-
-    while (distance_since_last + segment_len >= spacing_m) {
-      double remain = spacing_m - distance_since_last;
-      double ratio = remain / segment_len;
-      Vec3 interp_pos = segment_start_pos + ratio * segment_vec;
-      sparse.emplace_back(interp_pos, 0.0);
-
-      segment_start_pos = interp_pos;
-      segment_vec = segment_end_pos - segment_start_pos;
-      segment_len = segment_vec.norm();
-      distance_since_last = 0.0;
-
-      if (segment_len <= kEps) {
-        break;
-      }
-    }
-
-    distance_since_last += segment_len;
-    segment_start_pos = segment_end_pos;
+  if (!std::isfinite(spacing_m) || spacing_m <= 0.0) return sparse;
+  for (const auto& point : points) {
+    if (!point.position.allFinite() || !std::isfinite(point.yaw)) return {};
   }
 
-  const auto& home = points.front();
-  if ((sparse.back().position - home.position).norm() > kEps) {
-    sparse.emplace_back(home.position, 0.0);
+  // 只消除同方向共线点。每个折线顶点保留，连接线严格位于原路上。
+  std::vector<Vec3> vertices;
+  for (auto it = points.rbegin(); it != points.rend(); ++it) {
+    if (!vertices.empty() && (it->position - vertices.back()).norm() <= kEps) continue;
+    while (vertices.size() >= 2) {
+      const Vec3 incoming = vertices.back() - vertices[vertices.size()-2];
+      const Vec3 outgoing = it->position - vertices.back();
+      if (incoming.dot(outgoing) <= 0.0 ||
+          incoming.cross(outgoing).norm() > 1e-12 * incoming.norm() * outgoing.norm()) break;
+      vertices.pop_back();
+    }
+    vertices.push_back(it->position);
+  }
+  if (vertices.size() < 2) return sparse;
+  sparse.emplace_back(vertices.front(), points.back().yaw);
+  for (size_t i = 1; i < vertices.size(); ++i) {
+    const Vec3 delta = vertices[i] - vertices[i-1];
+    const double count = std::ceil(delta.norm() / spacing_m);
+    if (!std::isfinite(count) || count > 1000000.0 - sparse.size()) return {};
+    const size_t steps = static_cast<size_t>(count);
+    for (size_t k = 1; k <= steps; ++k) {
+      sparse.emplace_back(vertices[i-1] + delta * (static_cast<double>(k) / steps), 0.0);
+    }
   }
 
   std::vector<Vec3> positions;
@@ -103,8 +91,11 @@ void WaypointFallbackSession::restart() {
   finished_ = false;
 }
 
-void WaypointFallbackSession::updateProgress(const Vec3& current_position) {
-  if (!isValid() || finished_) {
+void WaypointFallbackSession::updateProgress(const Vec3& current_position,
+                                             const Vec3& current_velocity,
+                                             double current_yaw) {
+  if (!isValid() || finished_ || !current_position.allFinite() ||
+      !current_velocity.allFinite() || !std::isfinite(current_yaw)) {
     return;
   }
 
@@ -118,6 +109,14 @@ void WaypointFallbackSession::updateProgress(const Vec3& current_position) {
   }
 
   if (current_index_ + 1 < waypoints_.size()) {
+    // 到点停稳，再朝向下一条连接线；PX4 负责限制原地 yaw 转速。
+    if (current_velocity.norm() > 0.10) return;
+    const Vec3 outgoing = waypoints_[current_index_+1].position - waypoints_[current_index_].position;
+    const double next_yaw = outgoing.head<2>().norm() > kEps
+        ? std::atan2(outgoing.y(), outgoing.x()) : waypoints_[current_index_].yaw;
+    waypoints_[current_index_].yaw = next_yaw;
+    const double error = std::atan2(std::sin(current_yaw-next_yaw), std::cos(current_yaw-next_yaw));
+    if (std::abs(error) > 15.0 * std::acos(-1.0) / 180.0) return;
     ++current_index_;
     return;
   }

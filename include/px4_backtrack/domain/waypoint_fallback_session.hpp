@@ -19,9 +19,9 @@ struct FallbackWaypoint {
 /// 轨迹生成失败后的 waypoint 退化返航会话
 class WaypointFallbackSession {
 public:
-  WaypointFallbackSession(double spacing_m = 0.3, double reach_radius_m = 0.2);
+  WaypointFallbackSession(double spacing_m = 0.3, double reach_radius_m = 0.05);
 
-  /// 从录制点构建逆序稀疏 waypoint 路径
+  /// 从录制点构建逆序 waypoint 路径，保留所有非共线顶点
   bool build(const std::vector<RecordPoint>& points);
 
   /// 清空退化会话
@@ -31,7 +31,8 @@ public:
   void restart();
 
   /// 根据当前位置推进 waypoint 索引
-  void updateProgress(const Vec3& current_position);
+  void updateProgress(const Vec3& current_position,
+                      const Vec3& current_velocity, double current_yaw);
 
   /// 是否已构建有效退化路径
   bool isValid() const;

@@ -428,7 +428,7 @@ void BacktrackUseCase::handleWaypointFallbackProgress() {
     return;
   }
 
-  waypoint_fallback_session_.updateProgress(current_position_);
+  waypoint_fallback_session_.updateProgress(current_position_, current_velocity_, current_yaw_);
 }
 
 void BacktrackUseCase::handleTrajectoryProgress() {
