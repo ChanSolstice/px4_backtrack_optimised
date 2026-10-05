@@ -1,5 +1,7 @@
 #include "px4_backtrack/domain/recording_buffer.hpp"
 #include <algorithm>
+#include <cmath>
+#include <stdexcept>
 
 namespace px4_backtrack {
 namespace domain {
@@ -11,6 +13,7 @@ RecordingBuffer::RecordingBuffer(double max_hz)
     last_record_stamp_(0.0),
     has_first_point_(false)
 {
+  if (!std::isfinite(max_hz) || max_hz<=0.0) throw std::invalid_argument("Invalid recording frequency");
   points_.reserve(1000);  // 预分配空间，减少动态扩容
 }
 
@@ -22,6 +25,7 @@ void RecordingBuffer::reset() {
 }
 
 bool RecordingBuffer::addPoint(const Vec3& position, double yaw, double odom_stamp) {
+  if (!position.allFinite() || !std::isfinite(yaw) || !std::isfinite(odom_stamp) || odom_stamp<0.0) return false;
   // 第一个点：初始化时间参考
   if (!has_first_point_) {
     first_odom_stamp_ = odom_stamp;

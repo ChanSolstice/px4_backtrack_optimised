@@ -2,16 +2,22 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <ros/console.h>
+#include <limits>
+#include <cmath>
+#include <stdexcept>
 
 namespace px4_backtrack {
 namespace adapters {
 
 domain::Vec3 velocityInParentFrame(const nav_msgs::Odometry& msg) {
-  const tf2::Quaternion orientation(
+  tf2::Quaternion orientation(
       msg.pose.pose.orientation.x,
       msg.pose.pose.orientation.y,
       msg.pose.pose.orientation.z,
       msg.pose.pose.orientation.w);
+  if (!std::isfinite(orientation.length2()) || orientation.length2()<1e-12)
+    throw std::invalid_argument("Invalid odometry quaternion");
+  orientation.normalize();
   const tf2::Vector3 velocity_child(
       msg.twist.twist.linear.x,
       msg.twist.twist.linear.y,
@@ -22,6 +28,16 @@ domain::Vec3 velocityInParentFrame(const nav_msgs::Odometry& msg) {
       velocity_parent.x(), velocity_parent.y(), velocity_parent.z());
 }
 
+bool validOdometry(const nav_msgs::Odometry& msg, double now) {
+  const auto& p=msg.pose.pose.position; const auto& q=msg.pose.pose.orientation;
+  const auto& v=msg.twist.twist.linear;
+  const double norm=q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w;
+  const double age=now-msg.header.stamp.toSec();
+  return std::isfinite(p.x)&&std::isfinite(p.y)&&std::isfinite(p.z)&&
+      std::isfinite(v.x)&&std::isfinite(v.y)&&std::isfinite(v.z)&&
+      std::isfinite(norm)&&std::abs(norm-1.0)<=0.02&&std::isfinite(age)&&age>=-0.05&&age<=0.25;
+}
+
 // ============================================================================
 // StateSubscriber实现
 // ============================================================================
@@ -30,7 +46,7 @@ StateSubscriber::StateSubscriber(ros::NodeHandle& nh, const std::string& topic)
   : armed_(false),
     has_data_(false)
 {
-  sub_ = nh.subscribe(topic, 10, &StateSubscriber::stateCallback, this);
+  sub_ = nh.subscribe(topic, 1, &StateSubscriber::stateCallback, this);
   ROS_INFO("[StateSubscriber] Subscribed to: %s", topic.c_str());
 }
 
@@ -50,6 +66,10 @@ void StateSubscriber::setCallback(std::function<void(bool, const std::string&)> 
 }
 
 void StateSubscriber::stateCallback(const mavros_msgs::State::ConstPtr& msg) {
+  if (!msg->connected) {
+    std::lock_guard<std::mutex> lock(mutex_); has_data_=false;
+    return; // 不把断连后持续发布的缓存状态当作新鲜飞控确认
+  }
   std::function<void(bool, const std::string&)> cb;
   bool armed;
   std::string mode;
@@ -81,7 +101,7 @@ OdomSubscriber::OdomSubscriber(ros::NodeHandle& nh, const std::string& topic)
     stamp_(0.0),
     has_data_(false)
 {
-  sub_ = nh.subscribe(topic, 10, &OdomSubscriber::odomCallback, this);
+  sub_ = nh.subscribe(topic, 1, &OdomSubscriber::odomCallback, this);
   ROS_INFO("[OdomSubscriber] Subscribed to: %s", topic.c_str());
 }
 
@@ -110,6 +130,13 @@ void OdomSubscriber::setCallback(
 }
 
 void OdomSubscriber::odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
+  if (!validOdometry(*msg,ros::Time::now().toSec())) {
+    std::function<void(const domain::Vec3&,const domain::Vec3&,double,double)> cb;
+    { std::lock_guard<std::mutex> lock(mutex_); has_data_=false; cb=external_callback_; }
+    if (cb) cb(domain::Vec3::Constant(std::numeric_limits<double>::quiet_NaN()),
+               domain::Vec3::Zero(),0.0,msg->header.stamp.toSec());
+    return;
+  }
   // 提取位置 (ENU)
   domain::Vec3 pos(msg->pose.pose.position.x,
                    msg->pose.pose.position.y,
@@ -160,7 +187,7 @@ void OdomSubscriber::odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
 RCSubscriber::RCSubscriber(ros::NodeHandle& nh, const std::string& topic)
   : has_data_(false)
 {
-  sub_ = nh.subscribe(topic, 10, &RCSubscriber::rcCallback, this);
+  sub_ = nh.subscribe(topic, 1, &RCSubscriber::rcCallback, this);
   ROS_INFO("[RCSubscriber] Subscribed to: %s", topic.c_str());
 }
 
@@ -204,7 +231,7 @@ BatterySubscriber::BatterySubscriber(ros::NodeHandle& nh, const std::string& top
   : percentage_(1.0),
     has_data_(false)
 {
-  sub_ = nh.subscribe(topic, 10, &BatterySubscriber::batteryCallback, this);
+  sub_ = nh.subscribe(topic, 1, &BatterySubscriber::batteryCallback, this);
   ROS_INFO("[BatterySubscriber] Subscribed to: %s", topic.c_str());
 }
 

@@ -1,4 +1,5 @@
 #include "px4_backtrack/domain/trigger_evaluator.hpp"
+#include <cmath>
 
 namespace px4_backtrack {
 namespace domain {
@@ -205,6 +206,7 @@ bool TriggerEvaluator::isRCLost() const {
 }
 
 void TriggerEvaluator::updateBattery(double percentage) {
+  if (!std::isfinite(percentage) || percentage<0.0 || percentage>1.0) return;
   battery_percentage_ = percentage;
   has_received_battery_ = true;
   // 注意：与 RC loss 不同，电量回升不重置 low_battery_triggered_。

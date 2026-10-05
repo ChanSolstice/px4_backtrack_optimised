@@ -139,3 +139,7 @@ route_hard_limit_m: 0.50
 route_uncertainty_m: 0.05
 route_reaction_s: 0.10
 route_braking_m_s2: 0.50
+
+# steady 接收时钟的新鲜度，消息 stamp 另行检查
+odom_timeout_s: 0.25
+state_timeout_s: 0.50

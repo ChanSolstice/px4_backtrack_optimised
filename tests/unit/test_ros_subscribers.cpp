@@ -25,6 +25,17 @@ TEST(RosSubscribersTest, RotatesChildVelocityIntoParentEnuFrame) {
   EXPECT_TRUE(velocity_parent.isApprox(domain::Vec3(-0.8, 0.2, 0.1), 1e-12));
 }
 
+TEST(RosSubscribersTest, RejectsStaleNonFiniteAndZeroQuaternion) {
+  auto msg=makeOdometry(0.0,domain::Vec3::Zero());
+  msg.header.stamp=ros::Time(10.0);
+  EXPECT_TRUE(validOdometry(msg,10.1));
+  EXPECT_FALSE(validOdometry(msg,10.3));
+  EXPECT_FALSE(validOdometry(msg,9.9));
+  msg.pose.pose.orientation.w=0.0;
+  EXPECT_FALSE(validOdometry(msg,10.1));
+  EXPECT_THROW(velocityInParentFrame(msg), std::invalid_argument);
+}
+
 TEST(RosSubscribersTest, PreservesVelocityAtZeroYaw) {
   const auto msg = makeOdometry(0.0, domain::Vec3(0.4, -0.3, 0.2));
 

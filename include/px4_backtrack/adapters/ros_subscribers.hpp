@@ -14,6 +14,7 @@ namespace adapters {
 
 /// 按 nav_msgs/Odometry 语义，将 child_frame_id 中的线速度旋转到父 ENU 坐标系。
 domain::Vec3 velocityInParentFrame(const nav_msgs::Odometry& msg);
+bool validOdometry(const nav_msgs::Odometry& msg, double now);
 
 // ============================================================================
 // StateSubscriber类

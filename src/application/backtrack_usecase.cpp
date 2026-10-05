@@ -4,6 +4,7 @@
 #include <ros/console.h>
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace px4_backtrack {
 namespace application {
@@ -46,10 +47,55 @@ BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config)
     has_last_path_target_velocity_(false),
     auto_land_yield_active_(false)
 {
+  if (!(std::isfinite(config.odom_timeout_s) && config.odom_timeout_s>0.0 &&
+      std::isfinite(config.state_timeout_s) && config.state_timeout_s>0.0 &&
+      std::isfinite(config.route_normal_limit_m) && config.route_normal_limit_m>0.0 && config.route_normal_limit_m<=0.30 &&
+      std::isfinite(config.route_hard_limit_m) && config.route_hard_limit_m>config.route_normal_limit_m && config.route_hard_limit_m<=0.50 &&
+      std::isfinite(config.route_uncertainty_m) && config.route_uncertainty_m>=0.0 && config.route_uncertainty_m<config.route_normal_limit_m &&
+      std::isfinite(config.route_reaction_s) && config.route_reaction_s>=0.0 &&
+      std::isfinite(config.route_braking_m_s2) && config.route_braking_m_s2>0.0 &&
+      std::isfinite(config.rejoin_config.trigger_dist_m) && config.rejoin_config.trigger_dist_m>0.0 &&
+      config.rejoin_config.trigger_dist_m<config.route_normal_limit_m-config.route_uncertainty_m &&
+      std::isfinite(config.rejoin_config.success_dist_m) && config.rejoin_config.success_dist_m>0.0 &&
+      config.rejoin_config.success_dist_m<config.rejoin_config.trigger_dist_m &&
+      std::isfinite(config.rejoin_config.v_max_m_s) && config.rejoin_config.v_max_m_s>0.0 && config.rejoin_config.v_max_m_s<1.0 &&
+      std::isfinite(config.rejoin_config.lookahead_time_s) && config.rejoin_config.lookahead_time_s>=0.0 &&
+      std::isfinite(config.record_max_hz) && config.record_max_hz>0.0 && config.record_min_points>=2 &&
+      std::isfinite(config.record_delay_s) && config.record_delay_s>=0.0))
+    throw std::invalid_argument("Invalid return engineering limits");
+  if (config.trajectory_config.validate() &&
+      (config.trajectory_config.v_max>=1.0 || config.trajectory_config.v_start_m_s!=0.0 ||
+       config.trajectory_config.v_end_m_s!=0.0 ||
+       config.trajectory_config.max_deviation_m+config.route_uncertainty_m>=config.route_normal_limit_m))
+    throw std::invalid_argument("Trajectory exceeds return speed/corridor/stop budget");
   ROS_INFO("[BacktrackUseCase] Initialized");
 }
 
 TickOutput BacktrackUseCase::tick(double now) {
+  if (!std::isfinite(now)) return TickOutput{};
+  const bool clock_reset=last_tick_time_>=0.0 && now<last_tick_time_;
+  last_tick_time_=now;
+  const bool state_fresh=state_received_at_>=0.0 && now>=state_received_at_ &&
+      now-state_received_at_<=config_.state_timeout_s;
+  if (state_fresh && !current_armed_) {
+    localization_reset_=false;
+    input_hold_=route_safety_hold_=false;
+    trajectory_generation_requested_=false;
+    trajectory_session_.reset(); waypoint_fallback_session_.reset(); recorded_route_.reset();
+    domain::TickInput disarm; disarm.armed=false; disarm.mode=current_mode_; disarm.now=now;
+    state_machine_.tick(disarm);
+    handleFlightCycleReset(false);
+    TickOutput output; output.current_state=state_machine_.getCurrentState(); return output;
+  }
+  // 飞控 AUTO.LAND 确认优先于里程计有效性。
+  if (state_fresh && current_mode_=="AUTO.LAND") {
+    handleAutoLandYield();
+    domain::TickInput land; land.armed=current_armed_; land.mode=current_mode_; land.now=now;
+    state_machine_.tick(land);
+    TickOutput output; output.current_state=state_machine_.getCurrentState(); return output;
+  }
+  if (clock_reset || !inputsFresh(now)) return holdForInvalidInput(now);
+
   // 更新TriggerEvaluator的当前时间（用于RC丢失检测）
   trigger_evaluator_.updateNow(now);
 
@@ -125,7 +171,7 @@ TickOutput BacktrackUseCase::tick(double now) {
     output.setpoint = computeSetpoint();
   }
 
-  if (route_safety_hold_ && current_armed_ && current_mode_ == "OFFBOARD") {
+  if ((route_safety_hold_ || input_hold_) && current_armed_ && current_mode_ == "OFFBOARD") {
     domain::SetpointTarget hold;
     hold.position=safety_hold_position_; hold.yaw=safety_hold_yaw_;
     hold.type_mask=0x09F8; // position+yaw，冻结进度并等待 POSCTL 确认
@@ -134,32 +180,81 @@ TickOutput BacktrackUseCase::tick(double now) {
   return output;
 }
 
-void BacktrackUseCase::onOdomReceived(const domain::Vec3& position,
-                                      const domain::Vec3& velocity,
-                                      double yaw,
-                                      double stamp) {
-  current_position_ = position;
-  current_velocity_ = velocity;
-  current_yaw_ = yaw;
+bool BacktrackUseCase::inputsFresh(double now) const {
+  return odom_valid_ && !localization_reset_ && odom_received_at_>=0.0 &&
+      state_received_at_>=0.0 && now>=odom_received_at_ && now>=state_received_at_ &&
+      now-odom_received_at_<=config_.odom_timeout_s &&
+      now-state_received_at_<=config_.state_timeout_s;
+}
 
-  // 录制处理
-  auto current_state = state_machine_.getCurrentState();
-  if (current_state == domain::State::Recording) {
-    recording_buffer_.addPoint(position, yaw, stamp);
+TickOutput BacktrackUseCase::holdForInvalidInput(double now) {
+  const auto state=state_machine_.getCurrentState();
+  const bool controlled=state==domain::State::ReturnActive || state==domain::State::ReturnRejoin ||
+      state==domain::State::ReturnPreOffboard || state==domain::State::Ch18HoverWait ||
+      state==domain::State::LandingHover || state==domain::State::LandingTransition;
+  if (controlled) {
+    safety_hold_position_=current_position_; safety_hold_yaw_=current_yaw_;
+    input_hold_=true;
+    trajectory_session_.suspend();
+    trajectory_generation_requested_=false;
+    state_machine_.triggerPause();
   }
+  last_progress_time_=-1.0;
+  TickOutput output;
+  output.current_state=state_machine_.getCurrentState();
+  output.rc_loss=trigger_evaluator_.isRCLost(); output.low_battery=trigger_evaluator_.isLowBattery();
+  const bool state_fresh=state_received_at_>=0.0 && now>=state_received_at_ &&
+      now-state_received_at_<=config_.state_timeout_s;
+  if (input_hold_ && current_armed_ && current_mode_=="OFFBOARD") {
+    if (!localization_reset_ && odom_received_at_>=0.0) {
+      domain::SetpointTarget hold;
+      hold.position=safety_hold_position_; hold.yaw=safety_hold_yaw_; hold.type_mask=0x09F8;
+      output.setpoint=hold; output.should_publish_setpoint=true;
+    }
+    if (state_fresh) output.mode_request=domain::ModeRequest::POSCTL;
+  }
+  return output;
 }
 
-void BacktrackUseCase::onRCReceived(const std::vector<uint16_t>& channels) {
-  // 更新RC通道数据
+void BacktrackUseCase::onOdomReceived(const domain::Vec3& position,
+    const domain::Vec3& velocity, double yaw, double stamp, double received_at) {
+  if (!position.allFinite() || !velocity.allFinite() || !std::isfinite(yaw) ||
+      !std::isfinite(stamp) || !std::isfinite(received_at) || stamp<0.0 || received_at<0.0) {
+    odom_valid_=false;
+    return;
+  }
+  if (odom_received_at_>=0.0 && received_at<odom_received_at_) { odom_valid_=false; return; }
+  if (odom_stamp_>=0.0 && stamp<=odom_stamp_) {
+    odom_valid_=false;
+    if (stamp<odom_stamp_ && current_armed_) localization_reset_=true;
+    return;
+  }
+  const double elapsed=odom_received_at_<0.0 ? 0.0 : received_at-odom_received_at_;
+  if (current_armed_ && odom_received_at_>=0.0 &&
+      (position-current_position_).norm()>0.30+1.0*elapsed) {
+    localization_reset_=true;
+    odom_valid_=false;
+    return;
+  }
+  current_position_=position; current_velocity_=velocity; current_yaw_=yaw;
+  odom_received_at_=received_at; odom_stamp_=stamp; odom_valid_=true;
+  if (state_machine_.getCurrentState()==domain::State::Recording && !localization_reset_ &&
+      state_received_at_>=0.0 && received_at>=state_received_at_ &&
+      received_at-state_received_at_<=config_.state_timeout_s)
+    recording_buffer_.addPoint(position,yaw,stamp);
+}
+
+void BacktrackUseCase::onRCReceived(const std::vector<uint16_t>& channels, double received_at) {
+  if (!std::isfinite(received_at) || received_at<0.0) return;
   trigger_evaluator_.updateRC(channels);
-
-  // 更新最近一次收到RC消息的时间
-  trigger_evaluator_.updateLastRcMsgTime(ros::Time::now().toSec());
+  trigger_evaluator_.updateLastRcMsgTime(received_at);
 }
 
-void BacktrackUseCase::onStateReceived(bool armed, const std::string& mode) {
-  current_armed_ = armed;
-  current_mode_ = mode;
+void BacktrackUseCase::onStateReceived(bool armed, const std::string& mode, double received_at) {
+  if (!std::isfinite(received_at) || received_at<0.0 ||
+      (state_received_at_>=0.0 && received_at<state_received_at_)) return;
+  current_armed_=armed; current_mode_=mode; state_received_at_=received_at;
+  if (!armed) { odom_stamp_=-1.0; localization_reset_=false; }
 }
 
 void BacktrackUseCase::onBatteryReceived(double percentage) {
@@ -199,6 +294,8 @@ void BacktrackUseCase::handleFlightCycleReset(bool armed) {
     last_path_target_velocity_ = domain::Vec3::Zero();
     has_last_path_target_velocity_ = false;
     auto_land_yield_active_ = false;
+    input_hold_=false;
+    trigger_evaluator_=domain::TriggerEvaluator(config_.trigger_config);
 
     // 进入WaitRecordDelay状态（通过状态机处理）
     // 状态机会在tick中检测ARM并自动转换
@@ -223,7 +320,7 @@ bool BacktrackUseCase::handleAutoLandYield() {
     has_last_path_target_velocity_ = false;
     record_delay_started_ = false;
     auto_land_yield_active_ = true;
-    route_safety_hold_=false;
+    route_safety_hold_=input_hold_=false;
   }
 
   return auto_land_yield_active_;
@@ -322,14 +419,15 @@ void BacktrackUseCase::handleTriggers(double now) {
   if (current_state == domain::State::Paused) {
     bool has_min_points = checkMinPoints() && canResumeReturn();
 
-    if (rc_loss_event && !route_safety_hold_) {
+    if (rc_loss_event && !route_safety_hold_ && !input_hold_) {
       if (has_min_points) {
         ROS_WARN("[BacktrackUseCase] RC loss detected while paused, resuming return");
-        route_safety_hold_=false;
+        route_safety_hold_=input_hold_=false;
         const double hold_yaw = trajectory_session_.isValid()
             ? trajectory_session_.getTargetState().yaw
             : current_yaw_;
         state_machine_.lockPosition(current_position_, hold_yaw);
+        trajectory_generation_requested_=!trajectory_session_.isValid() && !waypoint_fallback_session_.isValid();
         state_machine_.triggerReturn(domain::Event::RCLossTriggered);
         yaw_alignment_start_time_ = now;
         yaw_alignment_timeout_reported_ = false;
@@ -345,11 +443,12 @@ void BacktrackUseCase::handleTriggers(double now) {
     if (trigger_evaluator_.checkCh7LongPress()) {
       if (has_min_points) {
         ROS_INFO("[BacktrackUseCase] Ch7 long press detected, resuming");
-        route_safety_hold_=false;
+        route_safety_hold_=input_hold_=false;
         const double hold_yaw = trajectory_session_.isValid()
             ? trajectory_session_.getTargetState().yaw
             : current_yaw_;
         state_machine_.lockPosition(current_position_, hold_yaw);
+        trajectory_generation_requested_=!trajectory_session_.isValid() && !waypoint_fallback_session_.isValid();
         state_machine_.triggerReturn(domain::Event::Ch7LongPress);
         yaw_alignment_start_time_ = now;
         yaw_alignment_timeout_reported_ = false;

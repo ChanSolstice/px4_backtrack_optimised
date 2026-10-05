@@ -40,6 +40,9 @@ struct UseCaseConfig {
   // 回归参数
   domain::RejoinConfig rejoin_config;
 
+  double odom_timeout_s = 0.25;
+  double state_timeout_s = 0.50;
+
   // 原路三维偏离预算；制动值是实际飞机的保守能力，须实测验收。
   double route_normal_limit_m = 0.30;
   double route_hard_limit_m = 0.50;
@@ -65,7 +68,11 @@ struct UseCaseConfig {
       debug_csv_output_dir(""),
       debug_trajectory_sample_dt(0.05),
       debug_enable_rviz_publish(false)
-  {}
+  {
+    trajectory_config.v_max=0.6;
+    trajectory_config.v_end_max=0.6;
+    trajectory_config.max_deviation_m=0.08;
+  }
 };
 
 // ============================================================================
@@ -114,16 +121,16 @@ public:
   void onOdomReceived(const domain::Vec3& position,
                       const domain::Vec3& velocity,
                       double yaw,
-                      double stamp);
+                      double stamp, double received_at);
 
   /// RC回调
   /// @param channels RC通道数组
-  void onRCReceived(const std::vector<uint16_t>& channels);
+  void onRCReceived(const std::vector<uint16_t>& channels, double received_at);
 
   /// 飞控状态回调
   /// @param armed 是否ARM
   /// @param mode 当前模式
-  void onStateReceived(bool armed, const std::string& mode);
+  void onStateReceived(bool armed, const std::string& mode, double received_at);
 
   /// 电池状态回调
   /// @param percentage 电量百分比 (0.0~1.0)
@@ -159,6 +166,13 @@ private:
   domain::Vec3 current_position_;
   domain::Vec3 current_velocity_;
   double current_yaw_;
+
+  // 接收时间与 tick 均使用 steady clock；消息 stamp 仅用于录制/复位检测。
+  double odom_received_at_ = -1.0, state_received_at_ = -1.0;
+  double odom_stamp_ = -1.0, last_tick_time_ = -1.0;
+  bool odom_valid_ = false, localization_reset_ = false, input_hold_ = false;
+  bool inputsFresh(double now) const;
+  TickOutput holdForInvalidInput(double now);
 
   // 飞行周期复位检测
   bool has_seen_disarm_;

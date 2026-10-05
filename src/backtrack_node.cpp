@@ -7,6 +7,8 @@
 #include "px4_backtrack/adapters/debug_publishers.hpp"
 #include <ros/ros.h>
 #include <memory>
+#include <cmath>
+#include <stdexcept>
 
 namespace px4_backtrack {
 
@@ -29,7 +31,7 @@ private:
   ros::NodeHandle& nh_private_;
 
   /// 20Hz定时器
-  ros::Timer timer_;
+  ros::WallTimer timer_;
 
   /// Adapters层对象
   std::unique_ptr<adapters::StateSubscriber> state_sub_;
@@ -44,7 +46,7 @@ private:
   std::unique_ptr<application::BacktrackUseCase> usecase_;
 
   /// 定时器回调（20Hz控制循环）
-  void timerCallback(const ros::TimerEvent& event);
+  void timerCallback(const ros::WallTimerEvent& event);
 };
 
 // ============================================================================
@@ -69,6 +71,8 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
 
   // 读取publish_hz参数
   double publish_hz = nh_private_.param("publish_hz", 20.0);
+  if (!std::isfinite(publish_hz) || publish_hz<10.0 || publish_hz>100.0)
+    throw std::invalid_argument("publish_hz must be within [10,100]");
   ROS_INFO("[BacktrackNode] Publish frequency: %.1f Hz", publish_hz);
 
   // 2. 创建Adapters层对象
@@ -103,15 +107,15 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
              const domain::Vec3& velocity,
              double yaw,
              double stamp) {
-        usecase_->onOdomReceived(position, velocity, yaw, stamp);
+        usecase_->onOdomReceived(position, velocity, yaw, stamp, ros::SteadyTime::now().toSec());
       });
 
   rc_sub_->setCallback([this](const std::vector<uint16_t>& channels) {
-    usecase_->onRCReceived(channels);
+    usecase_->onRCReceived(channels, ros::SteadyTime::now().toSec());
   });
 
   state_sub_->setCallback([this](bool armed, const std::string& mode) {
-    usecase_->onStateReceived(armed, mode);
+    usecase_->onStateReceived(armed, mode, ros::SteadyTime::now().toSec());
   });
 
   battery_sub_->setCallback([this](double percentage) {
@@ -120,7 +124,7 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
 
   // 6. 创建定时器
   ROS_INFO("[BacktrackNode] Starting %.1f Hz timer...", publish_hz);
-  timer_ = nh_.createTimer(ros::Duration(1.0 / publish_hz),
+  timer_ = nh_.createWallTimer(ros::WallDuration(1.0 / publish_hz),
                            &BacktrackNode::timerCallback,
                            this);
 
@@ -131,9 +135,9 @@ void BacktrackNode::run() {
   ros::spin();
 }
 
-void BacktrackNode::timerCallback(const ros::TimerEvent& event) {
+void BacktrackNode::timerCallback(const ros::WallTimerEvent&) {
   // 获取当前时间
-  double now = ros::Time::now().toSec();
+  double now = ros::SteadyTime::now().toSec();
 
   // 驱动UseCase tick
   application::TickOutput output = usecase_->tick(now);
