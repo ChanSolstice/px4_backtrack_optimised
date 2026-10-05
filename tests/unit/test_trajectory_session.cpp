@@ -347,6 +347,48 @@ TEST(TrajectorySessionTest, ResumeReanchorsForwardWithZeroFeedforward) {
   EXPECT_FALSE(session.resumeAt(Vec3(0, 3, 1)));
 }
 
+TEST(TrajectorySessionTest, CurvedReferenceHasConsistentNonzeroYawRateAndAcceleration) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  config.v_max = 0.6;
+  config.v_end_max = 0.6;
+  config.enable_output_acc = true;
+  ASSERT_TRUE(session.generate({RecordPoint(Vec3(0, 0, 1), 0, 0), RecordPoint(Vec3(2, 0, 1), 0, 1),
+                                RecordPoint(Vec3(2, 2, 1), 0, 2)},
+                               config));
+  auto previous = session.getTargetState();
+  bool turning = false;
+  for (int i = 0; i < 8000; ++i) {
+    ASSERT_TRUE(session.updateRejoinProgress(previous.position, 0.5, 0.3, 0.005, 0.2));
+    const auto target = session.getTargetState();
+    turning |= std::abs(target.yaw_rate) > 1e-4;
+    const double yaw_change =
+        std::atan2(std::sin(target.yaw - previous.yaw), std::cos(target.yaw - previous.yaw));
+    SCOPED_TRACE(i);
+    // yaw(s) 为分段线性；跨结点时两端导数的梯形平均有有限步长误差。
+    // 用导数变化约束该误差，并在结点内部独立检查空间数值导数。
+    EXPECT_NEAR(yaw_change / 0.005, 0.5 * (target.yaw_rate + previous.yaw_rate),
+                0.001 + 0.5 * std::abs(target.yaw_rate - previous.yaw_rate));
+    const double s = session.getTargetArcLength(), h = 1e-7;
+    if (s > h && s + h < session.getTrajectory()->pathLength()) {
+      const auto left = session.getTrajectory()->evaluateProgress({0, s - h, 0, 0});
+      const auto right = session.getTrajectory()->evaluateProgress({0, s + h, 0, 0});
+      const double dyaw =
+          std::atan2(std::sin(right.yaw - left.yaw), std::cos(right.yaw - left.yaw));
+      EXPECT_NEAR(target.yaw_rate, dyaw / (2 * h) * target.velocity.norm(), 1e-5);
+    }
+    EXPECT_LT(((target.position - previous.position) / 0.005 -
+               0.5 * (target.velocity + previous.velocity))
+                  .norm(),
+              0.01);
+    ASSERT_TRUE(target.acceleration);
+    EXPECT_LE(std::abs(target.acceleration->z()), 1.0 + 1e-6);
+    EXPECT_LE(target.velocity.norm(), 0.2 + 1e-6);
+    previous = target;
+  }
+  EXPECT_TRUE(turning);
+}
+
 TEST(TrajectorySessionTest, FinishedRequiresActualAndReferenceArcPositionAndThreeDimensionalStop) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
