@@ -131,6 +131,22 @@ TEST(BacktrackUseCaseTest, ExternalOffboardExitYieldsAndOnlyExplicitValidResumeC
   f.mode="OFFBOARD"; EXPECT_EQ(f.step().current_state,domain::State::ReturnActive);
 }
 
+TEST(BacktrackUseCaseTest, SlowClosedLoopReturnFinishesOnlyAfterThreeDimensionalStop) {
+  Flight f; f.recordLine(); auto out=f.start();
+  for(int i=0;i<10000 && out.current_state!=domain::State::LandingHover;++i) {
+    ASSERT_TRUE(out.setpoint);
+    domain::Vec3 delta=out.setpoint->position-f.position;
+    const double step=std::min(0.005,delta.norm()); // 实际速度仅 0.1m/s
+    f.velocity=delta.norm()>1e-9 ? (delta.normalized()*step/0.05).eval() : domain::Vec3::Zero();
+    f.position+=f.velocity*0.05; f.yaw=out.setpoint->yaw;
+    out=f.step();
+    ASSERT_NE(out.current_state,domain::State::ReturnRejoin);
+    ASSERT_NE(out.current_state,domain::State::Paused);
+  }
+  EXPECT_EQ(out.current_state,domain::State::LandingHover);
+  EXPECT_LT(f.position.norm()-1.0,0.20);
+}
+
 TEST(BacktrackUseCaseTest, RejectsInvalidEngineeringLimits) {
   auto c=makeConfig(); c.route_braking_m_s2=0;
   EXPECT_THROW(BacktrackUseCase usecase(c),std::invalid_argument);

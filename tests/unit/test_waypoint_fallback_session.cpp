@@ -110,8 +110,9 @@ TEST(WaypointFallbackSessionTest, FinalWaypointMarksSessionFinished) {
   advance(session, Vec3(1.5, 0.0, 1.0));
   advance(session, Vec3(1.0, 0.0, 1.0));
   advance(session, Vec3(0.5, 0.0, 1.0));
-  advance(session, Vec3(0.0, 0.0, 1.0));
-
+  session.updateProgress(Vec3(0,0,1),Vec3(0,0,-0.3),session.currentTarget().yaw);
+  EXPECT_FALSE(session.isFinished());
+  advance(session, Vec3(0.0,0.0,1.0));
   EXPECT_TRUE(session.isFinished());
 }
 

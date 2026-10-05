@@ -53,7 +53,7 @@ public:
   /// 获取当前预瞄目标状态
   const trajectory_core::TrajectoryState& getTargetState() const;
 
-  /// 检查空间进度、终点位置和水平速度是否均已收敛
+  /// 检查实际/参考空间进度、终点位置和三维速度是否均已收敛
   /// @param current_position 飞机当前位置
   /// @param current_velocity 飞机当前速度
   /// @param position_tolerance_m 终点位置容差

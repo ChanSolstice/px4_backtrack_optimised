@@ -332,6 +332,11 @@ void BacktrackStateMachine::tickReturnRejoin(const TickInput& input) {
   should_publish_setpoint_ = true;
   current_mode_request_ = std::nullopt;
 
+  if (input.trajectory_finished) {
+    state_data_.locked_position=input.current_position;
+    state_data_.locked_yaw=input.current_yaw;
+    enterState(State::LandingHover,input);
+  }
   // 回归成功检测在UseCase层完成，通过状态转移信号触发
 }
 

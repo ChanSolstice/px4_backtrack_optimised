@@ -328,7 +328,7 @@ TEST(TrajectorySessionTest, ReferencePositionAndVelocityAgreeAndRejoinScalesYaw)
   EXPECT_DOUBLE_EQ(session.getTargetState().velocity.norm(),0.0);
 }
 
-TEST(TrajectorySessionTest, FinishedRequiresArcPositionAndLowHorizontalSpeed) {
+TEST(TrajectorySessionTest, FinishedRequiresActualAndReferenceArcPositionAndThreeDimensionalStop) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
 
@@ -341,7 +341,10 @@ TEST(TrajectorySessionTest, FinishedRequiresArcPositionAndLowHorizontalSpeed) {
       goal + Vec3(0.3, 0.0, 0.0), Vec3::Zero(), 0.2));
   EXPECT_FALSE(session.isFinished(
       goal, Vec3(0.3, 0.0, 0.0), 0.2));
-  EXPECT_TRUE(session.isFinished(goal, Vec3(0.1, 0.0, 0.0), 0.2));
+  EXPECT_FALSE(session.isFinished(goal, Vec3::Zero(),0.2)); // 参考还未走完
+  for(int i=0;i<1000;++i) ASSERT_TRUE(session.updateProgress(goal,0.5));
+  EXPECT_FALSE(session.isFinished(goal, Vec3(0,0,-0.3),0.2));
+  EXPECT_TRUE(session.isFinished(goal, Vec3(0.1,0,0),0.2));
 
   session.reset();
   EXPECT_FALSE(session.isValid());

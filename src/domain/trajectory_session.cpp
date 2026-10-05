@@ -16,7 +16,7 @@ constexpr double kLookaheadMaxM = 0.80;
 constexpr double kProjectionBackwardWindowM = 0.30;
 constexpr double kProjectionCycleHorizonS = 0.50;
 constexpr double kProjectionWindowMarginM = 0.20;
-constexpr double kEndHorizontalSpeedToleranceMps = 0.20;
+constexpr double kEndSpeedToleranceMps = 0.20;
 
 }  // namespace
 
@@ -264,19 +264,20 @@ bool TrajectorySession::isFinished(const Vec3& current_position,
                                    const Vec3& current_velocity,
                                    double position_tolerance_m) const {
   if (!traj_ || !traj_->isValid() || !projection_valid_ ||
-      position_tolerance_m < 0.0 || !current_position.allFinite() ||
+      !std::isfinite(position_tolerance_m) || position_tolerance_m < 0.0 || !current_position.allFinite() ||
       !current_velocity.allFinite()) {
     return false;
   }
 
   const double remaining_s = std::max(0.0, traj_->pathLength() - projected_s_);
-  if (remaining_s > position_tolerance_m) {
+  if (remaining_s > position_tolerance_m ||
+      traj_->pathLength()-target_s_ > position_tolerance_m) {
     return false;
   }
 
-  const double horizontal_speed = current_velocity.head<2>().norm();
+  const double speed = current_velocity.norm();
   return (current_position - traj_->goalPosition()).norm() <= position_tolerance_m &&
-         horizontal_speed <= kEndHorizontalSpeedToleranceMps;
+         speed <= kEndSpeedToleranceMps;
 }
 
 bool TrajectorySession::isValid() const {

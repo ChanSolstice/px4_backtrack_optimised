@@ -113,7 +113,7 @@ void WaypointFallbackSession::updateProgress(const Vec3& current_position,
     return;
   }
 
-  finished_ = true;
+  finished_ = current_velocity.norm() <= 0.10;
 }
 
 bool WaypointFallbackSession::isValid() const {
