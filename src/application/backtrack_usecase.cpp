@@ -236,6 +236,9 @@ TickOutput BacktrackUseCase::holdForInvalidInput(double now) {
       state == domain::State::ReturnPreOffboard || state == domain::State::Ch18HoverWait ||
       state == domain::State::LandingHover || state == domain::State::LandingTransition;
   if (controlled) {
+    ROS_ERROR("[BacktrackUseCase] Input hold: odom_valid=%d localization_reset=%d odom_age=%.3f "
+              "state_age=%.3f",
+              odom_valid_, localization_reset_, now - odom_received_at_, now - state_received_at_);
     safety_hold_position_ = current_position_;
     safety_hold_yaw_ = current_yaw_;
     input_hold_ = true;
@@ -269,6 +272,7 @@ void BacktrackUseCase::onOdomReceived(const domain::Vec3 &position, const domain
                                       double yaw, double stamp, double received_at) {
   if (!position.allFinite() || !velocity.allFinite() || !std::isfinite(yaw) ||
       !std::isfinite(stamp) || !std::isfinite(received_at) || stamp < 0.0 || received_at < 0.0) {
+    ROS_WARN_THROTTLE(1.0, "[BacktrackUseCase] Invalid odometry values or receipt clock");
     odom_valid_ = false;
     return;
   }
@@ -278,13 +282,20 @@ void BacktrackUseCase::onOdomReceived(const domain::Vec3 &position, const domain
   }
   if (odom_stamp_ >= 0.0 && stamp <= odom_stamp_) {
     odom_valid_ = false;
-    if (stamp < odom_stamp_ && current_armed_)
+    if (stamp < odom_stamp_ && current_armed_) {
+      if (!localization_reset_)
+        ROS_ERROR("[BacktrackUseCase] Odometry stamp moved backward: %.6f -> %.6f", odom_stamp_,
+                  stamp);
       localization_reset_ = true;
+    }
     return;
   }
   const double elapsed = odom_received_at_ < 0.0 ? 0.0 : received_at - odom_received_at_;
   if (current_armed_ && odom_received_at_ >= 0.0 &&
       (position - current_position_).norm() > 0.30 + 1.0 * elapsed) {
+    if (!localization_reset_)
+      ROS_ERROR("[BacktrackUseCase] Position reset suspected: delta=%.3f elapsed=%.3f",
+                (position - current_position_).norm(), elapsed);
     localization_reset_ = true;
     odom_valid_ = false;
     return;
