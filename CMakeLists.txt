@@ -12,6 +12,8 @@ add_compile_options(-Wall -Wextra)
 ## Find catkin macros and libraries
 find_package(catkin REQUIRED COMPONENTS
   roscpp
+  roslib
+  tf2
   std_msgs
   sensor_msgs
   nav_msgs
@@ -33,6 +35,8 @@ catkin_package(
   LIBRARIES ${PROJECT_NAME}_lib
   CATKIN_DEPENDS
     roscpp
+    roslib
+    tf2
     std_msgs
     sensor_msgs
     nav_msgs
@@ -144,8 +148,8 @@ install(TARGETS ${PROJECT_NAME}_lib
 )
 
 ## Install header files
-install(DIRECTORY include/${PROJECT_NAME}/
-  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
+install(DIRECTORY include/px4_backtrack/
+  DESTINATION ${CATKIN_GLOBAL_INCLUDE_DESTINATION}/px4_backtrack
   FILES_MATCHING PATTERN "*.hpp"
 )
 
