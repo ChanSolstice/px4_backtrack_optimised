@@ -681,13 +681,14 @@ void BacktrackUseCase::handleRouteSafety() {
   const bool unsafe = !valid || recorded_route_.distance() >= config_.route_hard_limit_m ||
                       predicted >= config_.route_normal_limit_m;
   const bool fallback_off_route =
-      (waypoint_fallback_session_.isValid() || preparing) &&
+      waypoint_fallback_session_.isValid() &&
       recorded_route_.distance() >= config_.rejoin_config.trigger_dist_m;
   if (unsafe || fallback_off_route) {
     ROS_ERROR("[BacktrackUseCase] Original route safety hold: distance=%.3f predicted=%.3f",
               recorded_route_.distance(), predicted);
     pauseForRouteSafety();
-  } else if (recorded_route_.distance() >= config_.rejoin_config.trigger_dist_m) {
+  } else if (state == domain::State::ReturnActive &&
+             recorded_route_.distance() >= config_.rejoin_config.trigger_dist_m) {
     state_machine_.enterRejoin();
   }
 }

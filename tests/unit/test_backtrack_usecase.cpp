@@ -362,13 +362,34 @@ TEST(BacktrackUseCaseTest, PreparationDriftCancelsBlockedPlanBeforeActivation) {
     FAIL() << "Planner not started";
   }
   f.position.z() += 0.16;
-  const auto out = f.step();
+  auto out = f.step();
+  EXPECT_EQ(out.current_state, domain::State::ReturnPreOffboard);
+  f.position.z() += 0.10; // 0.26 + 0.05 定位余量已经超过 0.30 预算。
+  out = f.step();
   release.set_value();
   EXPECT_EQ(out.current_state, domain::State::Paused);
   ASSERT_TRUE(out.setpoint);
   EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(), 0.0);
   std::this_thread::sleep_for(std::chrono::milliseconds(30));
   EXPECT_EQ(f.step().current_state, domain::State::Paused);
+}
+
+TEST(BacktrackUseCaseTest, PreparationWithinBudgetKeepsYawHoldAndThenRejoins) {
+  Flight f;
+  f.recordLine();
+  f.yaw = 0;
+  auto out = f.start();
+  ASSERT_EQ(out.current_state, domain::State::ReturnPreOffboard);
+  f.position.y() = 0.16;
+  out = f.step();
+  EXPECT_EQ(out.current_state, domain::State::ReturnPreOffboard);
+  EXPECT_FALSE(out.mode_request);
+  ASSERT_TRUE(out.setpoint);
+  EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(), 0.0);
+  EXPECT_DOUBLE_EQ(out.setpoint->yaw_rate, 0.0);
+  f.yaw = std::acos(-1.0);
+  EXPECT_EQ(f.step().current_state, domain::State::ReturnActive);
+  EXPECT_EQ(f.step().current_state, domain::State::ReturnRejoin);
 }
 
 TEST(BacktrackUseCaseTest, DisarmRearmBetweenTicksCannotReuseOldTask) {
