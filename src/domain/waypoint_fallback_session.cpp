@@ -73,6 +73,7 @@ WaypointFallbackSession::WaypointFallbackSession(double spacing_m, double reach_
 
 bool WaypointFallbackSession::build(const std::vector<RecordPoint>& points) {
   reset();
+  if (!std::isfinite(reach_radius_m_) || reach_radius_m_<=0.0) return false;
   waypoints_ = buildSparseReverseWaypoints(points, spacing_m_);
   return isValid();
 }

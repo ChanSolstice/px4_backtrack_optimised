@@ -41,12 +41,13 @@ void TrajectorySession::reset() {
   target_state_ = trajectory_core::TrajectoryState();
   trajectory_v_max_m_s_ = 0.0;
   last_failure_kind_ = FailureKind::None;
+  last_generate_cost_ms_ = 0.0;
   reference_time_ = clock_rate_ = 0.0;
 }
 
 bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
                                   const trajectory_core::TrajectoryConfig& config) {
-  last_failure_kind_ = FailureKind::None;
+  reset(); // 失败必须使本会话无效，不能沿用上一次成功结果。
 
   if (!config.validate()) {
     ROS_ERROR("[TrajectorySession] Invalid trajectory configuration");

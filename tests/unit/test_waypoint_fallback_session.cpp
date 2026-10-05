@@ -96,6 +96,8 @@ TEST(WaypointFallbackSessionTest, PreservesShortRightAngleCornerAndWaitsForStopA
 TEST(WaypointFallbackSessionTest, RejectsInvalidParametersAndGeometry) {
   WaypointFallbackSession invalid(0.0);
   EXPECT_FALSE(invalid.build(makeRecordedLine()));
+  WaypointFallbackSession invalid_radius(0.3,std::numeric_limits<double>::quiet_NaN());
+  EXPECT_FALSE(invalid_radius.build(makeRecordedLine()));
   WaypointFallbackSession session;
   auto points = makeRecordedLine();
   points[1].position.x() = std::numeric_limits<double>::quiet_NaN();

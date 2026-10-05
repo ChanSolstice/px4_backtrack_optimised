@@ -98,6 +98,15 @@ TEST(TrajectorySessionTest, MarksTooCloseGeometryFailure) {
   EXPECT_EQ(session.getLastFailureKind(), TrajectorySession::FailureKind::TooCloseGeometry);
 }
 
+TEST(TrajectorySessionTest, FailedRegenerationCannotReuseOldTrajectory) {
+  TrajectorySession session; trajectory_core::TrajectoryConfig config;
+  ASSERT_TRUE(session.generate(makeRecordPoints(),config));
+  config.v_max=-1.0;
+  EXPECT_FALSE(session.generate(makeRecordPoints(),config));
+  EXPECT_FALSE(session.isValid()); EXPECT_EQ(session.getTrajectory(),nullptr);
+  EXPECT_DOUBLE_EQ(session.getTargetState().velocity.norm(),0.0);
+}
+
 TEST(TrajectorySessionTest, MarksInvalidConfigFailure) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
