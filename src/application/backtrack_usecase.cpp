@@ -84,6 +84,8 @@ TickOutput BacktrackUseCase::tick(double now) {
     handleTrajectoryProgress(now);
   }
 
+  if (!auto_land_yielding) handleRouteSafety();
+
   // 偏离检测与回归处理
   if (!auto_land_yielding) {
     handleRejoin(now);
@@ -123,6 +125,12 @@ TickOutput BacktrackUseCase::tick(double now) {
     output.setpoint = computeSetpoint();
   }
 
+  if (route_safety_hold_ && current_armed_ && current_mode_ == "OFFBOARD") {
+    domain::SetpointTarget hold;
+    hold.position=safety_hold_position_; hold.yaw=safety_hold_yaw_;
+    hold.type_mask=0x09F8; // position+yaw，冻结进度并等待 POSCTL 确认
+    output.setpoint=hold; output.should_publish_setpoint=true;
+  }
   return output;
 }
 
@@ -177,6 +185,9 @@ void BacktrackUseCase::handleFlightCycleReset(bool armed) {
     // 复位所有状态
     ROS_INFO("[BacktrackUseCase] Flight cycle reset: ARM after DISARM detected");
     recording_buffer_.reset();
+    recorded_route_.reset();
+    route_safety_hold_=false;
+    last_progress_time_=-1.0;
     trajectory_session_.reset();
     waypoint_fallback_session_.reset();
     record_delay_started_ = false;
@@ -212,6 +223,7 @@ bool BacktrackUseCase::handleAutoLandYield() {
     has_last_path_target_velocity_ = false;
     record_delay_started_ = false;
     auto_land_yield_active_ = true;
+    route_safety_hold_=false;
   }
 
   return auto_land_yield_active_;
@@ -308,11 +320,12 @@ void BacktrackUseCase::handleTriggers(double now) {
 
   // 在Paused状态时，检测RC丢失和Ch7长按（恢复）
   if (current_state == domain::State::Paused) {
-    bool has_min_points = checkMinPoints();
+    bool has_min_points = checkMinPoints() && canResumeReturn();
 
-    if (rc_loss_event) {
+    if (rc_loss_event && !route_safety_hold_) {
       if (has_min_points) {
         ROS_WARN("[BacktrackUseCase] RC loss detected while paused, resuming return");
+        route_safety_hold_=false;
         const double hold_yaw = trajectory_session_.isValid()
             ? trajectory_session_.getTargetState().yaw
             : current_yaw_;
@@ -332,6 +345,7 @@ void BacktrackUseCase::handleTriggers(double now) {
     if (trigger_evaluator_.checkCh7LongPress()) {
       if (has_min_points) {
         ROS_INFO("[BacktrackUseCase] Ch7 long press detected, resuming");
+        route_safety_hold_=false;
         const double hold_yaw = trajectory_session_.isValid()
             ? trajectory_session_.getTargetState().yaw
             : current_yaw_;
@@ -339,7 +353,7 @@ void BacktrackUseCase::handleTriggers(double now) {
         state_machine_.triggerReturn(domain::Event::Ch7LongPress);
         yaw_alignment_start_time_ = now;
         yaw_alignment_timeout_reported_ = false;
-      } else {
+      } else if (!route_safety_hold_) {
         ROS_WARN("[BacktrackUseCase] Ch7 long press detected while paused but only %zu points recorded (< %d), triggering AUTO.LAND",
                  recording_buffer_.size(),
                  config_.record_min_points);
@@ -357,6 +371,9 @@ void BacktrackUseCase::handleReturnTrigger(domain::Event event,
     ROS_INFO("[BacktrackUseCase] %s detected", trigger_name);
     trajectory_session_.reset();
     waypoint_fallback_session_.reset();
+    route_safety_hold_=false;
+    last_progress_time_=-1.0;
+    if (!recorded_route_.build(recording_buffer_.getPoints())) { triggerImmediateLanding(); return; }
     state_machine_.lockPosition(current_position_, current_yaw_);
     state_machine_.triggerReturn(event);
     trajectory_generation_requested_ = true;
@@ -437,7 +454,7 @@ void BacktrackUseCase::handleTrajectoryProgress(double now) {
 
   const double dt = last_progress_time_ < 0.0 ? 0.05 : now-last_progress_time_;
   last_progress_time_ = now;
-  if (!std::isfinite(dt) || dt <= 0.0 || dt > 0.10) {
+  if (!std::isfinite(dt) || dt <= 0.0 || dt > 0.1001) {
     trajectory_session_.suspend();
     return;
   }
@@ -445,9 +462,9 @@ void BacktrackUseCase::handleTrajectoryProgress(double now) {
       ? trajectory_session_.updateRejoinProgress(
             current_position_,
             config_.rejoin_config.lookahead_time_s,
-            config_.rejoin_config.trigger_dist_m, dt, config_.rejoin_config.v_max_m_s)
+            config_.rejoin_config.trigger_dist_m, std::min(0.10,dt), config_.rejoin_config.v_max_m_s)
       : trajectory_session_.updateProgress(
-            current_position_, config_.rejoin_config.lookahead_time_s, dt);
+            current_position_, config_.rejoin_config.lookahead_time_s, std::min(0.10,dt));
   if (!projection_ok) {
     ROS_ERROR_THROTTLE(1.0,
                        "[BacktrackUseCase] Local path projection failed; holding last valid target");
@@ -456,6 +473,36 @@ void BacktrackUseCase::handleTrajectoryProgress(double now) {
       state_machine_.enterRejoin();
       rejoin_trigger_candidate_start_time_ = -1.0;
     }
+  }
+}
+
+bool BacktrackUseCase::canResumeReturn() {
+  if (!recorded_route_.valid() || !recorded_route_.update(current_position_) ||
+      recorded_route_.distance()>config_.rejoin_config.success_dist_m) return false;
+  trajectory_session_.suspend();
+  last_progress_time_=-1.0;
+  return true;
+}
+
+void BacktrackUseCase::handleRouteSafety() {
+  const auto state=state_machine_.getCurrentState();
+  if (state!=domain::State::ReturnActive && state!=domain::State::ReturnRejoin) return;
+  const bool valid=recorded_route_.update(current_position_);
+  const double predicted=recorded_route_.predictedDeviation(current_position_,current_velocity_,
+      config_.route_reaction_s,config_.route_braking_m_s2,config_.route_uncertainty_m);
+  const bool unsafe=!valid || recorded_route_.distance()>=config_.route_hard_limit_m ||
+      predicted>=config_.route_normal_limit_m;
+  const bool fallback_off_route=waypoint_fallback_session_.isValid() &&
+      recorded_route_.distance()>=config_.rejoin_config.trigger_dist_m;
+  if (unsafe || fallback_off_route) {
+    ROS_ERROR("[BacktrackUseCase] Original route safety hold: distance=%.3f predicted=%.3f",
+              recorded_route_.distance(),predicted);
+    safety_hold_position_=current_position_; safety_hold_yaw_=current_yaw_;
+    route_safety_hold_=true;
+    trajectory_session_.suspend();
+    state_machine_.triggerPause();
+  } else if (recorded_route_.distance()>=config_.rejoin_config.trigger_dist_m) {
+    state_machine_.enterRejoin();
   }
 }
 

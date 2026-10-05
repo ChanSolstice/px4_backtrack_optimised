@@ -86,10 +86,10 @@ pre_offboard_setpoint_count: 20
 # ============================
 
 # 触发回归的偏离距离 (m)
-rejoin_trigger_dist_m: 0.5
+rejoin_trigger_dist_m: 0.15
 
 # 成功回到安全走廊的距离阈值 (m)，须小于触发距离
-rejoin_success_dist_m: 0.4
+rejoin_success_dist_m: 0.10
 
 # 回归时的最大速度 (m/s)
 rejoin_v_max_m_s: 0.3
@@ -98,7 +98,7 @@ rejoin_v_max_m_s: 0.3
 rejoin_lookahead_time_s: 0.5
 
 # 偏离持续超阈值多久后进入回归 (s)
-rejoin_trigger_hold_s: 0.25
+rejoin_trigger_hold_s: 0.0
 
 # 回归持续满足阈值多久后退出回归 (s)
 rejoin_success_hold_s: 0.10
@@ -132,3 +132,10 @@ debug_trajectory_sample_dt: 0.1
 
 # 是否启用ROS可视化话题发布（录制航迹点+返航轨迹）
 debug_enable_rviz_publish: true
+
+# 原始录制折线三维偏离预算。制动能力和定位不确定度须用实机验证。
+route_normal_limit_m: 0.30
+route_hard_limit_m: 0.50
+route_uncertainty_m: 0.05
+route_reaction_s: 0.10
+route_braking_m_s2: 0.50

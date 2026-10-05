@@ -6,6 +6,7 @@
 #include "px4_backtrack/domain/trajectory_session.hpp"
 #include "px4_backtrack/domain/waypoint_fallback_session.hpp"
 #include "px4_backtrack/domain/rejoin_policy.hpp"
+#include "px4_backtrack/domain/recorded_route.hpp"
 
 #include <trajectory_core/trajectory_core.hpp>
 #include <memory>
@@ -38,6 +39,13 @@ struct UseCaseConfig {
 
   // 回归参数
   domain::RejoinConfig rejoin_config;
+
+  // 原路三维偏离预算；制动值是实际飞机的保守能力，须实测验收。
+  double route_normal_limit_m = 0.30;
+  double route_hard_limit_m = 0.50;
+  double route_uncertainty_m = 0.05;
+  double route_reaction_s = 0.10;
+  double route_braking_m_s2 = 0.50;
 
   // trajectory_core配置
   trajectory_core::TrajectoryConfig trajectory_config;
@@ -137,6 +145,12 @@ private:
   domain::TrajectorySession trajectory_session_;
   domain::WaypointFallbackSession waypoint_fallback_session_;
   domain::RejoinPolicy rejoin_policy_;
+  domain::RecordedRoute recorded_route_;
+  bool route_safety_hold_ = false;
+  domain::Vec3 safety_hold_position_ = domain::Vec3::Zero();
+  double safety_hold_yaw_ = 0.0;
+  void handleRouteSafety();
+  bool canResumeReturn();
   domain::BacktrackStateMachine state_machine_;
 
   // 当前状态快照

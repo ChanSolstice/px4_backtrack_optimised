@@ -63,6 +63,7 @@ set(DOMAIN_SOURCES
   src/domain/trajectory_session.cpp
   src/domain/waypoint_fallback_session.cpp
   src/domain/rejoin_policy.cpp
+  src/domain/recorded_route.cpp
 )
 
 ## Application层源文件
@@ -162,6 +163,11 @@ install(DIRECTORY config/
 #############
 
 if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_recorded_route tests/unit/test_main.cpp tests/unit/test_recorded_route.cpp)
+  if(TARGET test_recorded_route)
+    target_link_libraries(test_recorded_route ${PROJECT_NAME}_lib ${catkin_LIBRARIES})
+  endif()
+
   catkin_add_gtest(test_recording_buffer
     tests/unit/test_main.cpp
     tests/unit/test_recording_buffer.cpp

@@ -12,7 +12,7 @@
 ds_m: 0.15
 
 # 走廊约束半径 (m)
-max_deviation_m: 0.15
+max_deviation_m: 0.08
 
 # 内部时间采样步长 (s) - 20Hz
 dt_sample_s: 0.05
@@ -67,7 +67,7 @@ s_stop_m: 3.0
 r_stop_m: 2.0
 
 # 收敛段最大速度 (m/s)
-v_end_max: 0.8
+v_end_max: 0.6
 
 # Yaw 保持距离 (m)
 r_yaw_hold_m: 1.0
@@ -76,8 +76,8 @@ r_yaw_hold_m: 1.0
 # 速度与加速度约束
 # ============================
 
-# 最大水平速度 (m/s)
-v_max: 1.0
+# 最大三维速度 (m/s)，保留低于 1m/s 的余量
+v_max: 0.6
 
 # 最大竖直速度 (m/s)
 vz_max: 0.6

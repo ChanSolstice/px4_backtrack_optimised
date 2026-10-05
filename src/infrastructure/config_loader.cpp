@@ -35,6 +35,12 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   loadLandingParams(nh, config);
   loadDebugParams(nh, config);
 
+  nh.param("route_normal_limit_m",config.route_normal_limit_m,0.30);
+  nh.param("route_hard_limit_m",config.route_hard_limit_m,0.50);
+  nh.param("route_uncertainty_m",config.route_uncertainty_m,0.05);
+  nh.param("route_reaction_s",config.route_reaction_s,0.10);
+  nh.param("route_braking_m_s2",config.route_braking_m_s2,0.50);
+
   // 加载trajectory_core配置路径
   std::string trajectory_config_path;
   nh.param<std::string>("trajectory_config_path", trajectory_config_path, "");
@@ -132,11 +138,11 @@ void ConfigLoader::loadOffboardParams(ros::NodeHandle& nh, application::UseCaseC
 }
 
 void ConfigLoader::loadRejoinParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  nh.param("rejoin_trigger_dist_m", config.rejoin_config.trigger_dist_m, 0.5);
-  nh.param("rejoin_success_dist_m", config.rejoin_config.success_dist_m, 0.4);
+  nh.param("rejoin_trigger_dist_m", config.rejoin_config.trigger_dist_m, 0.15);
+  nh.param("rejoin_success_dist_m", config.rejoin_config.success_dist_m, 0.10);
   nh.param("rejoin_v_max_m_s", config.rejoin_config.v_max_m_s, 0.3);
   nh.param("rejoin_lookahead_time_s", config.rejoin_config.lookahead_time_s, 0.5);
-  nh.param("rejoin_trigger_hold_s", config.rejoin_config.trigger_hold_s, 0.25);
+  nh.param("rejoin_trigger_hold_s", config.rejoin_config.trigger_hold_s, 0.0);
   nh.param("rejoin_success_hold_s", config.rejoin_config.success_hold_s, 0.10);
 
   ROS_INFO("[ConfigLoader] Rejoin params:");

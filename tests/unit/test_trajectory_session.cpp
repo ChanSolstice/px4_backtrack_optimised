@@ -231,7 +231,12 @@ TEST(TrajectorySessionTest, DensePauseClusterDoesNotBlowUpPathLength) {
 
   double path_length = session.getTrajectory()->pathLength();
   EXPECT_GT(path_length, 1.8);
-  EXPECT_LT(path_length, 2.4);
+  // 完整停顿噪声折线也属于走廊参照，不能通过外部抽稀假定它不存在。
+  EXPECT_LT(path_length, 3.1);
+  for (double t=0.0; t<=session.getDuration(); t+=0.1) {
+    const Vec3 position=session.getTrajectory()->evaluate(t).position;
+    EXPECT_LT(std::abs(position.y()),0.15);
+  }
 }
 
 TEST(TrajectorySessionTest, SlowStraightLineKeepsAccumulatedDistanceWhenThinning) {

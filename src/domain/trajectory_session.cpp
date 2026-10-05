@@ -18,41 +18,6 @@ constexpr double kProjectionCycleHorizonS = 0.50;
 constexpr double kProjectionWindowMarginM = 0.20;
 constexpr double kEndHorizontalSpeedToleranceMps = 0.20;
 
-std::vector<RecordPoint> thinRecordedPointsForGeneration(
-    const std::vector<RecordPoint>& points,
-    double min_spacing_m) {
-  if (points.size() <= 2 || min_spacing_m <= 0.0) {
-    return points;
-  }
-
-  std::vector<RecordPoint> reduced;
-  reduced.reserve(points.size());
-  reduced.push_back(points.front());
-
-  for (size_t i = 1; i + 1 < points.size(); ++i) {
-    const auto& point = points[i];
-    double dist = (point.position - reduced.back().position).norm();
-
-    if (dist >= min_spacing_m) {
-      reduced.push_back(point);
-    }
-  }
-
-  const auto& endpoint = points.back();
-  while (reduced.size() > 1 &&
-         (endpoint.position - reduced.back().position).norm() < min_spacing_m) {
-    reduced.pop_back();
-  }
-
-  if ((endpoint.position - reduced.back().position).norm() > 1e-9) {
-    reduced.push_back(endpoint);
-  } else {
-    reduced.back() = endpoint;
-  }
-
-  return reduced;
-}
-
 }  // namespace
 
 TrajectorySession::TrajectorySession()
@@ -99,24 +64,8 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
   // 记录开始时间
   auto start_time = std::chrono::high_resolution_clock::now();
 
-  const double min_spacing_m = std::max(config.min_point_dist_m, config.ds_m * 0.5);
-  auto reduced_points = thinRecordedPointsForGeneration(points, min_spacing_m);
-
-  if (reduced_points.size() < 2) {
-    ROS_ERROR("[TrajectorySession] Too few points after thinning: %zu", reduced_points.size());
-    last_failure_kind_ = FailureKind::TooCloseGeometry;
-    return false;
-  }
-
-  if (reduced_points.size() != points.size()) {
-    ROS_INFO("[TrajectorySession] Thinned recorded points: %zu -> %zu (min_spacing=%.3f m)",
-             points.size(),
-             reduced_points.size(),
-             min_spacing_m);
-  }
-
   // 构造逆序返航点，并由返航路径的水平切线生成机头航向。
-  std::vector<RecordPoint> return_points(reduced_points.rbegin(), reduced_points.rend());
+  std::vector<RecordPoint> return_points(points.rbegin(), points.rend());
   std::vector<Vec3> return_positions;
   return_positions.reserve(return_points.size());
   for (const auto& point : return_points) {
@@ -130,7 +79,7 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
   waypoints.reserve(return_points.size());
 
   const size_t n = return_points.size();
-  const double t_end = reduced_points.back().timestamp;
+  const double t_end = points.back().timestamp;
 
   for (size_t i = 0; i < n; ++i) {
     const auto& pt = return_points[i];

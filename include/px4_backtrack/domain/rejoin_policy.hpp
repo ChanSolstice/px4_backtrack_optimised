@@ -21,11 +21,11 @@ struct RejoinConfig {
 
   /// 默认构造函数
   RejoinConfig()
-    : trigger_dist_m(0.5),
-      success_dist_m(0.4),
+    : trigger_dist_m(0.15),
+      success_dist_m(0.10),
       v_max_m_s(0.3),
       lookahead_time_s(0.5),
-      trigger_hold_s(0.25),
+      trigger_hold_s(0.0),
       success_hold_s(0.10)
   {}
 };
