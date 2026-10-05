@@ -3,6 +3,7 @@
 #include <chrono>
 #include <thread>
 #include <future>
+#include <atomic>
 #include "px4_backtrack/application/backtrack_usecase.hpp"
 namespace px4_backtrack::application {
 namespace {
@@ -399,6 +400,81 @@ TEST(BacktrackUseCaseTest, FallbackResumeBetweenWaypointsRetainsRemainingTarget)
   EXPECT_EQ(out.current_state, domain::State::ReturnActive);
   ASSERT_TRUE(out.setpoint);
   EXPECT_NEAR(out.setpoint->position.x(), remaining, 1e-9);
+}
+
+TEST(BacktrackUseCaseTest, MovingReturnTriggerRecordsBrakingTailAndPlansOnlyAfterStop) {
+  std::atomic<int> calls{0};
+  std::promise<double> endpoint;
+  auto recorded_endpoint = endpoint.get_future();
+  Flight f(makeConfig(), [&](auto &session, const auto &points, const auto &config) {
+    ++calls;
+    endpoint.set_value(points.back().position.x());
+    return session.generate(points, config);
+  });
+  f.recordLine();
+  f.velocity.x() = 0.6;
+  f.rc(1000);
+  auto out = f.step();
+  for (int i = 0; i < 5; ++i) {
+    f.position.x() += 0.03;
+    out = f.step();
+  }
+  EXPECT_EQ(out.current_state, domain::State::ReturnPreOffboard);
+  EXPECT_EQ(calls.load(), 0);
+  ASSERT_TRUE(out.setpoint);
+  EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(), 0);
+  f.velocity.setZero();
+  out = f.awaitPlan(f.step());
+  ASSERT_EQ(recorded_endpoint.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+  EXPECT_NEAR(recorded_endpoint.get(), f.position.x(), 1e-9);
+  EXPECT_EQ(out.current_state, domain::State::ReturnActive);
+}
+
+TEST(BacktrackUseCaseTest, MaximumRecordingSnapshotAndBlockedPlanningKeepControlResponsive) {
+  std::promise<void> release, entered;
+  auto gate = release.get_future().share();
+  auto started = entered.get_future();
+  std::atomic<size_t> points_seen{0};
+  Flight f(makeConfig(), [&](auto &, const auto &points, const auto &) {
+    points_seen = points.size();
+    entered.set_value();
+    gate.wait();
+    return false;
+  });
+  for (int i = 0; i < 54000; ++i) {
+    f.position.x() = i * 0.04;
+    f.step(1.0 / 15.0);
+  }
+  f.rc(1000);
+  f.step();
+  const auto begin = std::chrono::steady_clock::now();
+  auto out = f.step();
+  const double snapshot_s =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+  const auto ready = started.wait_for(std::chrono::seconds(2));
+  if (ready != std::future_status::ready) {
+    release.set_value();
+    FAIL() << "Large plan not submitted";
+  }
+  double max_tick_s = snapshot_s;
+  bool continued = true;
+  for (int i = 0; i < 1000; ++i) {
+    const auto tick_begin = std::chrono::steady_clock::now();
+    out = f.step();
+    max_tick_s = std::max(
+        max_tick_s,
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - tick_begin).count());
+    continued &=
+        out.should_publish_setpoint && out.current_state == domain::State::ReturnPreOffboard;
+  }
+  f.mode = "AUTO.LAND";
+  f.step();
+  release.set_value();
+  EXPECT_GE(points_seen.load(), 54000u);
+  EXPECT_TRUE(continued);
+  EXPECT_LT(max_tick_s, 0.10);
+  std::cout << "MAX_RECORDING points=" << points_seen << " max_control_tick_s=" << max_tick_s
+            << std::endl;
 }
 
 TEST(BacktrackUseCaseTest, RejectsInvalidEngineeringLimits) {

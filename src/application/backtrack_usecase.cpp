@@ -295,8 +295,13 @@ void BacktrackUseCase::onOdomReceived(const domain::Vec3 &position, const domain
   odom_received_at_ = received_at;
   odom_stamp_ = stamp;
   odom_valid_ = true;
-  if (state_machine_.getCurrentState() == domain::State::Recording && !localization_reset_ &&
-      state_received_at_ >= 0.0 && received_at >= state_received_at_ &&
+  const auto state = state_machine_.getCurrentState();
+  const bool recording =
+      state == domain::State::Recording ||
+      (trajectory_generation_requested_ &&
+       (state == domain::State::ReturnPreOffboard || state == domain::State::Ch18HoverWait));
+  if (recording && !localization_reset_ && state_received_at_ >= 0.0 &&
+      received_at >= state_received_at_ &&
       received_at - state_received_at_ <= config_.state_timeout_s)
     recording_buffer_.addPoint(position, yaw, stamp);
 }
@@ -529,6 +534,13 @@ void BacktrackUseCase::handleTrajectoryGeneration(double now) {
     return;
   if (trajectory_generation_requested_ && !trajectory_session_->isValid() &&
       !waypoint_fallback_session_.isValid()) {
+    // 触发后继续录制实际制动尾段，停稳后才冻结原路并交付规划。
+    if (current_velocity_.norm() > 0.10)
+      return;
+    if (!recorded_route_.build(recording_buffer_.getPoints())) {
+      triggerImmediateLanding();
+      return;
+    }
     PlanningInput input;
     input.points = recording_buffer_.getPointsCopy();
     input.config = config_.trajectory_config;
@@ -557,6 +569,15 @@ void BacktrackUseCase::handleTrajectoryGeneration(double now) {
   yaw_alignment_timeout_reported_ = false;
   has_last_path_target_velocity_ = false;
   last_progress_time_ = -1.0;
+  const bool local_ready = trajectory_session_->isValid()
+                               ? trajectory_session_->resumeAt(current_position_)
+                               : (waypoint_fallback_session_.isValid() &&
+                                  waypoint_fallback_session_.resumeAt(current_position_));
+  if ((trajectory_session_->isValid() || waypoint_fallback_session_.isValid()) && !local_ready) {
+    ROS_WARN("[BacktrackUseCase] Planned route cannot join current local position; pausing");
+    pauseForRouteSafety();
+    return;
+  }
   if (trajectory_session_->isValid() || waypoint_fallback_session_.isValid()) {
     const auto locked = state_machine_.getStateData().locked_position;
     const double yaw = trajectory_session_->isValid()
@@ -639,6 +660,9 @@ void BacktrackUseCase::handleRouteSafety() {
       state == domain::State::ReturnPreOffboard || state == domain::State::Ch18HoverWait;
   if (state != domain::State::ReturnActive && state != domain::State::ReturnRejoin && !preparing)
     return;
+  // 冻结前的原路仍在接收制动尾段；坐标有效性保护始终由输入层执行。
+  if (preparing && trajectory_generation_requested_)
+    return;
   const bool valid = recorded_route_.update(current_position_);
   const double predicted = recorded_route_.predictedDeviation(
       current_position_, current_velocity_, config_.route_reaction_s, config_.route_braking_m_s2,
@@ -651,15 +675,19 @@ void BacktrackUseCase::handleRouteSafety() {
   if (unsafe || fallback_off_route) {
     ROS_ERROR("[BacktrackUseCase] Original route safety hold: distance=%.3f predicted=%.3f",
               recorded_route_.distance(), predicted);
-    safety_hold_position_ = current_position_;
-    safety_hold_yaw_ = current_yaw_;
-    route_safety_hold_ = true;
-    cancelPlanning();
-    trajectory_session_->suspend();
-    state_machine_.triggerPause();
+    pauseForRouteSafety();
   } else if (recorded_route_.distance() >= config_.rejoin_config.trigger_dist_m) {
     state_machine_.enterRejoin();
   }
+}
+
+void BacktrackUseCase::pauseForRouteSafety() {
+  safety_hold_position_ = current_position_;
+  safety_hold_yaw_ = current_yaw_;
+  route_safety_hold_ = true;
+  cancelPlanning();
+  trajectory_session_->suspend();
+  state_machine_.triggerPause();
 }
 
 bool BacktrackUseCase::isTrajectoryActivationReady(double now) {
