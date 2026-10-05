@@ -31,7 +31,9 @@
     "takeoff_height_increment_m": 2,
     "paths": [
       "straight",
-      "l"
+      "l",
+      "fallback_l",
+      "moving_straight"
     ]
   },
   "effective_return_parameters": {
@@ -86,6 +88,25 @@
   "raw_outputs": [
     "/tmp/return-gazebo-vision-straight",
     "/tmp/return-gazebo-vision-l",
-    "/tmp/return-gazebo-gps-straight"
-  ]
+    "/tmp/return-gazebo-gps-straight",
+    "/tmp/return-gazebo-vision-fallback_l",
+    "/tmp/return-gazebo-vision-moving_straight"
+  ],
+  "additional_scenarios": {
+    "fallback_l": {
+      "path": "l",
+      "max_deviation_m": 1e-05,
+      "corner_blend_len_m": 0.03,
+      "ds_check_m": 0.001,
+      "expected_failure": "FIT_FAILED",
+      "expected_output": "position+yaw only; mask 0x09F8"
+    },
+    "moving_straight": {
+      "path": "straight",
+      "settle_before_trigger_s": 0,
+      "trigger_speed_m_s": 0.23502508846247475,
+      "recorded_braking_tail_s": 0.46091604232788086,
+      "recorded_braking_tail_m": 0.08154386387725159
+    }
+  }
 }

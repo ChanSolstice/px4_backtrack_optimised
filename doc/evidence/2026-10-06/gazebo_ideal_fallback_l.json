@@ -1,0 +1,74 @@
+{
+  "states": [
+    [
+      1791228171.720974,
+      "IdleDisarmed"
+    ],
+    [
+      1791228201.4710288,
+      "WaitRecordDelay"
+    ],
+    [
+      1791228213.571052,
+      "Recording"
+    ],
+    [
+      1791228227.021161,
+      "ReturnPreOffboard"
+    ],
+    [
+      1791228230.2709928,
+      "ReturnActive"
+    ],
+    [
+      1791228310.0710487,
+      "LandingHover"
+    ],
+    [
+      1791228311.1215894,
+      "LandingTransition"
+    ],
+    [
+      1791228313.571084,
+      "AutoLandYield"
+    ],
+    [
+      1791228319.5738018,
+      "IdleDisarmed"
+    ]
+  ],
+  "return_executed": true,
+  "landed": true,
+  "metric_scope": "Gazebo model ENU pose and finite-difference velocity sampled by the ideal odometry bridge; no sensor errors, RK3588 or real flight",
+  "mode": "Ideal Gazebo pose through /Odometry_px4 and existing vision forwarder",
+  "odometry_source": "/Odometry_px4",
+  "physical_acceptance": "NOT_ACCEPTED; ideal localization does not validate real SLAM",
+  "setpoint_masks": [
+    448,
+    2552
+  ],
+  "active_duration_s": 79.80005598068237,
+  "active_max_publish_gap_s": 0.05486416816711426,
+  "truth_input_max_speed_m_s": 0.14893957369381597,
+  "original_route_deviation_metric": "NOT_AVAILABLE; fallback worker does not export original route CSV",
+  "forced_planning_failure": "FIT_FAILED",
+  "scenario_checks": [
+    "CHECK required_states=PASS",
+    "CHECK valid_masks=PASS",
+    "CHECK velocity_feedforward=PASS",
+    "CHECK no_zero_mask=PASS",
+    "CHECK rejoin_expectation=PASS",
+    "CHECK setpoint_gap_under_0_5s=PASS",
+    "CHECK auto_land_seen=PASS"
+  ],
+  "scenario_result_lines": [
+    "RESULT state_events=[(1791228196.6210356, 'IdleDisarmed'), (1791228201.4710653, 'WaitRecordDelay'), (1791228213.5710838, 'Recording'), (1791228227.0213108, 'ReturnPreOffboard'), (1791228230.2710762, 'ReturnActive'), (1791228310.0711098, 'LandingHover'), (1791228311.121407, 'LandingTransition'), (1791228313.5711129, 'AutoLandYield'), (1791228319.572815, 'IdleDisarmed')]",
+    "RESULT mode_events=[(1791228196.5722077, 'AUTO.LAND', False), (1791228200.4540787, 'OFFBOARD', False), (1791228311.5511987, 'POSCTL', True), (1791228313.551532, 'AUTO.LAND', True), (1791228319.5720985, 'POSCTL', False)]",
+    "RESULT setpoint_count=1691",
+    "RESULT masks=[448, 2552]",
+    "RESULT moving_velocity_setpoints=0",
+    "RESULT zero_mask_setpoints=0",
+    "RESULT rejoin_count=0",
+    "RESULT max_setpoint_interval_s=0.0550"
+  ]
+}

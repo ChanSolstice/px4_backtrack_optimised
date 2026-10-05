@@ -1,0 +1,82 @@
+{
+  "states": [
+    [
+      1791228375.104743,
+      "IdleDisarmed"
+    ],
+    [
+      1791228404.7040231,
+      "WaitRecordDelay"
+    ],
+    [
+      1791228416.7524397,
+      "Recording"
+    ],
+    [
+      1791228426.1524217,
+      "ReturnPreOffboard"
+    ],
+    [
+      1791228430.5524862,
+      "ReturnActive"
+    ],
+    [
+      1791228454.0527153,
+      "LandingHover"
+    ],
+    [
+      1791228455.0526328,
+      "LandingTransition"
+    ],
+    [
+      1791228457.7524085,
+      "AutoLandYield"
+    ],
+    [
+      1791228465.7537653,
+      "IdleDisarmed"
+    ]
+  ],
+  "return_executed": true,
+  "landed": true,
+  "metric_scope": "Gazebo model ENU pose and finite-difference velocity sampled by the ideal odometry bridge; no sensor errors, RK3588 or real flight",
+  "mode": "Ideal Gazebo pose through /Odometry_px4 and existing vision forwarder",
+  "odometry_source": "/Odometry_px4",
+  "physical_acceptance": "NOT_ACCEPTED; ideal localization does not validate real SLAM",
+  "setpoint_masks": [
+    448
+  ],
+  "active_duration_s": 23.500229120254517,
+  "active_max_publish_gap_s": 0.05528378486633301,
+  "truth_input_max_speed_m_s": 0.22163606527873472,
+  "raw_points": 126,
+  "moving_trigger_evidence": {
+    "trigger_speed_m_s": 0.23502508846247475,
+    "recorded_after_trigger_s": 0.46091604232788086,
+    "braking_tail_displacement_m": 0.08154386387725159,
+    "last_recorded_speed_m_s": 0.1019700876088701,
+    "timing_scope": "nearest ideal-odometry sample to state receipt / recorded timestamp; callback receipt uncertainty remains"
+  },
+  "truth_input_max_original_route_deviation_m": 0.09627470671914402,
+  "truth_input_endpoint_error_m": 0.19651305782152897,
+  "scenario_checks": [
+    "CHECK required_states=PASS",
+    "CHECK valid_masks=PASS",
+    "CHECK velocity_feedforward=PASS",
+    "CHECK no_zero_mask=PASS",
+    "CHECK rejoin_expectation=PASS",
+    "CHECK setpoint_gap_under_0_5s=PASS",
+    "CHECK auto_land_seen=PASS"
+  ],
+  "scenario_result_lines": [
+    "RESULT state_events=[(1791228399.902717, 'IdleDisarmed'), (1791228404.704084, 'WaitRecordDelay'), (1791228416.7525036, 'Recording'), (1791228426.1525497, 'ReturnPreOffboard'), (1791228430.5525942, 'ReturnActive'), (1791228454.0530043, 'LandingHover'), (1791228455.052848, 'LandingTransition'), (1791228457.7524922, 'AutoLandYield'), (1791228465.7523527, 'IdleDisarmed')]",
+    "RESULT mode_events=[(1791228399.8899329, 'AUTO.LAND', False), (1791228403.6806307, 'OFFBOARD', False), (1791228455.72282, 'POSCTL', True), (1791228457.7249627, 'AUTO.LAND', True), (1791228465.7483761, 'POSCTL', False)]",
+    "RESULT setpoint_count=592",
+    "RESULT masks=[448]",
+    "RESULT moving_velocity_setpoints=168",
+    "RESULT zero_mask_setpoints=0",
+    "RESULT rejoin_count=0",
+    "RESULT max_setpoint_interval_s=0.0543",
+    "RESULT yaw_error_deg_median=0.61 max=3.05"
+  ]
+}

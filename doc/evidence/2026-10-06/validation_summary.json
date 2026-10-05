@@ -187,5 +187,7 @@
   "gazebo_ideal_straight": "PASS",
   "gazebo_ideal_l": "PASS",
   "gazebo_gps": "PROTECTIVE_PAUSE; normal return not completed",
-  "gazebo_optical_flow": "OFFBOARD_NOT_ACCEPTED; return not executed"
+  "gazebo_optical_flow": "OFFBOARD_NOT_ACCEPTED; return not executed",
+  "gazebo_ideal_fallback_l": "PASS; FIT_FAILED, waypoint return and landing; exact recorded-polyline deviation not exported",
+  "gazebo_ideal_moving_straight": "PASS; braking tail capture, return and landing"
 }
