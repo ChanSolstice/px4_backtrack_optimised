@@ -7,218 +7,385 @@
 namespace px4_backtrack::application {
 namespace {
 UseCaseConfig makeConfig() {
-  UseCaseConfig c; c.record_delay_s=0; c.record_min_points=3; c.record_max_hz=100;
-  c.state_machine_config.pre_offboard_setpoint_count=0;
-  c.state_machine_config.offboard_attempt_interval_s=0;
-  c.trigger_config.enable_ch7=true; c.trigger_config.ch7_hold_s=0;
-  c.trigger_config.ch7_pressed_threshold=1200;
-  c.trigger_config.enable_ch18=false; c.trigger_config.enable_rc_loss=false;
-  c.trigger_config.enable_low_battery=false; c.trigger_config.low_battery_threshold=0.15;
+  UseCaseConfig c;
+  c.record_delay_s = 0;
+  c.record_min_points = 3;
+  c.record_max_hz = 100;
+  c.state_machine_config.pre_offboard_setpoint_count = 0;
+  c.state_machine_config.offboard_attempt_interval_s = 0;
+  c.trigger_config.enable_ch7 = true;
+  c.trigger_config.ch7_hold_s = 0;
+  c.trigger_config.ch7_pressed_threshold = 1200;
+  c.trigger_config.enable_ch18 = false;
+  c.trigger_config.enable_rc_loss = false;
+  c.trigger_config.enable_low_battery = false;
+  c.trigger_config.low_battery_threshold = 0.15;
   return c;
 }
 struct Flight {
   BacktrackUseCase usecase;
-  double now=10.0, stamp=10.0;
-  bool armed=false;
-  std::string mode="OFFBOARD";
-  domain::Vec3 position{0,0,1}, velocity=domain::Vec3::Zero();
-  double yaw=std::acos(-1.0);
-  explicit Flight(UseCaseConfig c=makeConfig(), PlanningWorker::Planner planner={}):usecase(c,std::move(planner)) {
-    step(); armed=true; step(); step();
+  double now = 10.0, stamp = 10.0;
+  bool armed = false;
+  std::string mode = "OFFBOARD";
+  domain::Vec3 position{0, 0, 1}, velocity = domain::Vec3::Zero();
+  double yaw = std::acos(-1.0);
+  explicit Flight(UseCaseConfig c = makeConfig(), PlanningWorker::Planner planner = {})
+      : usecase(c, std::move(planner)) {
+    step();
+    armed = true;
+    step();
+    step();
   }
-  TickOutput step(double dt=0.05, bool odom=true, bool state=true) {
-    now+=dt; stamp+=dt;
-    if (state) usecase.onStateReceived(armed,mode,now);
-    if (odom) usecase.onOdomReceived(position,velocity,yaw,stamp,now);
+  TickOutput step(double dt = 0.05, bool odom = true, bool state = true) {
+    now += dt;
+    stamp += dt;
+    if (state)
+      usecase.onStateReceived(armed, mode, now);
+    if (odom)
+      usecase.onOdomReceived(position, velocity, yaw, stamp, now);
     return usecase.tick(now);
   }
   void recordLine() {
-    for(int i=0;i<=20;++i) { position.x()=i*0.1; step(0.2); }
+    for (int i = 0; i <= 20; ++i) {
+      position.x() = i * 0.1;
+      step(0.2);
+    }
   }
   void rc(uint16_t ch) {
-    std::vector<uint16_t> channels(18,1500); channels[6]=ch;
-    usecase.onRCReceived(channels,now);
+    std::vector<uint16_t> channels(18, 1500);
+    channels[6] = ch;
+    usecase.onRCReceived(channels, now);
   }
   TickOutput awaitPlan(TickOutput out) {
-    for(int i=0;i<2000 && out.current_state==domain::State::ReturnPreOffboard;++i) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1)); out=step();
+    for (int i = 0; i < 2000 && out.current_state == domain::State::ReturnPreOffboard; ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      out = step();
       // 航向不对准时保留准备态，结果一旦给出返航 yaw 即返回。
-      if(out.setpoint && std::abs(out.setpoint->yaw-yaw)>0.1) break;
+      if (out.setpoint && std::abs(out.setpoint->yaw - yaw) > 0.1)
+        break;
     }
     return out;
   }
-  TickOutput start() { rc(1000); step(); return awaitPlan(step()); }
-  void release() { rc(1500); step(); }
-  TickOutput pause() { release(); rc(1000); return step(); }
-  TickOutput resume() { release(); rc(1000); step(); return step(); }
+  TickOutput start() {
+    rc(1000);
+    step();
+    return awaitPlan(step());
+  }
+  void release() {
+    rc(1500);
+    step();
+  }
+  TickOutput pause() {
+    release();
+    rc(1000);
+    return step();
+  }
+  TickOutput resume() {
+    release();
+    rc(1000);
+    step();
+    return step();
+  }
 };
 TEST(BacktrackUseCaseTest, InvalidConfigurationFallsBackToPositionYawWaypoints) {
-  auto c=makeConfig(); c.trajectory_config.v_end_max=2;
-  Flight f(c); f.recordLine(); auto out=f.start();
-  ASSERT_EQ(out.current_state,domain::State::ReturnActive);
-  ASSERT_TRUE(out.setpoint); EXPECT_EQ(out.setpoint->type_mask,0x09F8);
+  auto c = makeConfig();
+  c.trajectory_config.v_end_max = 2;
+  Flight f(c);
+  f.recordLine();
+  auto out = f.start();
+  ASSERT_EQ(out.current_state, domain::State::ReturnActive);
+  ASSERT_TRUE(out.setpoint);
+  EXPECT_EQ(out.setpoint->type_mask, 0x09F8);
 }
 TEST(BacktrackUseCaseTest, NoSpatialPathStillLands) {
-  Flight f; for(int i=0;i<4;++i) f.step(); auto out=f.start();
-  EXPECT_EQ(out.current_state,domain::State::LandingTransition);
+  Flight f;
+  for (int i = 0; i < 4; ++i)
+    f.step();
+  auto out = f.start();
+  EXPECT_EQ(out.current_state, domain::State::LandingTransition);
 }
 TEST(BacktrackUseCaseTest, AutoLandYieldPersistsUntilDisarmEvenWithoutOdometry) {
-  Flight f; f.recordLine(); ASSERT_EQ(f.start().current_state,domain::State::ReturnActive);
-  f.mode="AUTO.LAND"; auto out=f.step(0.05,false);
-  EXPECT_EQ(out.current_state,domain::State::AutoLandYield); EXPECT_FALSE(out.mode_request); EXPECT_FALSE(out.setpoint);
-  f.mode="POSCTL"; out=f.step(); EXPECT_EQ(out.current_state,domain::State::AutoLandYield);
-  EXPECT_FALSE(out.mode_request); EXPECT_FALSE(out.setpoint);
-  f.armed=false; EXPECT_EQ(f.step().current_state,domain::State::IdleDisarmed);
+  Flight f;
+  f.recordLine();
+  ASSERT_EQ(f.start().current_state, domain::State::ReturnActive);
+  f.mode = "AUTO.LAND";
+  auto out = f.step(0.05, false);
+  EXPECT_EQ(out.current_state, domain::State::AutoLandYield);
+  EXPECT_FALSE(out.mode_request);
+  EXPECT_FALSE(out.setpoint);
+  f.mode = "POSCTL";
+  out = f.step();
+  EXPECT_EQ(out.current_state, domain::State::AutoLandYield);
+  EXPECT_FALSE(out.mode_request);
+  EXPECT_FALSE(out.setpoint);
+  f.armed = false;
+  EXPECT_EQ(f.step().current_state, domain::State::IdleDisarmed);
 }
 TEST(BacktrackUseCaseTest, StationaryAircraftDoesNotFinishAfterNominalDuration) {
-  Flight f; f.recordLine(); ASSERT_EQ(f.start().current_state,domain::State::ReturnActive);
-  TickOutput out; for(int i=0;i<2000;++i) out=f.step();
-  EXPECT_EQ(out.current_state,domain::State::ReturnActive); ASSERT_TRUE(out.setpoint);
-  EXPECT_LT((out.setpoint->position-f.position).norm(),0.201);
-  EXPECT_LT(out.setpoint->velocity.norm(),1e-5);
+  Flight f;
+  f.recordLine();
+  ASSERT_EQ(f.start().current_state, domain::State::ReturnActive);
+  TickOutput out;
+  for (int i = 0; i < 2000; ++i)
+    out = f.step();
+  EXPECT_EQ(out.current_state, domain::State::ReturnActive);
+  ASSERT_TRUE(out.setpoint);
+  EXPECT_LT((out.setpoint->position - f.position).norm(), 0.201);
+  EXPECT_LT(out.setpoint->velocity.norm(), 1e-5);
 }
 TEST(BacktrackUseCaseTest, StartAndResumeAlignYawBeforeTranslation) {
-  Flight f; f.recordLine(); f.yaw=0.0;
-  auto out=f.start(); EXPECT_EQ(out.current_state,domain::State::ReturnPreOffboard);
-  ASSERT_TRUE(out.setpoint); EXPECT_TRUE(out.setpoint->position.isApprox(f.position));
-  f.yaw=std::acos(-1.0); EXPECT_EQ(f.step().current_state,domain::State::ReturnActive);
-  EXPECT_EQ(f.pause().current_state,domain::State::Paused);
-  f.yaw=0.0; EXPECT_EQ(f.resume().current_state,domain::State::ReturnPreOffboard);
-  f.yaw=std::acos(-1.0); EXPECT_EQ(f.step().current_state,domain::State::ReturnActive);
+  Flight f;
+  f.recordLine();
+  f.yaw = 0.0;
+  auto out = f.start();
+  EXPECT_EQ(out.current_state, domain::State::ReturnPreOffboard);
+  ASSERT_TRUE(out.setpoint);
+  EXPECT_TRUE(out.setpoint->position.isApprox(f.position));
+  f.yaw = std::acos(-1.0);
+  EXPECT_EQ(f.step().current_state, domain::State::ReturnActive);
+  EXPECT_EQ(f.pause().current_state, domain::State::Paused);
+  f.yaw = 0.0;
+  EXPECT_EQ(f.resume().current_state, domain::State::ReturnPreOffboard);
+  f.yaw = std::acos(-1.0);
+  EXPECT_EQ(f.step().current_state, domain::State::ReturnActive);
 }
 TEST(BacktrackUseCaseTest, StaleOdometryFreezesAndRequiresExplicitResume) {
-  Flight f; f.recordLine(); f.start(); auto out=f.step(0.30,false);
-  EXPECT_EQ(out.current_state,domain::State::Paused); ASSERT_TRUE(out.setpoint);
-  EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(),0.0);
-  EXPECT_EQ(out.mode_request,domain::ModeRequest::POSCTL);
-  out=f.step(); EXPECT_EQ(out.current_state,domain::State::Paused);
-  EXPECT_EQ(f.resume().current_state,domain::State::ReturnActive);
+  Flight f;
+  f.recordLine();
+  f.start();
+  auto out = f.step(0.30, false);
+  EXPECT_EQ(out.current_state, domain::State::Paused);
+  ASSERT_TRUE(out.setpoint);
+  EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(), 0.0);
+  EXPECT_EQ(out.mode_request, domain::ModeRequest::POSCTL);
+  out = f.step();
+  EXPECT_EQ(out.current_state, domain::State::Paused);
+  EXPECT_EQ(f.resume().current_state, domain::State::ReturnActive);
 }
 TEST(BacktrackUseCaseTest, StaleModeCannotActivateOrIssueModeRequests) {
-  Flight f; f.recordLine(); f.start(); auto out=f.step(0.60,true,false);
-  EXPECT_EQ(out.current_state,domain::State::Paused); EXPECT_FALSE(out.mode_request);
-  ASSERT_TRUE(out.setpoint); EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(),0);
+  Flight f;
+  f.recordLine();
+  f.start();
+  auto out = f.step(0.60, true, false);
+  EXPECT_EQ(out.current_state, domain::State::Paused);
+  EXPECT_FALSE(out.mode_request);
+  ASSERT_TRUE(out.setpoint);
+  EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(), 0);
 }
 TEST(BacktrackUseCaseTest, NonFiniteInputNeverReachesControlOutput) {
-  Flight f; f.recordLine(); f.start();
-  f.usecase.onOdomReceived(domain::Vec3::Constant(std::numeric_limits<double>::quiet_NaN()),f.velocity,f.yaw,f.stamp+0.01,f.now+0.01);
-  auto out=f.step(0.05,false);
-  EXPECT_EQ(out.current_state,domain::State::Paused); ASSERT_TRUE(out.setpoint);
-  EXPECT_TRUE(out.setpoint->position.allFinite()); EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(),0);
+  Flight f;
+  f.recordLine();
+  f.start();
+  f.usecase.onOdomReceived(domain::Vec3::Constant(std::numeric_limits<double>::quiet_NaN()),
+                           f.velocity, f.yaw, f.stamp + 0.01, f.now + 0.01);
+  auto out = f.step(0.05, false);
+  EXPECT_EQ(out.current_state, domain::State::Paused);
+  ASSERT_TRUE(out.setpoint);
+  EXPECT_TRUE(out.setpoint->position.allFinite());
+  EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(), 0);
 }
 TEST(BacktrackUseCaseTest, PositionOrStampResetDisablesOldCoordinateTargetsUntilDisarm) {
-  Flight f; f.recordLine(); f.start(); f.position.x()+=10;
-  auto out=f.step(); EXPECT_EQ(out.current_state,domain::State::Paused); EXPECT_FALSE(out.setpoint);
-  out=f.step(); EXPECT_FALSE(out.setpoint);
-  f.armed=false; EXPECT_EQ(f.step().current_state,domain::State::IdleDisarmed);
-  Flight g; g.recordLine(); g.start(); g.stamp-=2;
-  out=g.step(); EXPECT_EQ(out.current_state,domain::State::Paused); EXPECT_FALSE(out.setpoint);
+  Flight f;
+  f.recordLine();
+  f.start();
+  f.position.x() += 10;
+  auto out = f.step();
+  EXPECT_EQ(out.current_state, domain::State::Paused);
+  EXPECT_FALSE(out.setpoint);
+  out = f.step();
+  EXPECT_FALSE(out.setpoint);
+  f.armed = false;
+  EXPECT_EQ(f.step().current_state, domain::State::IdleDisarmed);
+  Flight g;
+  g.recordLine();
+  g.start();
+  g.stamp -= 2;
+  out = g.step();
+  EXPECT_EQ(out.current_state, domain::State::Paused);
+  EXPECT_FALSE(out.setpoint);
 }
 TEST(BacktrackUseCaseTest, ThreeDimensionalRouteBudgetStopsNormalAndFallback) {
-  for(bool fallback:{false,true}) {
-    auto c=makeConfig(); if(fallback)c.trajectory_config.v_end_max=2;
-    Flight f(c); f.recordLine(); f.start(); f.position.z()+=0.20; f.velocity.z()=0.3;
-    auto out=f.step(); EXPECT_EQ(out.current_state,domain::State::Paused); ASSERT_TRUE(out.setpoint);
-    EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(),0);
-    EXPECT_EQ(f.resume().current_state,domain::State::Paused);
+  for (bool fallback : {false, true}) {
+    auto c = makeConfig();
+    if (fallback)
+      c.trajectory_config.v_end_max = 2;
+    Flight f(c);
+    f.recordLine();
+    f.start();
+    f.position.z() += 0.20;
+    f.velocity.z() = 0.3;
+    auto out = f.step();
+    EXPECT_EQ(out.current_state, domain::State::Paused);
+    ASSERT_TRUE(out.setpoint);
+    EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(), 0);
+    EXPECT_EQ(f.resume().current_state, domain::State::Paused);
   }
 }
 TEST(BacktrackUseCaseTest, LowBatteryReturnInsufficientPointsAndPausePolicy) {
-  auto c=makeConfig(); c.trigger_config.enable_low_battery=true; c.trigger_config.low_battery_confirm_s=0;
-  Flight f(c); f.recordLine(); f.usecase.onBatteryReceived(0.10);
-  auto out=f.awaitPlan(f.step()); EXPECT_TRUE(out.low_battery); EXPECT_EQ(out.current_state,domain::State::ReturnActive);
-  f.pause(); f.rc(1500); out=f.step(); EXPECT_TRUE(out.low_battery); EXPECT_EQ(out.current_state,domain::State::Paused);
-  c.record_min_points=100; Flight g(c); g.usecase.onBatteryReceived(0.10);
-  out=g.step(); EXPECT_EQ(out.current_state,domain::State::LandingTransition);
-  c.record_delay_s=15; Flight h(c); h.usecase.onBatteryReceived(0.10);
-  out=h.step(); EXPECT_TRUE(out.low_battery); EXPECT_EQ(out.current_state,domain::State::WaitRecordDelay);
+  auto c = makeConfig();
+  c.trigger_config.enable_low_battery = true;
+  c.trigger_config.low_battery_confirm_s = 0;
+  Flight f(c);
+  f.recordLine();
+  f.usecase.onBatteryReceived(0.10);
+  auto out = f.awaitPlan(f.step());
+  EXPECT_TRUE(out.low_battery);
+  EXPECT_EQ(out.current_state, domain::State::ReturnActive);
+  f.pause();
+  f.rc(1500);
+  out = f.step();
+  EXPECT_TRUE(out.low_battery);
+  EXPECT_EQ(out.current_state, domain::State::Paused);
+  c.record_min_points = 100;
+  Flight g(c);
+  g.usecase.onBatteryReceived(0.10);
+  out = g.step();
+  EXPECT_EQ(out.current_state, domain::State::LandingTransition);
+  c.record_delay_s = 15;
+  Flight h(c);
+  h.usecase.onBatteryReceived(0.10);
+  out = h.step();
+  EXPECT_TRUE(out.low_battery);
+  EXPECT_EQ(out.current_state, domain::State::WaitRecordDelay);
 }
 TEST(BacktrackUseCaseTest, ExternalOffboardExitYieldsAndOnlyExplicitValidResumeCanContinue) {
-  Flight f; f.recordLine(); ASSERT_EQ(f.start().current_state,domain::State::ReturnActive);
-  f.mode="POSCTL"; auto out=f.step();
-  EXPECT_EQ(out.current_state,domain::State::ControlYield); EXPECT_FALSE(out.mode_request); EXPECT_FALSE(out.setpoint);
-  for(int i=0;i<100;++i) { out=f.step(); EXPECT_FALSE(out.mode_request); EXPECT_FALSE(out.setpoint); }
-  EXPECT_EQ(f.resume().current_state,domain::State::ReturnPreOffboard);
-  f.mode="OFFBOARD"; EXPECT_EQ(f.step().current_state,domain::State::ReturnActive);
+  Flight f;
+  f.recordLine();
+  ASSERT_EQ(f.start().current_state, domain::State::ReturnActive);
+  f.mode = "POSCTL";
+  auto out = f.step();
+  EXPECT_EQ(out.current_state, domain::State::ControlYield);
+  EXPECT_FALSE(out.mode_request);
+  EXPECT_FALSE(out.setpoint);
+  for (int i = 0; i < 100; ++i) {
+    out = f.step();
+    EXPECT_FALSE(out.mode_request);
+    EXPECT_FALSE(out.setpoint);
+  }
+  EXPECT_EQ(f.resume().current_state, domain::State::ReturnPreOffboard);
+  f.mode = "OFFBOARD";
+  EXPECT_EQ(f.step().current_state, domain::State::ReturnActive);
 }
 
 TEST(BacktrackUseCaseTest, SlowClosedLoopReturnFinishesOnlyAfterThreeDimensionalStop) {
-  Flight f; f.recordLine(); auto out=f.start();
-  for(int i=0;i<10000 && out.current_state!=domain::State::LandingHover;++i) {
+  Flight f;
+  f.recordLine();
+  auto out = f.start();
+  for (int i = 0; i < 10000 && out.current_state != domain::State::LandingHover; ++i) {
     ASSERT_TRUE(out.setpoint);
-    domain::Vec3 delta=out.setpoint->position-f.position;
-    const double step=std::min(0.005,delta.norm()); // 实际速度仅 0.1m/s
-    f.velocity=delta.norm()>1e-9 ? (delta.normalized()*step/0.05).eval() : domain::Vec3::Zero();
-    f.position+=f.velocity*0.05; f.yaw=out.setpoint->yaw;
-    out=f.step();
-    ASSERT_NE(out.current_state,domain::State::ReturnRejoin);
-    ASSERT_NE(out.current_state,domain::State::Paused);
+    domain::Vec3 delta = out.setpoint->position - f.position;
+    const double step = std::min(0.005, delta.norm()); // 实际速度仅 0.1m/s
+    f.velocity =
+        delta.norm() > 1e-9 ? (delta.normalized() * step / 0.05).eval() : domain::Vec3::Zero();
+    f.position += f.velocity * 0.05;
+    f.yaw = out.setpoint->yaw;
+    out = f.step();
+    ASSERT_NE(out.current_state, domain::State::ReturnRejoin);
+    ASSERT_NE(out.current_state, domain::State::Paused);
   }
-  EXPECT_EQ(out.current_state,domain::State::LandingHover);
-  EXPECT_LT(f.position.norm()-1.0,0.20);
+  EXPECT_EQ(out.current_state, domain::State::LandingHover);
+  EXPECT_LT(f.position.norm() - 1.0, 0.20);
 }
 
 TEST(BacktrackUseCaseTest, BlockedPlanningKeepsPublishingHoldAndAutoLandCancelsOldResult) {
-  std::promise<void> release,entered;
-  auto gate=release.get_future().share(); auto started=entered.get_future();
-  Flight f(makeConfig(),[&](auto& session,const auto& points,const auto& config) {
-    entered.set_value(); gate.wait(); return session.generate(points,config);
+  std::promise<void> release, entered;
+  auto gate = release.get_future().share();
+  auto started = entered.get_future();
+  Flight f(makeConfig(), [&](auto &session, const auto &points, const auto &config) {
+    entered.set_value();
+    gate.wait();
+    return session.generate(points, config);
   });
-  f.recordLine(); f.rc(1000); f.step(); f.step();
-  const auto ready=started.wait_for(std::chrono::seconds(2));
-  if(ready!=std::future_status::ready) { release.set_value(); FAIL()<<"Planner not started"; }
-  const auto begin=std::chrono::steady_clock::now();
-  bool safe=true;
-  for(int i=0;i<1000;++i) {
-    const auto out=f.step();
-    safe &= out.current_state==domain::State::ReturnPreOffboard && out.setpoint.has_value() &&
-        out.setpoint->position.isApprox(f.position) && out.setpoint->velocity.norm()==0.0;
+  f.recordLine();
+  f.rc(1000);
+  f.step();
+  f.step();
+  const auto ready = started.wait_for(std::chrono::seconds(2));
+  if (ready != std::future_status::ready) {
+    release.set_value();
+    FAIL() << "Planner not started";
+  }
+  const auto begin = std::chrono::steady_clock::now();
+  bool safe = true;
+  for (int i = 0; i < 1000; ++i) {
+    const auto out = f.step();
+    safe &= out.current_state == domain::State::ReturnPreOffboard && out.setpoint.has_value() &&
+            out.setpoint->position.isApprox(f.position) && out.setpoint->velocity.norm() == 0.0;
   }
   EXPECT_TRUE(safe);
-  EXPECT_LT(std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count(),0.10);
-  f.mode="AUTO.LAND"; auto out=f.step();
+  EXPECT_LT(std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count(), 0.10);
+  f.mode = "AUTO.LAND";
+  auto out = f.step();
   release.set_value();
-  EXPECT_EQ(out.current_state,domain::State::AutoLandYield); EXPECT_FALSE(out.setpoint);
+  EXPECT_EQ(out.current_state, domain::State::AutoLandYield);
+  EXPECT_FALSE(out.setpoint);
   std::this_thread::sleep_for(std::chrono::milliseconds(30));
-  f.mode="POSCTL"; out=f.step();
-  EXPECT_EQ(out.current_state,domain::State::AutoLandYield); EXPECT_FALSE(out.setpoint); EXPECT_FALSE(out.mode_request);
+  f.mode = "POSCTL";
+  out = f.step();
+  EXPECT_EQ(out.current_state, domain::State::AutoLandYield);
+  EXPECT_FALSE(out.setpoint);
+  EXPECT_FALSE(out.mode_request);
 }
 
 TEST(BacktrackUseCaseTest, FreshExternalExitWinsOverInvalidOdometry) {
-  Flight f; f.recordLine(); f.start(); f.mode="ALTCTL";
-  f.usecase.onOdomReceived(domain::Vec3::Constant(std::numeric_limits<double>::quiet_NaN()),f.velocity,f.yaw,f.stamp+0.01,f.now+0.01);
-  const auto out=f.step(0.05,false);
-  EXPECT_EQ(out.current_state,domain::State::ControlYield); EXPECT_FALSE(out.setpoint); EXPECT_FALSE(out.mode_request);
+  Flight f;
+  f.recordLine();
+  f.start();
+  f.mode = "ALTCTL";
+  f.usecase.onOdomReceived(domain::Vec3::Constant(std::numeric_limits<double>::quiet_NaN()),
+                           f.velocity, f.yaw, f.stamp + 0.01, f.now + 0.01);
+  const auto out = f.step(0.05, false);
+  EXPECT_EQ(out.current_state, domain::State::ControlYield);
+  EXPECT_FALSE(out.setpoint);
+  EXPECT_FALSE(out.mode_request);
 }
 
 TEST(BacktrackUseCaseTest, PreparationDriftCancelsBlockedPlanBeforeActivation) {
-  std::promise<void> release,entered;
-  auto gate=release.get_future().share(); auto started=entered.get_future();
-  Flight f(makeConfig(),[&](auto& session,const auto& points,const auto& config) {
-    entered.set_value(); gate.wait(); return session.generate(points,config);
+  std::promise<void> release, entered;
+  auto gate = release.get_future().share();
+  auto started = entered.get_future();
+  Flight f(makeConfig(), [&](auto &session, const auto &points, const auto &config) {
+    entered.set_value();
+    gate.wait();
+    return session.generate(points, config);
   });
-  f.recordLine(); f.rc(1000); f.step(); f.step();
-  const auto ready=started.wait_for(std::chrono::seconds(2));
-  if(ready!=std::future_status::ready) { release.set_value(); FAIL()<<"Planner not started"; }
-  f.position.z()+=0.16; const auto out=f.step(); release.set_value();
-  EXPECT_EQ(out.current_state,domain::State::Paused); ASSERT_TRUE(out.setpoint);
-  EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(),0.0);
+  f.recordLine();
+  f.rc(1000);
+  f.step();
+  f.step();
+  const auto ready = started.wait_for(std::chrono::seconds(2));
+  if (ready != std::future_status::ready) {
+    release.set_value();
+    FAIL() << "Planner not started";
+  }
+  f.position.z() += 0.16;
+  const auto out = f.step();
+  release.set_value();
+  EXPECT_EQ(out.current_state, domain::State::Paused);
+  ASSERT_TRUE(out.setpoint);
+  EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(), 0.0);
   std::this_thread::sleep_for(std::chrono::milliseconds(30));
-  EXPECT_EQ(f.step().current_state,domain::State::Paused);
+  EXPECT_EQ(f.step().current_state, domain::State::Paused);
 }
 
 TEST(BacktrackUseCaseTest, DisarmRearmBetweenTicksCannotReuseOldTask) {
-  Flight f; f.recordLine(); f.start();
-  f.usecase.onStateReceived(false,"POSCTL",f.now+0.01);
-  f.mode="POSCTL"; const auto out=f.step();
-  EXPECT_EQ(out.current_state,domain::State::WaitRecordDelay); EXPECT_FALSE(out.setpoint);
+  Flight f;
+  f.recordLine();
+  f.start();
+  f.usecase.onStateReceived(false, "POSCTL", f.now + 0.01);
+  f.mode = "POSCTL";
+  const auto out = f.step();
+  EXPECT_EQ(out.current_state, domain::State::WaitRecordDelay);
+  EXPECT_FALSE(out.setpoint);
 }
 
 TEST(BacktrackUseCaseTest, RejectsInvalidEngineeringLimits) {
-  auto c=makeConfig(); c.route_braking_m_s2=0;
-  EXPECT_THROW(BacktrackUseCase usecase(c),std::invalid_argument);
-  c=makeConfig(); c.trajectory_config.v_max=1.0;
-  EXPECT_THROW(BacktrackUseCase usecase(c),std::invalid_argument);
+  auto c = makeConfig();
+  c.route_braking_m_s2 = 0;
+  EXPECT_THROW(BacktrackUseCase usecase(c), std::invalid_argument);
+  c = makeConfig();
+  c.trajectory_config.v_max = 1.0;
+  EXPECT_THROW(BacktrackUseCase usecase(c), std::invalid_argument);
 }
-}
-}
+} // namespace
+} // namespace px4_backtrack::application

@@ -31,19 +31,17 @@ public:
   /// @param points 录制点序列
   /// @param config trajectory_core配置
   /// @return 是否生成成功
-  bool generate(const std::vector<RecordPoint>& points,
-                const trajectory_core::TrajectoryConfig& config);
+  bool generate(const std::vector<RecordPoint> &points,
+                const trajectory_core::TrajectoryConfig &config);
 
   /// 根据飞机实际位置更新路径投影进度和预瞄目标
   /// @param current_position 飞机当前位置
   /// @param lookahead_time_s 预瞄时间
   /// @return 本周期投影是否成功；失败时保留上一个合法目标
-  bool updateProgress(const Vec3& current_position,
-                      double lookahead_time_s, double dt_s = 0.05);
+  bool updateProgress(const Vec3 &current_position, double lookahead_time_s, double dt_s = 0.05);
 
   /// Rejoin 低速模式下更新路径进度：扩大局部前向窗口并随偏离缩短预瞄
-  bool updateRejoinProgress(const Vec3& current_position,
-                            double lookahead_time_s,
+  bool updateRejoinProgress(const Vec3 &current_position, double lookahead_time_s,
                             double trigger_distance_m, double dt_s = 0.05,
                             double speed_limit_m_s = 0.3);
 
@@ -51,15 +49,14 @@ public:
   void suspend();
 
   /// 获取当前预瞄目标状态
-  const trajectory_core::TrajectoryState& getTargetState() const;
+  const trajectory_core::TrajectoryState &getTargetState() const;
 
   /// 检查实际/参考空间进度、终点位置和三维速度是否均已收敛
   /// @param current_position 飞机当前位置
   /// @param current_velocity 飞机当前速度
   /// @param position_tolerance_m 终点位置容差
   /// @return 是否完成
-  bool isFinished(const Vec3& current_position,
-                  const Vec3& current_velocity,
+  bool isFinished(const Vec3 &current_position, const Vec3 &current_velocity,
                   double position_tolerance_m) const;
 
   /// 检查轨迹是否有效
@@ -68,7 +65,7 @@ public:
 
   /// 获取轨迹对象（只读）
   /// @return 轨迹对象指针（可能为nullptr）
-  const trajectory_core::Trajectory* getTrajectory() const;
+  const trajectory_core::Trajectory *getTrajectory() const;
 
   /// 获取实际位置在路径上的投影弧长
   double getProjectedArcLength() const;
@@ -131,12 +128,10 @@ private:
   double arcAtTime(double time) const;
 
   /// 空间进度更新的共用实现
-  bool updateProgressImpl(const Vec3& current_position,
-                          double lookahead_time_s,
-                          double forward_window_scale,
-                          double lookahead_scale_distance_m,
+  bool updateProgressImpl(const Vec3 &current_position, double lookahead_time_s,
+                          double forward_window_scale, double lookahead_scale_distance_m,
                           double dt_s, double speed_limit_m_s);
 };
 
-}  // namespace domain
-}  // namespace px4_backtrack
+} // namespace domain
+} // namespace px4_backtrack

@@ -12,8 +12,7 @@ struct FallbackWaypoint {
   Vec3 position;
   double yaw;
 
-  FallbackWaypoint(const Vec3& pos, double yaw_in)
-    : position(pos), yaw(yaw_in) {}
+  FallbackWaypoint(const Vec3 &pos, double yaw_in) : position(pos), yaw(yaw_in) {}
 };
 
 /// 轨迹生成失败后的 waypoint 退化返航会话
@@ -22,14 +21,14 @@ public:
   WaypointFallbackSession(double spacing_m = 0.3, double reach_radius_m = 0.05);
 
   /// 从录制点构建逆序 waypoint 路径，保留所有非共线顶点
-  bool build(const std::vector<RecordPoint>& points);
+  bool build(const std::vector<RecordPoint> &points);
 
   /// 清空退化会话
   void reset();
 
   /// 根据当前位置推进 waypoint 索引
-  void updateProgress(const Vec3& current_position,
-                      const Vec3& current_velocity, double current_yaw);
+  void updateProgress(const Vec3 &current_position, const Vec3 &current_velocity,
+                      double current_yaw);
 
   /// 是否已构建有效退化路径
   bool isValid() const;
@@ -54,5 +53,5 @@ private:
   bool finished_;
 };
 
-}  // namespace domain
-}  // namespace px4_backtrack
+} // namespace domain
+} // namespace px4_backtrack

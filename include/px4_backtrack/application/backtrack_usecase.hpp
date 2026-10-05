@@ -16,8 +16,12 @@
 namespace px4_backtrack {
 
 // Forward declarations for debug helpers
-namespace infrastructure { class DebugDumper; }
-namespace adapters { class DebugPublisher; }
+namespace infrastructure {
+class DebugDumper;
+}
+namespace adapters {
+class DebugPublisher;
+}
 
 namespace application {
 
@@ -28,9 +32,9 @@ namespace application {
 /// BacktrackUseCase配置参数
 struct UseCaseConfig {
   // 录制参数
-  double record_delay_s;          ///< ARM后延时录制时间 (s)
-  double record_max_hz;           ///< 录制最大频率 (Hz)
-  int record_min_points;          ///< 触发返航所需最少录制点数
+  double record_delay_s; ///< ARM后延时录制时间 (s)
+  double record_max_hz;  ///< 录制最大频率 (Hz)
+  int record_min_points; ///< 触发返航所需最少录制点数
 
   // 状态机参数
   domain::StateMachineConfig state_machine_config;
@@ -55,24 +59,19 @@ struct UseCaseConfig {
   trajectory_core::TrajectoryConfig trajectory_config;
 
   // Debug/可视化参数
-  bool debug_enable_csv_dump;           ///< 启用CSV文件导出
-  std::string debug_csv_output_dir;     ///< CSV导出目录
-  double debug_trajectory_sample_dt;    ///< 轨迹采样步长 (s)
-  bool debug_enable_rviz_publish;       ///< 启用ROS可视化发布
+  bool debug_enable_csv_dump;        ///< 启用CSV文件导出
+  std::string debug_csv_output_dir;  ///< CSV导出目录
+  double debug_trajectory_sample_dt; ///< 轨迹采样步长 (s)
+  bool debug_enable_rviz_publish;    ///< 启用ROS可视化发布
 
   /// 默认构造函数
   UseCaseConfig()
-    : record_delay_s(15.0),
-      record_max_hz(10.0),
-      record_min_points(100),
-      debug_enable_csv_dump(false),
-      debug_csv_output_dir(""),
-      debug_trajectory_sample_dt(0.05),
-      debug_enable_rviz_publish(false)
-  {
-    trajectory_config.v_max=0.6;
-    trajectory_config.v_end_max=0.6;
-    trajectory_config.max_deviation_m=0.08;
+      : record_delay_s(15.0), record_max_hz(10.0), record_min_points(100),
+        debug_enable_csv_dump(false), debug_csv_output_dir(""), debug_trajectory_sample_dt(0.05),
+        debug_enable_rviz_publish(false) {
+    trajectory_config.v_max = 0.6;
+    trajectory_config.v_end_max = 0.6;
+    trajectory_config.max_deviation_m = 0.08;
   }
 };
 
@@ -91,11 +90,8 @@ struct TickOutput {
 
   /// 默认构造函数
   TickOutput()
-    : should_publish_setpoint(false),
-      current_state(domain::State::IdleDisarmed),
-      rc_loss(false),
-      low_battery(false)
-  {}
+      : should_publish_setpoint(false), current_state(domain::State::IdleDisarmed), rc_loss(false),
+        low_battery(false) {}
 };
 
 // ============================================================================
@@ -107,7 +103,7 @@ class BacktrackUseCase {
 public:
   /// 构造函数
   /// @param config 配置参数
-  explicit BacktrackUseCase(const UseCaseConfig& config, PlanningWorker::Planner planner = {});
+  explicit BacktrackUseCase(const UseCaseConfig &config, PlanningWorker::Planner planner = {});
 
   /// 每个20Hz周期调用的tick
   /// @param now 当前时间 (s)
@@ -119,19 +115,17 @@ public:
   /// @param velocity 线速度 (ENU, m/s)
   /// @param yaw Yaw角 (rad)
   /// @param stamp 时间戳 (s)
-  void onOdomReceived(const domain::Vec3& position,
-                      const domain::Vec3& velocity,
-                      double yaw,
+  void onOdomReceived(const domain::Vec3 &position, const domain::Vec3 &velocity, double yaw,
                       double stamp, double received_at);
 
   /// RC回调
   /// @param channels RC通道数组
-  void onRCReceived(const std::vector<uint16_t>& channels, double received_at);
+  void onRCReceived(const std::vector<uint16_t> &channels, double received_at);
 
   /// 飞控状态回调
   /// @param armed 是否ARM
   /// @param mode 当前模式
-  void onStateReceived(bool armed, const std::string& mode, double received_at);
+  void onStateReceived(bool armed, const std::string &mode, double received_at);
 
   /// 电池状态回调
   /// @param percentage 电量百分比 (0.0~1.0)
@@ -220,9 +214,7 @@ private:
   void handleTriggers(double now);
 
   /// 根据点数条件执行返航或直接降落
-  void handleReturnTrigger(domain::Event event,
-                           bool has_min_points,
-                           const char* trigger_name);
+  void handleReturnTrigger(domain::Event event, bool has_min_points, const char *trigger_name);
 
   /// 轨迹生成处理
   void handleTrajectoryGeneration(double now);
@@ -253,5 +245,5 @@ private:
   std::shared_ptr<adapters::DebugPublisher> debug_publisher_;
 };
 
-}  // namespace application
-}  // namespace px4_backtrack
+} // namespace application
+} // namespace px4_backtrack

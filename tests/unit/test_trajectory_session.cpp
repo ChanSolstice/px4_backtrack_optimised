@@ -248,7 +248,7 @@ TEST(TrajectorySessionTest, DensePauseClusterDoesNotBlowUpPathLength) {
   }
 }
 
-TEST(TrajectorySessionTest, SlowStraightLineKeepsAccumulatedDistanceWhenThinning) {
+TEST(TrajectorySessionTest, SlowStraightLineKeepsFullOriginalDistance) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
   config.ds_m = 0.15;
@@ -263,7 +263,7 @@ TEST(TrajectorySessionTest, SlowStraightLineKeepsAccumulatedDistanceWhenThinning
   EXPECT_LT(path_length, 1.2);
 }
 
-TEST(TrajectorySessionTest, DenseEndpointClusterKeepsTrueEndpointWithoutShortFinalGap) {
+TEST(TrajectorySessionTest, DenseEndpointClusterKeepsTrueEndpoint) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
   config.ds_m = 0.6;
@@ -283,7 +283,7 @@ TEST(TrajectorySessionTest, DenseEndpointClusterKeepsTrueEndpointWithoutShortFin
   EXPECT_TRUE(start.position.isApprox(points.back().position, 1e-6));
 }
 
-TEST(TrajectorySessionTest, ReversingEndpointRemovesConflictingRetainedPoint) {
+TEST(TrajectorySessionTest, ReversingEndpointPreservesOriginalEndpoint) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
   config.ds_m = 1.0;

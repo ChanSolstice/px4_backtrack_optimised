@@ -10,13 +10,14 @@
 namespace px4_backtrack::adapters {
 class SetModeClient {
 public:
-  explicit SetModeClient(ros::NodeHandle& nh, const std::string& service_name="/mavros/set_mode",
-                         double throttle_interval_s=1.0);
+  explicit SetModeClient(ros::NodeHandle &nh, const std::string &service_name = "/mavros/set_mode",
+                         double throttle_interval_s = 1.0);
   explicit SetModeClient(std::function<bool(domain::ModeRequest)> transport,
-                         double throttle_interval_s=1.0);
+                         double throttle_interval_s = 1.0);
   ~SetModeClient();
   // 非阻塞；nullopt 清掉尚未派发的旧请求。已经发给飞控的 RPC 无法撤回。
   void request(std::optional<domain::ModeRequest> mode);
+
 private:
   ros::ServiceClient client_;
   std::function<bool(domain::ModeRequest)> transport_;
@@ -24,8 +25,8 @@ private:
   std::mutex mutex_;
   std::condition_variable wake_;
   std::optional<domain::ModeRequest> pending_;
-  bool stopping_=false;
+  bool stopping_ = false;
   std::thread thread_;
   void run();
 };
-}
+} // namespace px4_backtrack::adapters
