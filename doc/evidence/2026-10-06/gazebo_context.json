@@ -1,0 +1,91 @@
+{
+  "scope": "SITL only; ideal Gazebo truth proxy for SLAM, not real localization acceptance",
+  "model": "iris_opt_flow",
+  "world": "default",
+  "startup": "make px4_sitl gazebo-classic_iris_opt_flow",
+  "px4": "v1.15.4",
+  "mavros": "1.20.1",
+  "gazebo": "11.15.1",
+  "fusion_sequence": [
+    {
+      "EKF2_EV_CTRL": 0
+    },
+    {
+      "EKF2_GPS_CTRL": 0,
+      "EKF2_OF_CTRL": 0,
+      "EKF2_HGT_REF": 3
+    },
+    {
+      "EKF2_EV_CTRL": 11
+    }
+  ],
+  "flight_parameters": {
+    "MC_YAWRATE_MAX": 45,
+    "MPC_XY_VEL_MAX": 0.6,
+    "MPC_Z_VEL_MAX_UP": 0.6,
+    "MPC_Z_VEL_MAX_DN": 0.6
+  },
+  "scenario_parameters": {
+    "distance_m": 1.5,
+    "outbound_duration_s": 6,
+    "takeoff_height_increment_m": 2,
+    "paths": [
+      "straight",
+      "l"
+    ]
+  },
+  "effective_return_parameters": {
+    "publish_hz": 20.0,
+    "record_delay_s": 12.0,
+    "record_min_points": 20,
+    "record_max_hz": 15.0,
+    "enable_trigger_ch7": true,
+    "ch7_pressed_threshold": 1500,
+    "ch7_hold_s": 0.2,
+    "enable_trigger_ch18": true,
+    "ch18_failsafe_threshold": 900,
+    "ch18_confirm_s": 1.0,
+    "ch18_hover_wait_s": 15.0,
+    "enable_trigger_rc_loss": false,
+    "rc_loss_timeout_s": 0.15,
+    "rc_loss_debounce_s": 0.1,
+    "enable_trigger_low_battery": false,
+    "low_battery_threshold": 0.15,
+    "low_battery_confirm_s": 3.0,
+    "pre_offboard_setpoint_count": 20,
+    "rejoin_trigger_dist_m": 0.15,
+    "rejoin_success_dist_m": 0.1,
+    "rejoin_v_max_m_s": 0.3,
+    "rejoin_lookahead_time_s": 0.5,
+    "rejoin_trigger_hold_s": 0.0,
+    "rejoin_success_hold_s": 0.1,
+    "landing_hover_s": 1.0,
+    "trajectory_config_path": "/root/ROS_Noetic/backtrack_ws/src/px4_backtrack_optimised/config/trajectory_config.yaml",
+    "debug_enable_csv_dump": true,
+    "debug_trajectory_sample_dt": 0.1,
+    "debug_enable_rviz_publish": true,
+    "route_normal_limit_m": 0.3,
+    "route_hard_limit_m": 0.5,
+    "route_uncertainty_m": 0.05,
+    "route_reaction_s": 0.1,
+    "route_braking_m_s2": 0.5,
+    "odom_timeout_s": 0.25,
+    "state_timeout_s": 1.5
+  },
+  "cleanup": {
+    "disarmed": true,
+    "own_test_processes_running": false,
+    "temporary_parameters_restored": true,
+    "restored_localization": {
+      "EKF2_EV_CTRL": 15,
+      "EKF2_GPS_CTRL": 0,
+      "EKF2_OF_CTRL": 1,
+      "EKF2_HGT_REF": 0
+    }
+  },
+  "raw_outputs": [
+    "/tmp/return-gazebo-vision-straight",
+    "/tmp/return-gazebo-vision-l",
+    "/tmp/return-gazebo-gps-straight"
+  ]
+}

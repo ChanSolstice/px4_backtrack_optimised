@@ -1,0 +1,56 @@
+{
+  "states": [
+    [
+      1791217030.694621,
+      "IdleDisarmed"
+    ],
+    [
+      1791217059.3947237,
+      "WaitRecordDelay"
+    ],
+    [
+      1791217071.4449651,
+      "Recording"
+    ],
+    [
+      1791217081.79478,
+      "ReturnPreOffboard"
+    ],
+    [
+      1791217085.8948567,
+      "ReturnActive"
+    ],
+    [
+      1791217085.9450433,
+      "ReturnRejoin"
+    ],
+    [
+      1791217088.2448802,
+      "Paused"
+    ],
+    [
+      1791217184.4947348,
+      "AutoLandYield"
+    ]
+  ],
+  "return_executed": true,
+  "landed": false,
+  "metric_scope": "MAVROS estimate and independently synchronized Gazebo model truth; no RK3588 or real flight",
+  "mode": "GPS assisted; optical-flow fusion temporarily disabled",
+  "setpoint_masks": [
+    448,
+    2552
+  ],
+  "raw_points": 107,
+  "estimated_max_original_route_deviation_m": 0.250498228425255,
+  "estimated_max_speed_m_s": 0.2575625895832019,
+  "endpoint_estimated_error_m": 1.5023927682241793,
+  "truth_max_original_route_deviation_m": 2.523726744436906,
+  "truth_max_speed_m_s": 0.5153300234142001,
+  "truth_endpoint_error_m": 3.8565956088967406,
+  "timesync_offset_range_s": 0.09756088256835938,
+  "truth_reference": "Gazebo positions at the original recorded timestamps; nearest-segment metric only for this non-self-intersecting straight/L scenario",
+  "active_max_publish_gap_s": 0.05029606819152832,
+  "physical_acceptance": "NOT_ACCEPTED",
+  "truth_metric_status": "Exploratory timesync interpolation; do not use as a certified localization/physical bound"
+}

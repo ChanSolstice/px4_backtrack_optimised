@@ -1,0 +1,74 @@
+{
+  "states": [
+    [
+      1791227530.9293714,
+      "IdleDisarmed"
+    ],
+    [
+      1791227560.629385,
+      "WaitRecordDelay"
+    ],
+    [
+      1791227572.6798582,
+      "Recording"
+    ],
+    [
+      1791227586.3296096,
+      "ReturnPreOffboard"
+    ],
+    [
+      1791227590.1794891,
+      "ReturnActive"
+    ],
+    [
+      1791227613.429814,
+      "LandingHover"
+    ],
+    [
+      1791227614.4794056,
+      "LandingTransition"
+    ],
+    [
+      1791227616.6794956,
+      "AutoLandYield"
+    ],
+    [
+      1791227622.6793263,
+      "IdleDisarmed"
+    ]
+  ],
+  "return_executed": true,
+  "landed": true,
+  "metric_scope": "Gazebo model ENU pose and finite-difference velocity sampled by the ideal odometry bridge; no sensor errors, RK3588 or real flight",
+  "mode": "Ideal Gazebo pose through /Odometry_px4 and existing vision forwarder",
+  "odometry_source": "/Odometry_px4",
+  "physical_acceptance": "NOT_ACCEPTED; ideal localization does not validate real SLAM",
+  "setpoint_masks": [
+    448
+  ],
+  "raw_points": 174,
+  "truth_input_max_original_route_deviation_m": 0.08561995917785482,
+  "truth_input_max_speed_m_s": 0.3270957273210183,
+  "truth_input_endpoint_error_m": 0.12081808097038739,
+  "active_max_publish_gap_s": 0.05475115776062012,
+  "scenario_checks": [
+    "CHECK required_states=PASS",
+    "CHECK valid_masks=PASS",
+    "CHECK velocity_feedforward=PASS",
+    "CHECK no_zero_mask=PASS",
+    "CHECK rejoin_expectation=PASS",
+    "CHECK setpoint_gap_under_0_5s=PASS",
+    "CHECK auto_land_seen=PASS"
+  ],
+  "scenario_result_lines": [
+    "RESULT state_events=[(1791227555.8793845, 'IdleDisarmed'), (1791227560.6293988, 'WaitRecordDelay'), (1791227572.679928, 'Recording'), (1791227586.3297062, 'ReturnPreOffboard'), (1791227590.1795623, 'ReturnActive'), (1791227613.4297733, 'LandingHover'), (1791227614.4794242, 'LandingTransition'), (1791227616.6795208, 'AutoLandYield'), (1791227622.6793323, 'IdleDisarmed')]",
+    "RESULT mode_events=[(1791227555.8566453, 'AUTO.LAND', False), (1791227559.607851, 'OFFBOARD', False), (1791227614.6424544, 'POSCTL', True), (1791227616.649242, 'AUTO.LAND', True), (1791227622.6652677, 'POSCTL', False)]",
+    "RESULT setpoint_count=567",
+    "RESULT masks=[448]",
+    "RESULT moving_velocity_setpoints=175",
+    "RESULT zero_mask_setpoints=0",
+    "RESULT rejoin_count=0",
+    "RESULT max_setpoint_interval_s=0.0546",
+    "RESULT yaw_error_deg_median=0.50 max=7.62"
+  ]
+}

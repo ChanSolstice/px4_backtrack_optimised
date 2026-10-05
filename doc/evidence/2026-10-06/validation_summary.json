@@ -1,0 +1,191 @@
+{
+  "date": "2026-10-06",
+  "platform": "x86_64 host / Docker ROS_Noetic",
+  "return_code_commit": "88fd4ae51548e27b45776befa1c31ad526407247",
+  "core_code_commit": "4857b87ba9902f563dcde83b4bdd46a0d31a1c17",
+  "return_release": {
+    "targets": [
+      {
+        "target": "gtest-test_async_control",
+        "testcases": 4
+      },
+      {
+        "target": "gtest-test_backtrack_usecase",
+        "testcases": 23
+      },
+      {
+        "target": "gtest-test_path_yaw",
+        "testcases": 3
+      },
+      {
+        "target": "gtest-test_recorded_route",
+        "testcases": 2
+      },
+      {
+        "target": "gtest-test_recording_buffer",
+        "testcases": 4
+      },
+      {
+        "target": "gtest-test_rejoin_policy",
+        "testcases": 1
+      },
+      {
+        "target": "gtest-test_ros_subscribers",
+        "testcases": 3
+      },
+      {
+        "target": "gtest-test_state_machine",
+        "testcases": 9
+      },
+      {
+        "target": "gtest-test_trajectory_session",
+        "testcases": 19
+      },
+      {
+        "target": "gtest-test_trigger_evaluator",
+        "testcases": 10
+      },
+      {
+        "target": "gtest-test_waypoint_fallback_session",
+        "testcases": 8
+      }
+    ],
+    "unique_cases": 86,
+    "failed": 0
+  },
+  "core_release": {
+    "targets": [
+      {
+        "target": "gtest-test_config",
+        "testcases": 7
+      },
+      {
+        "target": "gtest-test_constraints",
+        "testcases": 14
+      },
+      {
+        "target": "gtest-test_corner_blend",
+        "testcases": 7
+      },
+      {
+        "target": "gtest-test_end_convergence",
+        "testcases": 10
+      },
+      {
+        "target": "gtest-test_full_pipeline",
+        "testcases": 17
+      },
+      {
+        "target": "gtest-test_preprocess",
+        "testcases": 12
+      },
+      {
+        "target": "gtest-test_resample",
+        "testcases": 6
+      },
+      {
+        "target": "gtest-test_segment_chain",
+        "testcases": 10
+      },
+      {
+        "target": "gtest-test_segment_geometry",
+        "testcases": 11
+      },
+      {
+        "target": "gtest-test_time_param",
+        "testcases": 17
+      },
+      {
+        "target": "gtest-test_trajectory",
+        "testcases": 16
+      },
+      {
+        "target": "gtest-test_yaw_processing",
+        "testcases": 13
+      }
+    ],
+    "unique_cases": 140,
+    "failed": 0
+  },
+  "return_sanitizer_debug": {
+    "targets": [
+      {
+        "target": "gtest-test_async_control",
+        "testcases": 4
+      },
+      {
+        "target": "gtest-test_backtrack_usecase",
+        "testcases": 23
+      },
+      {
+        "target": "gtest-test_path_yaw",
+        "testcases": 3
+      },
+      {
+        "target": "gtest-test_recorded_route",
+        "testcases": 2
+      },
+      {
+        "target": "gtest-test_recording_buffer",
+        "testcases": 4
+      },
+      {
+        "target": "gtest-test_rejoin_policy",
+        "testcases": 1
+      },
+      {
+        "target": "gtest-test_ros_subscribers",
+        "testcases": 3
+      },
+      {
+        "target": "gtest-test_state_machine",
+        "testcases": 9
+      },
+      {
+        "target": "gtest-test_trajectory_session",
+        "testcases": 19
+      },
+      {
+        "target": "gtest-test_trigger_evaluator",
+        "testcases": 10
+      },
+      {
+        "target": "gtest-test_waypoint_fallback_session",
+        "testcases": 8
+      }
+    ],
+    "unique_cases": 86,
+    "failed": 0
+  },
+  "ros": {
+    "blocked_rpc_s": 2.0012375169899315,
+    "heartbeat_count": 40,
+    "max_publish_gap_s": 0.0503550159628503,
+    "slow_flight_speed_m_s": 0.1,
+    "endpoint_error_m": 0.19999999999999962,
+    "fallback_position_yaw_seen": true,
+    "stale_odom_pause": true,
+    "external_mode_yield": true,
+    "checks": "PASS"
+  },
+  "memory_sanitizer_findings": [],
+  "install_node": true,
+  "install_headers": true,
+  "px4_version": "v1.15.4",
+  "mavros_version": "1.20.1",
+  "gazebo_version": "11.15.1",
+  "actual_localization": "LiDAR SLAM provides /Odometry_px4; user confirmed",
+  "simulation_localization": "GPS attempted; ideal Gazebo odometry separately used as SLAM interface proxy",
+  "rk3588_status": "NOT_EXECUTED",
+  "physical_deviation_status": "NOT_ACCEPTED",
+  "limitations": [
+    "ideal Gazebo localization excludes real sensor uncertainty and drift",
+    "GPS/optical-flow fusion does not yet meet route accuracy acceptance",
+    "nav_msgs/Odometry finite/fresh checks do not establish estimator health",
+    "solver and dispatched mode RPC cannot be force-canceled"
+  ],
+  "gazebo_ideal_straight": "PASS",
+  "gazebo_ideal_l": "PASS",
+  "gazebo_gps": "PROTECTIVE_PAUSE; normal return not completed",
+  "gazebo_optical_flow": "OFFBOARD_NOT_ACCEPTED; return not executed"
+}
