@@ -8,7 +8,7 @@
 namespace px4_backtrack::domain {
 namespace {
 
-void advance(WaypointFallbackSession& session, const Vec3& position) {
+void advance(WaypointFallbackSession &session, const Vec3 &position) {
   session.updateProgress(position, Vec3::Zero(), session.currentTarget().yaw);
 }
 
@@ -79,29 +79,41 @@ TEST(WaypointFallbackSessionTest, ProgressAdvancesAtMostOneWaypointPerTick) {
 
 TEST(WaypointFallbackSessionTest, PreservesShortRightAngleCornerAndWaitsForStopAndYaw) {
   WaypointFallbackSession session(0.3, 0.01);
-  ASSERT_TRUE(session.build({RecordPoint(Vec3(0,0,1),0,0),
-      RecordPoint(Vec3(0.1,0,1),0,1), RecordPoint(Vec3(0.1,0.1,1),0,2)}));
-  advance(session, Vec3(0.1,0.1,1));
+  ASSERT_TRUE(session.build({RecordPoint(Vec3(0, 0, 1), 0, 0), RecordPoint(Vec3(0.1, 0, 1), 0, 1),
+                             RecordPoint(Vec3(0.1, 0.1, 1), 0, 2)}));
+  advance(session, Vec3(0.1, 0.1, 1));
   ASSERT_EQ(session.currentIndex(), 1u);
-  EXPECT_TRUE(session.currentTarget().position.isApprox(Vec3(0.1,0,1)));
-  session.updateProgress(Vec3(0.1,0,1), Vec3(0,0,-0.2), -kPi/2);
+  EXPECT_TRUE(session.currentTarget().position.isApprox(Vec3(0.1, 0, 1)));
+  session.updateProgress(Vec3(0.1, 0, 1), Vec3(0, 0, -0.2), -kPi / 2);
   EXPECT_EQ(session.currentIndex(), 1u);
-  session.updateProgress(Vec3(0.1,0,1), Vec3::Zero(), -kPi/2);
+  session.updateProgress(Vec3(0.1, 0, 1), Vec3::Zero(), -kPi / 2);
   EXPECT_EQ(session.currentIndex(), 1u);
   EXPECT_NEAR(std::abs(session.currentTarget().yaw), kPi, 1e-9);
-  advance(session, Vec3(0.1,0,1));
+  advance(session, Vec3(0.1, 0, 1));
   EXPECT_EQ(session.currentIndex(), 2u);
 }
 
 TEST(WaypointFallbackSessionTest, RejectsInvalidParametersAndGeometry) {
   WaypointFallbackSession invalid(0.0);
   EXPECT_FALSE(invalid.build(makeRecordedLine()));
-  WaypointFallbackSession invalid_radius(0.3,std::numeric_limits<double>::quiet_NaN());
+  WaypointFallbackSession invalid_radius(0.3, std::numeric_limits<double>::quiet_NaN());
   EXPECT_FALSE(invalid_radius.build(makeRecordedLine()));
   WaypointFallbackSession session;
   auto points = makeRecordedLine();
   points[1].position.x() = std::numeric_limits<double>::quiet_NaN();
   EXPECT_FALSE(session.build(points));
+}
+
+TEST(WaypointFallbackSessionTest, ResumeLocallyAdvancesAlongRemainingPathWithoutReturningToHead) {
+  WaypointFallbackSession session(0.3, 0.05);
+  ASSERT_TRUE(session.build(makeRecordedLine()));
+  advance(session, Vec3(2, 0, 1));
+  ASSERT_EQ(session.currentIndex(), 1u);
+  ASSERT_TRUE(session.resumeAt(Vec3(1.4, 0, 1)));
+  EXPECT_GT(session.currentIndex(), 1u);
+  EXPECT_TRUE(session.currentTarget().position.isApprox(Vec3(1.4, 0, 1)));
+  advance(session, Vec3(1.4, 0, 1));
+  EXPECT_LT(session.currentTarget().position.x(), 1.4);
 }
 
 TEST(WaypointFallbackSessionTest, FinalWaypointMarksSessionFinished) {
@@ -112,11 +124,11 @@ TEST(WaypointFallbackSessionTest, FinalWaypointMarksSessionFinished) {
   advance(session, Vec3(1.5, 0.0, 1.0));
   advance(session, Vec3(1.0, 0.0, 1.0));
   advance(session, Vec3(0.5, 0.0, 1.0));
-  session.updateProgress(Vec3(0,0,1),Vec3(0,0,-0.3),session.currentTarget().yaw);
+  session.updateProgress(Vec3(0, 0, 1), Vec3(0, 0, -0.3), session.currentTarget().yaw);
   EXPECT_FALSE(session.isFinished());
-  advance(session, Vec3(0.0,0.0,1.0));
+  advance(session, Vec3(0.0, 0.0, 1.0));
   EXPECT_TRUE(session.isFinished());
 }
 
-}  // namespace
-}  // namespace px4_backtrack::domain
+} // namespace
+} // namespace px4_backtrack::domain

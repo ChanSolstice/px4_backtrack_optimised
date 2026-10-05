@@ -155,7 +155,7 @@ private:
   domain::Vec3 safety_hold_position_ = domain::Vec3::Zero();
   double safety_hold_yaw_ = 0.0;
   void handleRouteSafety();
-  bool canResumeReturn();
+  bool resumeReturn(domain::Event event, double now);
   domain::BacktrackStateMachine state_machine_;
 
   // 当前状态快照

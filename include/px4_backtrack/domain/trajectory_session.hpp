@@ -48,6 +48,9 @@ public:
   /// 暂停参考时钟，保留路径位置；恢复从零参考速度继续。
   void suspend();
 
+  /// 控制权重新交回时，以局部实际位置重设零速参考；不回退进度。
+  bool resumeAt(const Vec3 &position);
+
   /// 获取当前预瞄目标状态
   const trajectory_core::TrajectoryState &getTargetState() const;
 
@@ -121,6 +124,7 @@ private:
   /// 轨迹生成器（复用）
   trajectory_core::TrajectoryGenerator generator_;
 
+  double corridor_m_ = 0.0;
   double reference_time_ = 0.0; // 名义剖面的连续执行时钟，可被跟踪误差减速
   double clock_rate_ = 0.0;     // d(reference_time)/dt，范围 [0,1]
   double clock_acc_limit_ = 0.0;

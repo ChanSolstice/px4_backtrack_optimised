@@ -26,6 +26,9 @@ public:
   /// 清空退化会话
   void reset();
 
+  /// 在剩余路径 1m 局部窗口重新接入；保留转折点，不重回已完成索引。
+  bool resumeAt(const Vec3 &position);
+
   /// 根据当前位置推进 waypoint 索引
   void updateProgress(const Vec3 &current_position, const Vec3 &current_velocity,
                       double current_yaw);
@@ -51,6 +54,7 @@ private:
   std::vector<FallbackWaypoint> waypoints_;
   size_t current_index_;
   bool finished_;
+  std::optional<FallbackWaypoint> rejoin_target_;
 };
 
 } // namespace domain

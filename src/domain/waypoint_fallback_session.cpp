@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace px4_backtrack {
 namespace domain {
@@ -82,9 +83,45 @@ bool WaypointFallbackSession::build(const std::vector<RecordPoint> &points) {
 }
 
 void WaypointFallbackSession::reset() {
+  rejoin_target_.reset();
   waypoints_.clear();
   current_index_ = 0;
   finished_ = false;
+}
+
+bool WaypointFallbackSession::resumeAt(const Vec3 &position) {
+  if (!isValid() || !position.allFinite() || finished_)
+    return false;
+  const size_t first = current_index_ > 0 ? current_index_ - 1 : 0;
+  double covered = 0.0, best = std::numeric_limits<double>::infinity();
+  size_t best_segment = first;
+  Vec3 nearest = Vec3::Zero();
+  for (size_t i = first; i + 1 < waypoints_.size() && covered <= 1.0; ++i) {
+    const Vec3 edge = waypoints_[i + 1].position - waypoints_[i].position;
+    const double length = edge.norm();
+    const double fraction =
+        std::clamp((position - waypoints_[i].position).dot(edge) / edge.squaredNorm(), 0.0,
+                   std::min(1.0, (1.0 - covered) / length));
+    const Vec3 candidate = waypoints_[i].position + fraction * edge;
+    const double distance = (position - candidate).norm();
+    if (distance < best) {
+      best = distance;
+      best_segment = i;
+      nearest = candidate;
+    }
+    covered += length;
+  }
+  if (best > 0.10)
+    return false;
+  // 常规暂停保留目标；手动沿原路前移越过目标时只推进到局部剩余段。
+  if (best_segment + 1 > current_index_) {
+    current_index_ = best_segment + 1;
+    const Vec3 outgoing = waypoints_[current_index_].position - nearest;
+    const double yaw = outgoing.head<2>().norm() > 1e-9 ? std::atan2(outgoing.y(), outgoing.x())
+                                                        : waypoints_[current_index_].yaw;
+    rejoin_target_.emplace(nearest, yaw);
+  }
+  return true;
 }
 
 void WaypointFallbackSession::updateProgress(const Vec3 &current_position,
@@ -98,6 +135,14 @@ void WaypointFallbackSession::updateProgress(const Vec3 &current_position,
     return;
   }
 
+  if (rejoin_target_) {
+    const double error = std::atan2(std::sin(current_yaw - rejoin_target_->yaw),
+                                    std::cos(current_yaw - rejoin_target_->yaw));
+    if ((current_position - rejoin_target_->position).norm() <= reach_radius_m_ &&
+        current_velocity.norm() <= 0.10 && std::abs(error) <= 15.0 * std::acos(-1.0) / 180.0)
+      rejoin_target_.reset();
+    return;
+  }
   double dist = (current_position - waypoints_[current_index_].position).norm();
   if (dist > reach_radius_m_) {
     return;
@@ -135,7 +180,7 @@ SetpointTarget WaypointFallbackSession::currentTarget() const {
   }
 
   const size_t clamped_index = std::min(current_index_, waypoints_.size() - 1);
-  const auto &waypoint = waypoints_[clamped_index];
+  const auto &waypoint = rejoin_target_ ? *rejoin_target_ : waypoints_[clamped_index];
   target.position = waypoint.position;
   target.velocity = Vec3::Zero();
   target.yaw = waypoint.yaw;

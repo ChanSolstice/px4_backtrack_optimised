@@ -379,6 +379,28 @@ TEST(BacktrackUseCaseTest, DisarmRearmBetweenTicksCannotReuseOldTask) {
   EXPECT_FALSE(out.setpoint);
 }
 
+TEST(BacktrackUseCaseTest, FallbackResumeBetweenWaypointsRetainsRemainingTarget) {
+  auto config = makeConfig();
+  config.trajectory_config.v_end_max = 2;
+  Flight f(config);
+  f.recordLine();
+  f.start();
+  auto out = f.step();
+  ASSERT_TRUE(out.setpoint);
+  const double next = out.setpoint->position.x();
+  ASSERT_LT(next, 2.0);
+  f.position.x() = next;
+  out = f.step();
+  ASSERT_TRUE(out.setpoint);
+  const double remaining = out.setpoint->position.x();
+  ASSERT_LT(remaining, next);
+  EXPECT_EQ(f.pause().current_state, domain::State::Paused);
+  out = f.resume();
+  EXPECT_EQ(out.current_state, domain::State::ReturnActive);
+  ASSERT_TRUE(out.setpoint);
+  EXPECT_NEAR(out.setpoint->position.x(), remaining, 1e-9);
+}
+
 TEST(BacktrackUseCaseTest, RejectsInvalidEngineeringLimits) {
   auto c = makeConfig();
   c.route_braking_m_s2 = 0;

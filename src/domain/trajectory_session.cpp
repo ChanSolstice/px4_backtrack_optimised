@@ -145,6 +145,7 @@ bool TrajectorySession::generate(const std::vector<RecordPoint> &points,
   if (!output_acceleration_)
     target_state_.acceleration.reset();
   trajectory_v_max_m_s_ = config.v_max;
+  corridor_m_ = config.max_deviation_m;
 
   // 输出INFO日志（用于验收和debug）
   ROS_INFO("[TrajectorySession] Trajectory generated successfully!");
@@ -171,6 +172,26 @@ void TrajectorySession::suspend() {
   target_state_.yaw_rate = 0.0;
   if (target_state_.acceleration)
     target_state_.acceleration->setZero();
+}
+
+bool TrajectorySession::resumeAt(const Vec3 &position) {
+  if (!isValid() || !position.allFinite())
+    return false;
+  const auto projection = traj_->projectPosition(
+      position, std::max(0.0, projected_s_ - 0.30),
+      std::min(traj_->pathLength(), std::max(projected_s_, target_s_) + 1.0));
+  if (!projection.valid || projection.distance > 0.10 + corridor_m_)
+    return false;
+  projected_s_ = std::max(projected_s_, projection.arc_length);
+  target_s_ = std::max(target_s_, projected_s_);
+  reference_time_ = traj_->evaluateByArcLength(target_s_).t;
+  clock_rate_ = 0.0;
+  target_state_ = traj_->evaluateProgress({reference_time_, target_s_, 0.0, 0.0});
+  if (!output_acceleration_)
+    target_state_.acceleration.reset();
+  cross_track_error_ = projection.distance;
+  projection_valid_ = true;
+  return true;
 }
 
 double TrajectorySession::arcAtTime(double time) const {

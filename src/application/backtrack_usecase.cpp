@@ -481,52 +481,15 @@ void BacktrackUseCase::handleTriggers(double now) {
     }
   }
 
-  // 在Paused状态时，检测RC丢失和Ch7长按（恢复）
   if (current_state == domain::State::Paused || current_state == domain::State::ControlYield) {
-    bool has_min_points = checkMinPoints() && canResumeReturn();
-
     if (rc_loss_event && current_state == domain::State::Paused && !route_safety_hold_ &&
         !input_hold_) {
-      if (has_min_points) {
-        ROS_WARN("[BacktrackUseCase] RC loss detected while paused, resuming return");
-        route_safety_hold_ = input_hold_ = false;
-        const double hold_yaw = trajectory_session_->isValid()
-                                    ? trajectory_session_->getTargetState().yaw
-                                    : current_yaw_;
-        state_machine_.lockPosition(current_position_, hold_yaw);
-        trajectory_generation_requested_ =
-            !trajectory_session_->isValid() && !waypoint_fallback_session_.isValid();
-        state_machine_.triggerReturn(domain::Event::RCLossTriggered);
-        yaw_alignment_start_time_ = now;
-        yaw_alignment_timeout_reported_ = false;
-      } else {
-        ROS_WARN("[BacktrackUseCase] RC loss detected while paused but only %zu points recorded (< "
-                 "%d), triggering AUTO.LAND",
-                 recording_buffer_.size(), config_.record_min_points);
-        triggerImmediateLanding();
-      }
+      if (!resumeReturn(domain::Event::RCLossTriggered, now))
+        ROS_WARN("[BacktrackUseCase] RC loss resume rejected: no valid local remaining path");
       return;
     }
-
-    if (trigger_evaluator_.checkCh7LongPress()) {
-      if (has_min_points) {
-        ROS_INFO("[BacktrackUseCase] Ch7 long press detected, resuming");
-        route_safety_hold_ = input_hold_ = false;
-        const double hold_yaw = trajectory_session_->isValid()
-                                    ? trajectory_session_->getTargetState().yaw
-                                    : current_yaw_;
-        state_machine_.lockPosition(current_position_, hold_yaw);
-        trajectory_generation_requested_ =
-            !trajectory_session_->isValid() && !waypoint_fallback_session_.isValid();
-        state_machine_.triggerReturn(domain::Event::Ch7LongPress);
-        yaw_alignment_start_time_ = now;
-        yaw_alignment_timeout_reported_ = false;
-      } else {
-        ROS_WARN("[BacktrackUseCase] Resume rejected: remaining route unavailable or aircraft "
-                 "outside resume corridor");
-      }
-      return;
-    }
+    if (trigger_evaluator_.checkCh7LongPress() && !resumeReturn(domain::Event::Ch7LongPress, now))
+      ROS_WARN("[BacktrackUseCase] Resume rejected: no valid local remaining path");
   }
 }
 
@@ -645,12 +608,28 @@ void BacktrackUseCase::handleTrajectoryProgress(double now) {
   }
 }
 
-bool BacktrackUseCase::canResumeReturn() {
-  if (!recorded_route_.valid() || !recorded_route_.update(current_position_) ||
+bool BacktrackUseCase::resumeReturn(domain::Event event, double now) {
+  if (!checkMinPoints() || !recorded_route_.valid() || !recorded_route_.update(current_position_) ||
       recorded_route_.distance() > config_.rejoin_config.success_dist_m)
     return false;
-  trajectory_session_->suspend();
+  if (trajectory_session_->isValid() && !trajectory_session_->resumeAt(current_position_))
+    return false;
+  if (waypoint_fallback_session_.isValid() &&
+      !waypoint_fallback_session_.resumeAt(current_position_))
+    return false;
+  route_safety_hold_ = input_hold_ = false;
   last_progress_time_ = -1.0;
+  const double yaw =
+      trajectory_session_->isValid()
+          ? trajectory_session_->getTargetState().yaw
+          : (waypoint_fallback_session_.isValid() ? waypoint_fallback_session_.currentTarget().yaw
+                                                  : current_yaw_);
+  state_machine_.lockPosition(current_position_, yaw);
+  trajectory_generation_requested_ =
+      !trajectory_session_->isValid() && !waypoint_fallback_session_.isValid();
+  state_machine_.triggerReturn(event);
+  yaw_alignment_start_time_ = now;
+  yaw_alignment_timeout_reported_ = false;
   return true;
 }
 
@@ -689,7 +668,7 @@ bool BacktrackUseCase::isTrajectoryActivationReady(double now) {
   const auto target_position = trajectory_session_->isValid()
                                    ? trajectory_session_->getTargetState().position
                                    : waypoint_fallback_session_.currentTarget().position;
-  if ((target_position - current_position_).norm() > 0.201 || current_velocity_.norm() > 0.20)
+  if ((target_position - current_position_).norm() > 0.40 || current_velocity_.norm() > 0.20)
     return false;
   const double target_yaw = trajectory_session_->isValid()
                                 ? trajectory_session_->getTargetState().yaw

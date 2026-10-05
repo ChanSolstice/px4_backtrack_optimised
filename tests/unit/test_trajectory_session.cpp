@@ -64,8 +64,7 @@ std::vector<RecordPoint> makeSelfCrossingPoints() {
 }
 
 double yawError(double actual, double expected) {
-  return std::abs(std::atan2(std::sin(actual - expected),
-                            std::cos(actual - expected)));
+  return std::abs(std::atan2(std::sin(actual - expected), std::cos(actual - expected)));
 }
 
 TEST(TrajectorySessionTest, RejectsInsufficientPoints) {
@@ -99,12 +98,14 @@ TEST(TrajectorySessionTest, MarksTooCloseGeometryFailure) {
 }
 
 TEST(TrajectorySessionTest, FailedRegenerationCannotReuseOldTrajectory) {
-  TrajectorySession session; trajectory_core::TrajectoryConfig config;
-  ASSERT_TRUE(session.generate(makeRecordPoints(),config));
-  config.v_max=-1.0;
-  EXPECT_FALSE(session.generate(makeRecordPoints(),config));
-  EXPECT_FALSE(session.isValid()); EXPECT_EQ(session.getTrajectory(),nullptr);
-  EXPECT_DOUBLE_EQ(session.getTargetState().velocity.norm(),0.0);
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  ASSERT_TRUE(session.generate(makeRecordPoints(), config));
+  config.v_max = -1.0;
+  EXPECT_FALSE(session.generate(makeRecordPoints(), config));
+  EXPECT_FALSE(session.isValid());
+  EXPECT_EQ(session.getTrajectory(), nullptr);
+  EXPECT_DOUBLE_EQ(session.getTargetState().velocity.norm(), 0.0);
 }
 
 TEST(TrajectorySessionTest, MarksInvalidConfigFailure) {
@@ -126,7 +127,7 @@ TEST(TrajectorySessionTest, GenerateProducesValidTrajectoryInReverseOrder) {
   ASSERT_NE(session.getTrajectory(), nullptr);
   EXPECT_GT(session.getDuration(), 0.0);
 
-  const auto& start_state = session.getTargetState();
+  const auto &start_state = session.getTargetState();
   EXPECT_NEAR(start_state.position.x(), 2.0, 0.25);
   EXPECT_NEAR(start_state.position.z(), 1.0, 1e-6);
   EXPECT_NEAR(yawError(start_state.yaw, kPi), 0.0, 1e-3);
@@ -176,13 +177,10 @@ TEST(TrajectorySessionTest, LocalProjectionDoesNotJumpAcrossSelfIntersection) {
   ASSERT_GT(path_length, 10.0);
 
   const std::vector<Vec3> first_branch_positions = {
-      Vec3(-2.0, -2.0, 1.0),
-      Vec3(-1.5, -1.5, 1.0),
-      Vec3(-1.0, -1.0, 1.0),
-      Vec3(-0.5, -0.5, 1.0),
-      Vec3(0.0, 0.0, 1.0),
+      Vec3(-2.0, -2.0, 1.0), Vec3(-1.5, -1.5, 1.0), Vec3(-1.0, -1.0, 1.0),
+      Vec3(-0.5, -0.5, 1.0), Vec3(0.0, 0.0, 1.0),
   };
-  for (const auto& position : first_branch_positions) {
+  for (const auto &position : first_branch_positions) {
     ASSERT_TRUE(session.updateProgress(position, 0.5));
   }
 
@@ -205,8 +203,7 @@ TEST(TrajectorySessionTest, RejoinDoesNotMoveTargetArcLengthBackward) {
   const double normal_target_s = session.getTargetArcLength();
   ASSERT_GT(normal_target_s, 0.0);
 
-  ASSERT_TRUE(session.updateRejoinProgress(
-      Vec3(2.0, 1.0, 1.0), 0.5, 0.5));
+  ASSERT_TRUE(session.updateRejoinProgress(Vec3(2.0, 1.0, 1.0), 0.5, 0.5));
   EXPECT_GE(session.getTargetArcLength(), normal_target_s);
   EXPECT_GT(session.getCrossTrackError(), 0.9);
 }
@@ -242,9 +239,9 @@ TEST(TrajectorySessionTest, DensePauseClusterDoesNotBlowUpPathLength) {
   EXPECT_GT(path_length, 1.8);
   // 完整停顿噪声折线也属于走廊参照，不能通过外部抽稀假定它不存在。
   EXPECT_LT(path_length, 3.1);
-  for (double t=0.0; t<=session.getDuration(); t+=0.1) {
-    const Vec3 position=session.getTrajectory()->evaluate(t).position;
-    EXPECT_LT(std::abs(position.y()),0.15);
+  for (double t = 0.0; t <= session.getDuration(); t += 0.1) {
+    const Vec3 position = session.getTrajectory()->evaluate(t).position;
+    EXPECT_LT(std::abs(position.y()), 0.15);
   }
 }
 
@@ -270,12 +267,9 @@ TEST(TrajectorySessionTest, DenseEndpointClusterKeepsTrueEndpoint) {
   config.min_point_dist_m = 0.3;
 
   std::vector<RecordPoint> points = {
-      RecordPoint(Vec3(0.0, 0.0, 1.0), 0.0, 0.0),
-      RecordPoint(Vec3(0.6, 0.0, 1.0), 0.0, 0.1),
-      RecordPoint(Vec3(1.0, 0.0, 1.0), 0.0, 0.2),
-      RecordPoint(Vec3(1.20, 0.0, 1.0), 0.0, 0.3),
-      RecordPoint(Vec3(1.24, 0.0, 1.0), 0.0, 0.4),
-      RecordPoint(Vec3(1.26, 0.0, 1.0), 0.0, 0.5),
+      RecordPoint(Vec3(0.0, 0.0, 1.0), 0.0, 0.0),  RecordPoint(Vec3(0.6, 0.0, 1.0), 0.0, 0.1),
+      RecordPoint(Vec3(1.0, 0.0, 1.0), 0.0, 0.2),  RecordPoint(Vec3(1.20, 0.0, 1.0), 0.0, 0.3),
+      RecordPoint(Vec3(1.24, 0.0, 1.0), 0.0, 0.4), RecordPoint(Vec3(1.26, 0.0, 1.0), 0.0, 0.5),
   };
 
   ASSERT_TRUE(session.generate(points, config));
@@ -290,10 +284,8 @@ TEST(TrajectorySessionTest, ReversingEndpointPreservesOriginalEndpoint) {
   config.min_point_dist_m = 0.5;
 
   std::vector<RecordPoint> points = {
-      RecordPoint(Vec3(0.0, 0.0, 1.0), 0.0, 0.0),
-      RecordPoint(Vec3(0.5, 0.0, 1.0), 0.0, 0.1),
-      RecordPoint(Vec3(1.0, 0.0, 1.0), 0.0, 0.2),
-      RecordPoint(Vec3(1.4, 0.0, 1.0), 0.0, 0.3),
+      RecordPoint(Vec3(0.0, 0.0, 1.0), 0.0, 0.0),  RecordPoint(Vec3(0.5, 0.0, 1.0), 0.0, 0.1),
+      RecordPoint(Vec3(1.0, 0.0, 1.0), 0.0, 0.2),  RecordPoint(Vec3(1.4, 0.0, 1.0), 0.0, 0.3),
       RecordPoint(Vec3(1.05, 0.0, 1.0), 0.0, 0.4),
   };
 
@@ -306,35 +298,53 @@ TEST(TrajectorySessionTest, StationaryVehicleStopsReferenceBeforeNominalDuration
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
   ASSERT_TRUE(session.generate(makeRecordPoints(), config));
-  for (int i=0; i<4000; ++i) ASSERT_TRUE(session.updateProgress(Vec3(2,0,1),0.5,0.05));
+  for (int i = 0; i < 4000; ++i)
+    ASSERT_TRUE(session.updateProgress(Vec3(2, 0, 1), 0.5, 0.05));
   EXPECT_LT(session.getTargetArcLength(), 0.201);
   EXPECT_LT(session.getTargetState().velocity.norm(), 1e-5);
-  EXPECT_FALSE(session.isFinished(Vec3(2,0,1), Vec3::Zero(),0.2));
-  for (int i=0; i<100; ++i) ASSERT_TRUE(session.updateProgress(Vec3(1.8,0,1),0.5,0.05));
+  EXPECT_FALSE(session.isFinished(Vec3(2, 0, 1), Vec3::Zero(), 0.2));
+  for (int i = 0; i < 100; ++i)
+    ASSERT_TRUE(session.updateProgress(Vec3(1.8, 0, 1), 0.5, 0.05));
   EXPECT_GT(session.getTargetArcLength(), 0.25);
 }
 
 TEST(TrajectorySessionTest, ReferencePositionAndVelocityAgreeAndRejoinScalesYaw) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
-  config.enable_output_acc=true;
+  config.enable_output_acc = true;
   ASSERT_TRUE(session.generate(makeRecordPoints(), config));
-  auto previous=session.getTargetState();
-  for (int i=0; i<100; ++i) {
-    ASSERT_TRUE(session.updateRejoinProgress(previous.position,0.5,0.3,0.01,0.2));
-    const auto target=session.getTargetState();
-    EXPECT_LE(target.velocity.norm(),0.2+1e-6);
-    EXPECT_LT(((target.position-previous.position)/0.01 -
-        0.5*(target.velocity+previous.velocity)).norm(),0.01);
-    const auto nominal=session.getTrajectory()->evaluateByArcLength(session.getTargetArcLength());
-    if (nominal.velocity.norm()>1e-6) EXPECT_NEAR(target.yaw_rate,
-        nominal.yaw_rate*target.velocity.norm()/nominal.velocity.norm(),1e-6);
-    previous=target;
+  auto previous = session.getTargetState();
+  for (int i = 0; i < 100; ++i) {
+    ASSERT_TRUE(session.updateRejoinProgress(previous.position, 0.5, 0.3, 0.01, 0.2));
+    const auto target = session.getTargetState();
+    EXPECT_LE(target.velocity.norm(), 0.2 + 1e-6);
+    EXPECT_LT(
+        ((target.position - previous.position) / 0.01 - 0.5 * (target.velocity + previous.velocity))
+            .norm(),
+        0.01);
+    const auto nominal = session.getTrajectory()->evaluateByArcLength(session.getTargetArcLength());
+    if (nominal.velocity.norm() > 1e-6)
+      EXPECT_NEAR(target.yaw_rate,
+                  nominal.yaw_rate * target.velocity.norm() / nominal.velocity.norm(), 1e-6);
+    previous = target;
   }
-  const auto retained=previous.position;
+  const auto retained = previous.position;
   session.suspend();
   EXPECT_TRUE(session.getTargetState().position.isApprox(retained));
-  EXPECT_DOUBLE_EQ(session.getTargetState().velocity.norm(),0.0);
+  EXPECT_DOUBLE_EQ(session.getTargetState().velocity.norm(), 0.0);
+}
+
+TEST(TrajectorySessionTest, ResumeReanchorsForwardWithZeroFeedforward) {
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  ASSERT_TRUE(session.generate(makeRecordPoints(), config));
+  for (int i = 0; i < 100; ++i)
+    ASSERT_TRUE(session.updateProgress(Vec3(2, 0, 1), 0.5));
+  session.suspend();
+  ASSERT_TRUE(session.resumeAt(Vec3(1.4, 0, 1)));
+  EXPECT_TRUE(session.getTargetState().position.isApprox(Vec3(1.4, 0, 1), 1e-6));
+  EXPECT_DOUBLE_EQ(session.getTargetState().velocity.norm(), 0);
+  EXPECT_FALSE(session.resumeAt(Vec3(0, 3, 1)));
 }
 
 TEST(TrajectorySessionTest, FinishedRequiresActualAndReferenceArcPositionAndThreeDimensionalStop) {
@@ -346,14 +356,13 @@ TEST(TrajectorySessionTest, FinishedRequiresActualAndReferenceArcPositionAndThre
 
   ASSERT_TRUE(session.updateProgress(Vec3(1.0, 0.0, 1.0), 0.5));
   ASSERT_TRUE(session.updateProgress(goal, 0.5));
-  EXPECT_FALSE(session.isFinished(
-      goal + Vec3(0.3, 0.0, 0.0), Vec3::Zero(), 0.2));
-  EXPECT_FALSE(session.isFinished(
-      goal, Vec3(0.3, 0.0, 0.0), 0.2));
-  EXPECT_FALSE(session.isFinished(goal, Vec3::Zero(),0.2)); // 参考还未走完
-  for(int i=0;i<1000;++i) ASSERT_TRUE(session.updateProgress(goal,0.5));
-  EXPECT_FALSE(session.isFinished(goal, Vec3(0,0,-0.3),0.2));
-  EXPECT_TRUE(session.isFinished(goal, Vec3(0.1,0,0),0.2));
+  EXPECT_FALSE(session.isFinished(goal + Vec3(0.3, 0.0, 0.0), Vec3::Zero(), 0.2));
+  EXPECT_FALSE(session.isFinished(goal, Vec3(0.3, 0.0, 0.0), 0.2));
+  EXPECT_FALSE(session.isFinished(goal, Vec3::Zero(), 0.2)); // 参考还未走完
+  for (int i = 0; i < 1000; ++i)
+    ASSERT_TRUE(session.updateProgress(goal, 0.5));
+  EXPECT_FALSE(session.isFinished(goal, Vec3(0, 0, -0.3), 0.2));
+  EXPECT_TRUE(session.isFinished(goal, Vec3(0.1, 0, 0), 0.2));
 
   session.reset();
   EXPECT_FALSE(session.isValid());
@@ -361,5 +370,5 @@ TEST(TrajectorySessionTest, FinishedRequiresActualAndReferenceArcPositionAndThre
   EXPECT_DOUBLE_EQ(session.getDuration(), 0.0);
 }
 
-}  // namespace
-}  // namespace px4_backtrack::domain
+} // namespace
+} // namespace px4_backtrack::domain
