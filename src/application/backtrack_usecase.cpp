@@ -74,7 +74,7 @@ BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config, PlanningWorker::
 }
 
 TickOutput BacktrackUseCase::tick(double now) {
-  if (!std::isfinite(now)) return TickOutput{};
+  if (!std::isfinite(now)) { TickOutput output; output.current_state=state_machine_.getCurrentState(); return output; }
   const bool clock_reset=last_tick_time_>=0.0 && now<last_tick_time_;
   last_tick_time_=now;
   const bool state_fresh=state_received_at_>=0.0 && now>=state_received_at_ &&
@@ -96,20 +96,20 @@ TickOutput BacktrackUseCase::tick(double now) {
     state_machine_.tick(land);
     TickOutput output; output.current_state=state_machine_.getCurrentState(); return output;
   }
-  if (clock_reset || !inputsFresh(now)) return holdForInvalidInput(now);
-
   const auto state_before_control=state_machine_.getCurrentState();
   const bool owned=state_before_control==domain::State::ReturnActive || state_before_control==domain::State::ReturnRejoin ||
       state_before_control==domain::State::LandingHover ||
       ((state_before_control==domain::State::ReturnPreOffboard || state_before_control==domain::State::Ch18HoverWait) &&
        last_confirmed_mode_=="OFFBOARD");
   last_confirmed_mode_=current_mode_;
-  if (owned && current_mode_!="OFFBOARD") {
+  if (state_fresh && owned && current_mode_!="OFFBOARD") {
     cancelPlanning();
     trajectory_session_->suspend(); last_progress_time_=-1.0;
     route_safety_hold_=input_hold_=false;
     state_machine_.yieldControl();
   }
+
+  if (clock_reset || !inputsFresh(now)) return holdForInvalidInput(now);
 
   // 更新TriggerEvaluator的当前时间（用于RC丢失检测）
   trigger_evaluator_.updateNow(now);
@@ -160,10 +160,8 @@ TickOutput BacktrackUseCase::tick(double now) {
   tick_input.current_position = current_position_;
   tick_input.current_yaw = current_yaw_;
   const auto state_before_tick = state_machine_.getCurrentState();
-  tick_input.trajectory_ready = waypoint_fallback_session_.isValid() ||
-      (trajectory_session_->isValid() &&
-       (state_before_tick != domain::State::ReturnPreOffboard ||
-        isTrajectoryActivationReady(now)));
+  tick_input.trajectory_ready = (waypoint_fallback_session_.isValid() || trajectory_session_->isValid()) &&
+      (state_before_tick != domain::State::ReturnPreOffboard || isTrajectoryActivationReady(now));
   tick_input.trajectory_finished =
       trajectory_session_->isFinished(
           current_position_, current_velocity_,
@@ -269,7 +267,13 @@ void BacktrackUseCase::onStateReceived(bool armed, const std::string& mode, doub
   if (!std::isfinite(received_at) || received_at<0.0 ||
       (state_received_at_>=0.0 && received_at<state_received_at_)) return;
   current_armed_=armed; current_mode_=mode; state_received_at_=received_at;
-  if (!armed) { odom_stamp_=-1.0; localization_reset_=false; }
+  if (!armed) {
+    odom_stamp_=-1.0; localization_reset_=false;
+    has_seen_disarm_=true; arm_after_disarm_detected_=false;
+    cancelPlanning();
+    domain::TickInput disarm; disarm.armed=false; disarm.mode=mode; disarm.now=received_at;
+    state_machine_.tick(disarm);
+  }
 }
 
 void BacktrackUseCase::onBatteryReceived(double percentage) {
@@ -527,9 +531,11 @@ void BacktrackUseCase::handleTrajectoryGeneration(double now) {
   rejoin_trigger_candidate_start_time_=rejoin_success_candidate_start_time_=-1.0;
   yaw_alignment_start_time_=now; yaw_alignment_timeout_reported_=false;
   has_last_path_target_velocity_=false; last_progress_time_=-1.0;
-  if (trajectory_session_->isValid()) {
+  if (trajectory_session_->isValid() || waypoint_fallback_session_.isValid()) {
     const auto locked=state_machine_.getStateData().locked_position;
-    state_machine_.lockPosition(locked,trajectory_session_->getTargetState().yaw);
+    const double yaw=trajectory_session_->isValid() ? trajectory_session_->getTargetState().yaw
+                                                  : waypoint_fallback_session_.currentTarget().yaw;
+    state_machine_.lockPosition(locked,yaw);
   } else if (!waypoint_fallback_session_.isValid()) triggerImmediateLanding();
 }
 
@@ -585,13 +591,14 @@ bool BacktrackUseCase::canResumeReturn() {
 
 void BacktrackUseCase::handleRouteSafety() {
   const auto state=state_machine_.getCurrentState();
-  if (state!=domain::State::ReturnActive && state!=domain::State::ReturnRejoin) return;
+  const bool preparing=state==domain::State::ReturnPreOffboard || state==domain::State::Ch18HoverWait;
+  if (state!=domain::State::ReturnActive && state!=domain::State::ReturnRejoin && !preparing) return;
   const bool valid=recorded_route_.update(current_position_);
   const double predicted=recorded_route_.predictedDeviation(current_position_,current_velocity_,
       config_.route_reaction_s,config_.route_braking_m_s2,config_.route_uncertainty_m);
   const bool unsafe=!valid || recorded_route_.distance()>=config_.route_hard_limit_m ||
       predicted>=config_.route_normal_limit_m;
-  const bool fallback_off_route=waypoint_fallback_session_.isValid() &&
+  const bool fallback_off_route=(waypoint_fallback_session_.isValid() || preparing) &&
       recorded_route_.distance()>=config_.rejoin_config.trigger_dist_m;
   if (unsafe || fallback_off_route) {
     ROS_ERROR("[BacktrackUseCase] Original route safety hold: distance=%.3f predicted=%.3f",
@@ -607,12 +614,13 @@ void BacktrackUseCase::handleRouteSafety() {
 }
 
 bool BacktrackUseCase::isTrajectoryActivationReady(double now) {
-  if (!trajectory_session_->isValid()) {
-    return false;
-  }
-
-  const double yaw_error = wrappedAngleError(
-      current_yaw_, trajectory_session_->getTargetState().yaw);
+  if (!trajectory_session_->isValid() && !waypoint_fallback_session_.isValid()) return false;
+  const auto target_position=trajectory_session_->isValid() ? trajectory_session_->getTargetState().position
+                                                           : waypoint_fallback_session_.currentTarget().position;
+  if ((target_position-current_position_).norm()>0.201 || current_velocity_.norm()>0.20) return false;
+  const double target_yaw=trajectory_session_->isValid() ? trajectory_session_->getTargetState().yaw
+                                                       : waypoint_fallback_session_.currentTarget().yaw;
+  const double yaw_error=wrappedAngleError(current_yaw_,target_yaw);
   if (yaw_error <= kYawAlignmentToleranceRad) {
     return true;
   }

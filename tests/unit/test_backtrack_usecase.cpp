@@ -184,6 +184,36 @@ TEST(BacktrackUseCaseTest, BlockedPlanningKeepsPublishingHoldAndAutoLandCancelsO
   EXPECT_EQ(out.current_state,domain::State::AutoLandYield); EXPECT_FALSE(out.setpoint); EXPECT_FALSE(out.mode_request);
 }
 
+TEST(BacktrackUseCaseTest, FreshExternalExitWinsOverInvalidOdometry) {
+  Flight f; f.recordLine(); f.start(); f.mode="ALTCTL";
+  f.usecase.onOdomReceived(domain::Vec3::Constant(std::numeric_limits<double>::quiet_NaN()),f.velocity,f.yaw,f.stamp+0.01,f.now+0.01);
+  const auto out=f.step(0.05,false);
+  EXPECT_EQ(out.current_state,domain::State::ControlYield); EXPECT_FALSE(out.setpoint); EXPECT_FALSE(out.mode_request);
+}
+
+TEST(BacktrackUseCaseTest, PreparationDriftCancelsBlockedPlanBeforeActivation) {
+  std::promise<void> release,entered;
+  auto gate=release.get_future().share(); auto started=entered.get_future();
+  Flight f(makeConfig(),[&](auto& session,const auto& points,const auto& config) {
+    entered.set_value(); gate.wait(); return session.generate(points,config);
+  });
+  f.recordLine(); f.rc(1000); f.step(); f.step();
+  const auto ready=started.wait_for(std::chrono::seconds(2));
+  if(ready!=std::future_status::ready) { release.set_value(); FAIL()<<"Planner not started"; }
+  f.position.z()+=0.16; const auto out=f.step(); release.set_value();
+  EXPECT_EQ(out.current_state,domain::State::Paused); ASSERT_TRUE(out.setpoint);
+  EXPECT_DOUBLE_EQ(out.setpoint->velocity.norm(),0.0);
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  EXPECT_EQ(f.step().current_state,domain::State::Paused);
+}
+
+TEST(BacktrackUseCaseTest, DisarmRearmBetweenTicksCannotReuseOldTask) {
+  Flight f; f.recordLine(); f.start();
+  f.usecase.onStateReceived(false,"POSCTL",f.now+0.01);
+  f.mode="POSCTL"; const auto out=f.step();
+  EXPECT_EQ(out.current_state,domain::State::WaitRecordDelay); EXPECT_FALSE(out.setpoint);
+}
+
 TEST(BacktrackUseCaseTest, RejectsInvalidEngineeringLimits) {
   auto c=makeConfig(); c.route_braking_m_s2=0;
   EXPECT_THROW(BacktrackUseCase usecase(c),std::invalid_argument);
