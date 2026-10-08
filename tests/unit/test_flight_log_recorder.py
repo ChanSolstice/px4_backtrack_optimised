@@ -20,7 +20,7 @@ sys.modules[SPEC.name] = recorder_module
 SPEC.loader.exec_module(recorder_module)
 
 
-def test_child(command, **kwargs):
+def spawn_child_process(command, **kwargs):
     del command
     return subprocess.Popen(
         [sys.executable, "-c", "import signal,time; signal.signal(signal.SIGINT, lambda *_: exit(0)); time.sleep(60)"],
@@ -105,7 +105,7 @@ class RecorderTest(unittest.TestCase):
         first.params = {"trajectory_config_path": str(config_path), "rejected_value": float("nan")}
         second = self.make_recorder()
         for recorder in (first, second):
-            recorder.start(popen=test_child)
+            recorder.start(popen=spawn_child_process)
             self.assertEqual(recorder.state, "recording", recorder.error)
         self.assertNotEqual(first.run_dir, second.run_dir)
         first.attach_configuration({"build_revision": "0123456", "node_instance_id": "first"})
@@ -152,7 +152,7 @@ class RecorderTest(unittest.TestCase):
 
     def test_low_space_heartbeat_reports_suspension(self):
         recorder = self.make_recorder()
-        recorder.start(popen=test_child)
+        recorder.start(popen=spawn_child_process)
         with mock.patch.object(recorder_module.shutil, "disk_usage", return_value=mock.Mock(free=1)):
             self.assertEqual(recorder.status()["state"], "insufficient_space")
 
