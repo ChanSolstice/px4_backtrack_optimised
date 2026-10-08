@@ -13,6 +13,8 @@
 | 保留拐角、停稳转向、剩余航点恢复 | src/domain/waypoint_fallback_session.cpp |
 | 录制、触发、路径 yaw、Rejoin 退出 | src/domain/recording_buffer.cpp、trigger_evaluator.cpp、path_yaw.cpp、rejoin_policy.cpp |
 | ROS 坐标和消息校验、setpoint/状态、后台模式 RPC | src/adapters/ros_subscribers.cpp、ros_publishers.cpp、ros_services.cpp |
+| 被动控制快照、原始规划证据与节点实例标识 | include/px4_backtrack/application/control_diagnostics.hpp、src/adapters/diagnostics_publisher.cpp、planning_diagnostics.cpp、msg/ |
+| 独立 rosbag 录制、绝对路径/空间/保留策略、离线报告 | scripts/record_flight_log.py、scripts/inspect_flight_log.py |
 | 配置、CSV 和可视化 | src/infrastructure/、src/adapters/debug_publishers.cpp |
 | 当前运行参数 | config/backtrack_params.yaml、trajectory_config.yaml、launch/backtrack.launch |
 | 单元/业务回归与真实节点隔离联调 | tests/unit/、tests/integration/ros_control_scenarios.py |
@@ -26,5 +28,7 @@
 - 时钟使用 steady；消息 stamp 用于消息有效性和录制；odom twist 先从 child 旋转到父 ENU。
 - 新飞行、暂停和接管取消旧代次；同步 RPC 结果不作为模式已切换依据。
 - 原路偏移指标与目标跟踪误差分别记录。不得把软件门槛、mock 或编译通过表述为实机达标。
+- 诊断只读业务缓存，不重新投影或推进；文件写入归独立 rosbag 进程。CSV 独立保留。用 node_instance_id + flight_id + plan_id 关联证据，validity 与时间语义见统一文档。
+- tick_cost 不含诊断序列化；控制调度延迟应同时看 tick_interval、原始 setpoint 时间和录制健康。滚动 bag 中没有记录的前段不能由报告推断补齐。
 
 修改配置应同时检查 YAML、ConfigLoader、UseCaseConfig 与验证预算；修改状态或话题应同步唯一维护文档。每个问题独立提交，算法接口以 trajectory_core 公共头文件及该仓库的统一审核为准。
