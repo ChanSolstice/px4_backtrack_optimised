@@ -556,6 +556,25 @@ def write_reports(inspector, output_dir, evidence=None):
     return summary
 
 
+def order_bag_chunks(metadata):
+    """Keep a split series in file order even when ROS time freezes or resets.
+
+    Each item is (first ROS timestamp, path, size). Order independent series by
+    the first available split's time; within a series use the numeric index.
+    """
+    groups = {}
+    for item in metadata:
+        _, path, _ = item
+        match = re.match(r"^(.*)_(\d+)\.bag$", path.name)
+        key = (str(path.parent), match.group(1) if match else path.name)
+        groups.setdefault(key, []).append((int(match.group(2)) if match else 0, item))
+    series = []
+    for key, chunks in groups.items():
+        chunks.sort(key=lambda indexed: indexed[0])
+        series.append((chunks[0][1][0], key, [item for _, item in chunks]))
+    return [item for _, _, chunks in sorted(series) for item in chunks]
+
+
 def write_json(path, data):
     nonfinite = {}
     clean = json_value(data, nonfinite)
@@ -639,7 +658,7 @@ def main(argv=None):
             inspector.issue("unreadable_bag", "{}: {}: {}. Keep the original; recovery/reindex must "
                             "be attempted on a copy.".format(path, type(exc).__name__, exc), "error")
             evidence["bags"].append({"path": str(path), "read_ok": False})
-    for _, path, size in sorted(bag_order):
+    for _, path, size in order_bag_chunks(bag_order):
         count = 0
         read_ok = True
         try:

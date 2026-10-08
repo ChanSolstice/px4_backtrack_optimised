@@ -56,6 +56,17 @@ def planning(**changes):
 
 
 class FlightLogInspectorTest(unittest.TestCase):
+    def test_numeric_chunk_order_preserves_paused_and_reset_ros_time(self):
+        paused = [(10., Path('/run/flight_10.bag'), 1), (10., Path('/run/flight_9.bag'), 1),
+                  (10., Path('/run/flight_7.bag'), 1), (10., Path('/run/flight_13.bag'), 1)]
+        ordered = log.order_bag_chunks(paused)
+        self.assertEqual([p.name for _, p, _ in ordered],
+                         ['flight_7.bag', 'flight_9.bag', 'flight_10.bag', 'flight_13.bag'])
+        reset = [(5., Path('/run/flight_1.bag'), 1), (20., Path('/run/flight_0.bag'), 1),
+                 (1., Path('/earlier/single.bag'), 1)]
+        self.assertEqual([str(p) for _, p, _ in log.order_bag_chunks(reset)],
+                         ['/earlier/single.bag', '/run/flight_0.bag', '/run/flight_1.bag'])
+
     def test_speed_route_progress_and_timing_are_grouped(self):
         inspector = log.FlightLogInspector()
         inspector.consume(log.PLANNING_TOPIC, planning(), 99.9)
