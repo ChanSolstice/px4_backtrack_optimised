@@ -157,7 +157,7 @@ target_link_libraries(backtrack_node
 #############
 
 ## Install executables
-catkin_install_python(PROGRAMS scripts/record_flight_log.py
+catkin_install_python(PROGRAMS scripts/record_flight_log.py scripts/inspect_flight_log.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 install(TARGETS backtrack_node
@@ -195,6 +195,7 @@ install(DIRECTORY config/
 
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(tests/unit/test_flight_log_recorder.py)
+  catkin_add_nosetests(tests/unit/test_flight_log_inspector.py)
   catkin_add_gtest(test_control_diagnostics tests/unit/test_main.cpp tests/unit/test_control_diagnostics.cpp)
   if(TARGET test_control_diagnostics)
     target_link_libraries(test_control_diagnostics ${PROJECT_NAME}_lib ${catkin_LIBRARIES})
