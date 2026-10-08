@@ -1,0 +1,286 @@
+{
+  "date": "2026-10-08",
+  "branch": "feat/return-diagnostics",
+  "base_return_revision": "1152820",
+  "algorithm_branch": "fix/trajectory-engineering-contracts",
+  "algorithm_revision": "597fd03",
+  "build_revision_under_test": "6ac6346",
+  "environment": {
+    "host": "x86_64",
+    "ros": "Noetic",
+    "container": "ROS_Noetic",
+    "workspace": "/tmp/backtrack-log-ws",
+    "live_px4_or_user_ros_master_connected": false
+  },
+  "release_build_and_install": "PASS",
+  "unit_tests": {
+    "cpp_unique_cases": 98,
+    "python_recorder_cases": 16,
+    "python_inspector_cases": 15,
+    "total_unique_cases": 129,
+    "errors": 0,
+    "failures": 0,
+    "entry": "catkin_make run_tests_px4_backtrack_optimised; catkin_test_results build/test_results/px4_backtrack_optimised",
+    "count_note": "Count testcase elements once per result file; catkin summary includes nested GTest counts."
+  },
+  "control_and_logging_integration": {
+    "checks": "PASS",
+    "node_instances": 2,
+    "csv_files_preserved": 2,
+    "control_samples": 492,
+    "planning_samples": 4,
+    "captured_topic_counts": {
+      "/rosout": 88,
+      "/px4_backtrack/log/recorder_status": 27,
+      "/mavros/rc/in": 1246,
+      "/mavros/state": 1246,
+      "/Odometry_px4": 1233,
+      "/px4_backtrack/log/configuration": 2,
+      "/px4_backtrack/log/control": 492,
+      "/status_rc_loss": 488,
+      "/px4_backtrack/state": 488,
+      "/px4_backtrack/low_battery": 488,
+      "/mavros/setpoint_raw/local": 279,
+      "/px4_backtrack/log/planning": 4,
+      "/px4_backtrack/debug/waypoints": 1,
+      "/px4_backtrack/debug/trajectory": 1
+    },
+    "sequence_gaps": 0,
+    "failed_planning_inputs": [
+      56
+    ],
+    "recorder_failure_publish_count": 20,
+    "recorder_failure_max_publish_gap_s": 0.0502462669974193,
+    "manifest_closed": true,
+    "active_bags": 0,
+    "configuration_history": 2,
+    "inspector_issue_codes": [
+      "missing_diagnostic_prefix",
+      "missing_diagnostic_prefix",
+      "recorder_unhealthy"
+    ]
+  },
+  "installed_launch_smoke": {
+    "checks": "PASS",
+    "scenarios": {
+      "enabled": {
+        "control_samples": 29,
+        "bag_topics": {
+          "/rosout": 3,
+          "/px4_backtrack/log/configuration": 1,
+          "/px4_backtrack/log/recorder_status": 2,
+          "/px4_backtrack/log/control": 17,
+          "/px4_backtrack/state": 17,
+          "/px4_backtrack/low_battery": 17,
+          "/status_rc_loss": 17
+        },
+        "closed": true,
+        "active_bags": 0,
+        "parameter_snapshot": true,
+        "startup_yaml_snapshot": true
+      },
+      "disabled": {
+        "controls": 0,
+        "creates_log_directory": false,
+        "health": "disabled"
+      },
+      "init_failed": {
+        "control_samples": 0,
+        "bag_topics": {
+          "/rosout": 3,
+          "/px4_backtrack/log/recorder_status": 2
+        },
+        "closed": true,
+        "active_bags": 0,
+        "parameter_snapshot": true,
+        "startup_yaml_snapshot": true
+      },
+      "bad_split": {
+        "controls": 29,
+        "creates_log_directory": false,
+        "health": "failed",
+        "flight_node_continues": true
+      }
+    },
+    "scope": "installed launch on isolated ROS master; no FCU connected"
+  },
+  "recorder_clock_and_path_probe": {
+    "normal": {
+      "returncode": 0,
+      "frozen_ros_time": 10.0,
+      "status_heartbeats": 5,
+      "bag_topics_counts": {
+        "/clock": 52,
+        "/px4_backtrack/log/configuration": 2,
+        "/px4_backtrack/log/recorder_status": 6,
+        "/rosout": 4,
+        "/px4_backtrack/state": 50,
+        "/px4_backtrack/log/control": 50
+      }
+    },
+    "relative_path": {
+      "returncode": 1,
+      "error": "log_output_dir must be absolute; '~' is not expanded"
+    },
+    "blocked_path": {
+      "returncode": 1,
+      "error": "[Errno 17] File exists: '/tmp/backtrack-log-probe-0oqgf6i2/not_a_directory'"
+    },
+    "pass": true
+  },
+  "limits": [
+    "ROS integration uses synthetic FCU/odometry and an isolated master, not PX4 dynamics.",
+    "Startup subscriptions missed the first few diagnostics; inspector correctly flags missing_diagnostic_prefix.",
+    "recorder_unhealthy is deliberately induced by invalid relative path.",
+    "No RK3588 or actual SLAM/flight validation in this logging task.",
+    "One-hour recording size was tested as a synthetic snapshot; no actual one-hour flight or recording endurance test."
+  ],
+  "large_snapshot_and_split_probe": {
+    "pass": true,
+    "point_count": 54000,
+    "represented_recording_duration_s": 3599.9333333333334,
+    "producer": "actual C++ DiagnosticsPublisher from built repository library",
+    "frozen_ros_time_s": 10.0,
+    "planning_publish_cost_ms": [
+      1.435446902178228,
+      2.0012890454381704
+    ],
+    "control_stress": {
+      "samples": 295,
+      "missing_live_sequences": 0,
+      "reported_interval_mean_s": 0.04999987316925584,
+      "reported_interval_p99_s": 0.05008248507510871,
+      "reported_interval_max_s": 0.050107294926419854,
+      "arrival_interval_max_s": 0.05050059896893799
+    },
+    "retained_bags": [
+      {
+        "name": "flight_0.bag",
+        "bytes": 67513431,
+        "planning_phases": [
+          "started",
+          "finished"
+        ],
+        "raw_points_each": 54000,
+        "control_samples": 130,
+        "rviz_marker_counts": [
+          54003
+        ],
+        "rviz_path_pose_counts": [
+          20000
+        ]
+      },
+      {
+        "name": "flight_1.bag",
+        "bytes": 67509435,
+        "planning_phases": [
+          "finished"
+        ],
+        "raw_points_each": 54000,
+        "control_samples": 126,
+        "rviz_marker_counts": [
+          54003
+        ],
+        "rviz_path_pose_counts": [
+          20000
+        ]
+      },
+      {
+        "name": "flight_2.bag",
+        "bytes": 20254486,
+        "planning_phases": [
+          "finished"
+        ],
+        "raw_points_each": 54000,
+        "control_samples": 59,
+        "rviz_marker_counts": [
+          54003
+        ],
+        "rviz_path_pose_counts": [
+          20000
+        ]
+      }
+    ],
+    "manifest": "/tmp/log-scale-probe/evidence_1791453620015771254/runs/run_20261008T100020_730980Z_q_18hj1z/manifest.json",
+    "inspector_returncode": 0,
+    "last_slice_inspector_returncode": 0,
+    "last_slice_restored_points": 54000,
+    "evidence_directory": "/tmp/log-scale-probe/evidence_1791453620015771254",
+    "limits": [
+      "desktop/container performance, not RK3588",
+      "synthetic 20Hz control publisher; no flight control algorithm",
+      "compressed time stress test, not one hour continuous operation",
+      "min-space=1MB and six 64MB slices; buffer32MB is production default",
+      "extra incompressible sensor traffic is synthetic; no real SLAM/Gazebo/FCU"
+    ]
+  },
+  "reproduced_small_split_fault": {
+    "reproduced": true,
+    "point_count": 54000,
+    "split_mb": 1,
+    "max_splits_parameter": 6,
+    "actual_retained_completed_bags": 7,
+    "created_slice_index_max": 4513,
+    "minimum_created_slices": 4514,
+    "child_result": {
+      "exit_code": 0,
+      "escalations": [
+        "SIGTERM"
+      ]
+    },
+    "interrupted": true,
+    "active_bag_files": [],
+    "cause": "latched PlanningTrace is about 2.16MB; repeat-latched exceeds 1MB at every new slice and drives repeated rotation",
+    "manifest": "/tmp/log-scale-probe/evidence_1791453156310204318/runs/run_20261008T095236_999013Z_u2xtdwub/manifest.json"
+  },
+  "numeric_split_order_fix": {
+    "pass": true,
+    "before_control_sequence": {
+      "missing_between_samples": 0,
+      "resets": 1,
+      "duplicates": 0,
+      "by_node_instance": {
+        "1791453373621545921-73995": {
+          "first": 80,
+          "last": 79,
+          "missing_between_samples": 0,
+          "resets": 1,
+          "duplicates": 0
+        }
+      }
+    },
+    "after_control_sequence": {
+      "missing_between_samples": 0,
+      "resets": 0,
+      "duplicates": 0,
+      "by_node_instance": {
+        "1791453373621545921-73995": {
+          "first": 61,
+          "last": 125,
+          "missing_between_samples": 0,
+          "resets": 0,
+          "duplicates": 0
+        }
+      }
+    },
+    "after_issue_codes": [
+      "missing_bag_prefix",
+      "missing_diagnostic_prefix"
+    ],
+    "file_read_order": [
+      "flight_7.bag",
+      "flight_8.bag",
+      "flight_9.bag",
+      "flight_10.bag",
+      "flight_11.bag",
+      "flight_12.bag",
+      "flight_13.bag"
+    ]
+  },
+  "pressure_probe_source": {
+    "cpp": "pressure_probe.cpp",
+    "python": "pressure_probe.py",
+    "purpose": "Audit snapshot of actual synthetic stress probe, not a product launch entry.",
+    "reproduction_limits": "Requires manual adjustment of temporary workspace paths, binary compile/link, and an unused isolated master port; do not point it at a running flight master."
+  }
+}

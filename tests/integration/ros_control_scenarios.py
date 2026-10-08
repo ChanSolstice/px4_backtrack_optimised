@@ -21,8 +21,12 @@ def main():
     parser.add_argument('--node', required=True)
     parser.add_argument('--config-dir', required=True)
     parser.add_argument('--output-dir', required=True)
+    parser.add_argument('--recorder', help='Optional record_flight_log.py executable')
+    parser.add_argument('--inspector', help='Required with --recorder: inspect_flight_log.py executable')
     args = parser.parse_args()
-    output = Path(args.output_dir)
+    if bool(args.recorder) != bool(args.inspector):
+        parser.error('--recorder and --inspector must be used together')
+    output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
@@ -67,6 +71,8 @@ def main():
                       enable_trigger_low_battery=False, debug_enable_csv_dump=True,
                       debug_csv_output_dir=str(output / 'csv'), debug_enable_rviz_publish=True,
                       trajectory_config_path=str(Path(args.config_dir) / 'trajectory_config.yaml'))
+        if args.recorder:
+            params.update(log_enable=True, log_output_dir=str(output / 'flight logs'))
         for key, value in params.items():
             rospy.set_param('/backtrack_node/' + key, value)
 
@@ -74,6 +80,7 @@ def main():
         state = {'armed': False, 'mode': 'POSCTL', 'x': 0.0, 'velocity': 0.0,
                  'y': 0.0, 'yaw': math.pi, 'odom': True, 'ch7': 1500, 'follow': False, 'status': '', 'target': None}
         setpoints, statuses, requests = [], [], []
+        controls, planning, recorder_health = [], [], []
         blocked = threading.Event()
         service_count = [0]
 
@@ -109,6 +116,39 @@ def main():
 
         rospy.Subscriber('/mavros/setpoint_raw/local', PositionTarget, on_target, queue_size=200)
         rospy.Subscriber('/px4_backtrack/state', String, on_status, queue_size=200)
+        if args.recorder:
+            from px4_backtrack_optimised.msg import ControlDiagnostics, PlanningTrace
+
+            def on_control(message):
+                with lock:
+                    controls.append(message)
+
+            def on_planning(message):
+                with lock:
+                    planning.append(message)
+
+            def on_recorder(message):
+                with lock:
+                    recorder_health.append(json.loads(message.data))
+
+            rospy.Subscriber('/px4_backtrack/log/control', ControlDiagnostics,
+                             on_control, queue_size=500)
+            rospy.Subscriber('/px4_backtrack/log/planning', PlanningTrace,
+                             on_planning, queue_size=20)
+            rospy.Subscriber('/px4_backtrack/log/recorder_status', String,
+                             on_recorder, queue_size=20)
+            recorder = start([args.recorder], 'recorder')
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                with lock:
+                    ready = any(m.get('state') == 'recording' for m in recorder_health)
+                if ready and odom_pub.get_num_connections() >= 1:
+                    break
+                if recorder.poll() is not None:
+                    raise AssertionError('recorder exited; inspect recorder.log')
+                time.sleep(0.05)
+            else:
+                raise AssertionError('recorder did not subscribe/start')
 
         def publish(_):
             with lock:
@@ -259,6 +299,30 @@ def main():
         with lock:
             masks = [m.type_mask for t,m in setpoints if t>=fallback_began]
             assert 0x09F8 in masks, masks
+        if args.recorder:
+            # Invalid log configuration is contained in its own process while control continues.
+            rospy.set_param('/bad_log_config', dict(log_output_dir='relative/logs'))
+            bad_recorder = start([args.recorder, '__name:=bad_log_recorder',
+                                  '_config_namespace:=/bad_log_config'], 'bad_recorder')
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                with lock:
+                    failed = any(m.get('state') == 'failed' for m in recorder_health)
+                if failed:
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError('invalid path recorder did not report failure')
+            began_failure = time.monotonic()
+            time.sleep(1.0)
+            with lock:
+                continued = [t for t, _ in setpoints if t >= began_failure]
+            assert len(continued) >= 12, continued
+            failure_max_gap = max(b-a for a, b in zip(continued, continued[1:]))
+            assert failure_max_gap < 0.15, failure_max_gap
+            os.killpg(bad_recorder.pid, signal.SIGINT)
+            bad_recorder.wait(timeout=6)
+        with lock:
             state['mode']='AUTO.LAND'
         wait_status('AutoLandYield')
         result = dict(blocked_rpc_s=ended-began, heartbeat_count=len(heartbeat),
@@ -267,6 +331,59 @@ def main():
                       stale_odom_pause=True, external_mode_yield=True, checks='PASS')
         (output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         print(json.dumps(result, ensure_ascii=False), flush=True)
+        if args.recorder:
+            time.sleep(1.2)  # let recorder persist final configuration/status callbacks
+            with lock:
+                assert len({m.node_instance_id for m in controls}) == 2
+                assert any(m.input_hold for m in controls)
+                assert any(m.current_state == 'ControlYield' for m in controls)
+                assert any(m.projection_valid and m.clock_rate < 0.01 and
+                           m.current_state == 'ReturnActive' for m in controls)
+                finished = [m for m in planning if m.phase == 'finished']
+                assert any(m.success for m in finished)
+                assert any(m.status == 'FIT_FAILED' and m.fallback_ready for m in finished)
+                assert all(m.raw_position and len(m.raw_position) == len(m.raw_yaw_rad) ==
+                           len(m.raw_timestamp_s) and m.effective_config for m in finished)
+            csv_files = list((output / 'csv').glob('*.csv'))
+            assert len(csv_files) >= 2, csv_files
+            os.killpg(recorder.pid, signal.SIGINT)
+            assert recorder.wait(timeout=12) == 0
+            runs = list((output / 'flight logs').glob('run_*'))
+            assert len(runs) == 1, runs
+            run_dir = runs[0]
+            manifest = json.loads((run_dir / 'manifest.json').read_text())
+            assert manifest['closed'] and not manifest['interrupted'], manifest
+            assert not list(run_dir.glob('*.active'))
+            assert len(manifest['runtime_configurations']) == 2
+            report_dir = output / 'inspection'
+            subprocess.run([args.inspector, str(run_dir), '--output-dir', str(report_dir)],
+                           check=True)
+            summary = json.loads((report_dir / 'summary.json').read_text())
+            assert not any(i['code'] == 'missing_field' for i in summary['issues'])
+            assert len({f['node_instance_id'] for f in summary['flights'].values()}) == 2
+            assert summary['topic_counts']['/mavros/setpoint_raw/local'] > 100
+            assert summary['control_sequence']['missing_between_samples'] == 0
+            failures = [p for p in summary['plans'].values()
+                        if p.get('result', {}).get('status') == 'FIT_FAILED']
+            assert failures and all(p['input_available'] and p['raw_point_count'] > 20
+                                    for p in failures)
+            events = (report_dir / 'events.log').read_text()
+            assert 'planning_finished' in events and 'FIT_FAILED' in events
+            assert 'mode_service' in events and 'input_hold' in events
+            log_result = dict(checks='PASS', node_instances=2,
+                              csv_files_preserved=len(csv_files),
+                              control_samples=summary['topic_counts']['/px4_backtrack/log/control'],
+                              planning_samples=summary['topic_counts']['/px4_backtrack/log/planning'],
+                              captured_topic_counts=summary['topic_counts'],
+                              sequence_gaps=summary['control_sequence']['missing_between_samples'],
+                              failed_planning_inputs=[p['raw_point_count'] for p in failures],
+                              recorder_failure_publish_count=len(continued),
+                              recorder_failure_max_publish_gap_s=failure_max_gap,
+                              manifest_closed=True, active_bags=0,
+                              configuration_history=len(manifest['runtime_configurations']),
+                              inspector_issue_codes=[i['code'] for i in summary['issues']])
+            (output / 'logging_result.json').write_text(json.dumps(log_result, indent=2) + '\n')
+            print(json.dumps(log_result, ensure_ascii=False), flush=True)
         timer.shutdown()
         rospy.signal_shutdown('finished')
     finally:
