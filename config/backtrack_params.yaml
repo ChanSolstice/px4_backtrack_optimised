@@ -133,6 +133,29 @@ debug_trajectory_sample_dt: 0.1
 # 是否启用ROS可视化话题发布（录制航迹点+返航轨迹）
 debug_enable_rviz_publish: true
 
+# ============================
+# 运行日志（独立 rosbag 录制进程；保留上面的规划 CSV）
+# ============================
+log_enable: true
+
+# 留空使用运行用户 ~/.ros/backtrack_logs；非空必须为绝对路径，不展开 ~。
+# Docker 中填写容器内路径，例如已挂载的 /root/ROS_Noetic/backtrack_ws/flight_logs。
+log_output_dir: ""
+
+# 每片约 64 MiB，单运行滚动保留最多 16 片；32 MiB 有界录制缓冲。
+log_split_size_mb: 64
+log_max_splits: 16
+log_buffer_mb: 32
+
+# 剩余磁盘不足时暂停/拒绝录制并告警；不会停止返航节点。
+log_min_space_mb: 256
+
+# 包含当前运行，优先清理已正常关闭的旧运行。活跃/未关闭目录保留。
+log_keep_runs: 5
+
+# 如需记录额外或重映射的定位话题，可配置 log_topics: ["/extra/topic"]。
+# 这是追加列表，核心输入/输出/诊断话题始终保留。
+
 # 原始录制折线三维偏离预算。制动能力和定位不确定度须用实机验证。
 route_normal_limit_m: 0.30
 route_hard_limit_m: 0.50

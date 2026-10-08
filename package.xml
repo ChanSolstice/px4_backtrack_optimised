@@ -14,6 +14,9 @@
 
   <build_depend>message_generation</build_depend>
   <exec_depend>message_runtime</exec_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>rosbag</exec_depend>
+  <test_depend>python3-nose</test_depend>
 
   <!-- ROS core dependencies -->
   <depend>roscpp</depend>

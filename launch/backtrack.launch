@@ -13,6 +13,12 @@
     <!-- <env name="ROSCONSOLE_CONFIG_FILE" value="$(find px4_backtrack_optimised)/config/rosconsole.conf"/> -->
   </node>
 
+  <!-- 独立录制进程；读取同一份 /backtrack_node/log_* 参数，失败不终止返航。 -->
+  <node name="backtrack_log_recorder" pkg="px4_backtrack_optimised"
+        type="record_flight_log.py" output="screen">
+    <param name="config_namespace" value="/backtrack_node" />
+  </node>
+
   <!-- 可选：启动 MAVROS (如果未在其他地方启动) -->
   <!-- <include file="$(find mavros)/launch/px4.launch">
     <arg name="fcu_url" value="/dev/ttyACM0:921600" />
