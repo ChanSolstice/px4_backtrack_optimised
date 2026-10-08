@@ -12,6 +12,7 @@ add_compile_options(-Wall -Wextra)
 ## Find catkin macros and libraries
 find_package(catkin REQUIRED COMPONENTS
   roscpp
+  message_generation
   roslib
   tf2
   std_msgs
@@ -30,10 +31,14 @@ find_package(Threads REQUIRED)
 ###################################
 ## catkin specific configuration ##
 ###################################
+add_message_files(FILES ControlDiagnostics.msg PlanningTrace.msg)
+generate_messages(DEPENDENCIES std_msgs geometry_msgs)
+
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ${PROJECT_NAME}_lib
   CATKIN_DEPENDS
+    message_runtime
     roscpp
     roslib
     tf2
@@ -83,6 +88,8 @@ set(ADAPTERS_SOURCES
   src/adapters/ros_publishers.cpp
   src/adapters/ros_services.cpp
   src/adapters/debug_publishers.cpp
+  src/adapters/diagnostics_publisher.cpp
+  src/adapters/planning_diagnostics.cpp
 )
 
 ## Infrastructure层源文件
@@ -115,6 +122,18 @@ target_link_libraries(${PROJECT_NAME}_lib
   Threads::Threads
 )
 
+# The recorded revision describes the built sources, not a later runtime checkout.
+set(BACKTRACK_BUILD_REVISION "" CACHE STRING "Revision embedded in diagnostic metadata")
+if(NOT BACKTRACK_BUILD_REVISION)
+  execute_process(COMMAND git describe --always --dirty
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE BACKTRACK_BUILD_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+  if(NOT BACKTRACK_BUILD_REVISION)
+    set(BACKTRACK_BUILD_REVISION "unknown")
+  endif()
+endif()
+
 ## 构建主节点可执行文件
 add_executable(backtrack_node
   src/backtrack_node.cpp
@@ -125,6 +144,8 @@ add_dependencies(backtrack_node
   ${${PROJECT_NAME}_EXPORTED_TARGETS}
   ${catkin_EXPORTED_TARGETS}
 )
+
+target_compile_definitions(${PROJECT_NAME}_lib PRIVATE BACKTRACK_BUILD_REVISION="${BACKTRACK_BUILD_REVISION}")
 
 target_link_libraries(backtrack_node
   ${PROJECT_NAME}_lib
@@ -170,6 +191,10 @@ install(DIRECTORY config/
 #############
 
 if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_control_diagnostics tests/unit/test_main.cpp tests/unit/test_control_diagnostics.cpp)
+  if(TARGET test_control_diagnostics)
+    target_link_libraries(test_control_diagnostics ${PROJECT_NAME}_lib ${catkin_LIBRARIES})
+  endif()
   catkin_add_gtest(test_async_control tests/unit/test_main.cpp tests/unit/test_async_control.cpp)
   if(TARGET test_async_control)
     target_link_libraries(test_async_control ${PROJECT_NAME}_lib ${catkin_LIBRARIES})

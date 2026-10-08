@@ -8,6 +8,7 @@
 #include "px4_backtrack/domain/rejoin_policy.hpp"
 #include "px4_backtrack/domain/recorded_route.hpp"
 #include "planning_worker.hpp"
+#include "control_diagnostics.hpp"
 
 #include <trajectory_core/trajectory_core.hpp>
 #include <memory>
@@ -110,6 +111,9 @@ public:
   /// @return tick输出
   TickOutput tick(double now);
 
+  /// tick 后查询，不推进参考时钟、路径投影或状态机。
+  ControlDiagnostics diagnostics(double now, const TickOutput &output) const;
+
   /// 里程计回调
   /// @param position 位置 (ENU, m)
   /// @param velocity 线速度 (ENU, m/s)
@@ -137,6 +141,9 @@ public:
   /// 设置 ROS debug publisher（可选）
   void setDebugPublisher(std::shared_ptr<adapters::DebugPublisher> publisher);
 
+  /// observer 仅由规划工作线程调用；设置应在接收返航任务前完成。
+  void setPlanningObserver(PlanningObserver observer);
+
 private:
   /// 配置参数
   UseCaseConfig config_;
@@ -146,6 +153,7 @@ private:
   domain::TriggerEvaluator trigger_evaluator_;
   std::unique_ptr<domain::TrajectorySession> trajectory_session_;
   PlanningWorker planning_worker_;
+  PlanningObserver planning_observer_;
   bool planning_inflight_ = false;
   void cancelPlanning();
   domain::WaypointFallbackSession waypoint_fallback_session_;
@@ -172,6 +180,17 @@ private:
   double odom_stamp_ = -1.0, last_tick_time_ = -1.0;
   bool odom_valid_ = false, localization_reset_ = false, input_hold_ = false;
   bool inputsFresh(double now) const;
+  std::string inputFailureReason(double now) const;
+  void recordOperation(const std::string &reason, double now);
+  void rejectOdometry(const std::string &reason, double now);
+
+  // 诊断标识与缓存只用于观测，不参与业务判定。
+  uint64_t flight_id_ = 0, plan_id_ = 0, operation_sequence_ = 0;
+  double operation_steady_time_ = -1.0;
+  std::string last_trigger_, last_trigger_reason_, last_operation_, odometry_rejection_reason_;
+  bool tick_clock_reset_ = false, route_projection_valid_ = false;
+  bool route_prediction_valid_ = false;
+  double route_predicted_deviation_ = 0.0, route_safety_evaluation_time_ = -1.0;
   TickOutput holdForInvalidInput(double now);
 
   // 飞行周期复位检测

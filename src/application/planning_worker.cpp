@@ -4,6 +4,7 @@
 #include <ros/console.h>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 
 namespace px4_backtrack::application {
 PlanningWorker::PlanningWorker(Planner planner)
@@ -52,21 +53,59 @@ void PlanningWorker::run() {
     }
     auto result = std::make_unique<PlanningResult>();
     result->trajectory = std::make_unique<domain::TrajectorySession>();
+    PlanningTrace trace;
+    trace.flight_id = input.flight_id;
+    trace.plan_id = input.plan_id;
+    trace.points = &input.points;
+    trace.config = &input.config;
+    const auto observe = [&](const char *phase) {
+      if (!input.observer)
+        return;
+      trace.phase = phase;
+      try {
+        input.observer(trace);
+      } catch (const std::exception &error) {
+        ROS_WARN("[PlanningWorker] Diagnostics skipped: %s", error.what());
+      } catch (...) {
+        ROS_WARN("[PlanningWorker] Diagnostics skipped: unknown observer exception");
+      }
+    };
+    observe("started");
+    const auto began = std::chrono::steady_clock::now();
     bool success = false;
     try {
       success = planner_ ? planner_(*result->trajectory, input.points, input.config)
                          : result->trajectory->generate(input.points, input.config);
+      trace.generation = result->trajectory->getGenerationDiagnostics();
+      if (trace.generation.status == "NOT_ATTEMPTED") {
+        trace.generation.status = success ? "PLANNER_SUCCEEDED" : "PLANNER_RETURNED_FALSE";
+      }
     } catch (const std::exception &error) {
       ROS_ERROR("[PlanningWorker] Planning exception: %s", error.what());
+      trace.generation.status = "EXCEPTION";
+      trace.generation.message = error.what();
+    } catch (...) {
+      ROS_ERROR("[PlanningWorker] Unknown planning exception");
+      trace.generation.status = "EXCEPTION";
+      trace.generation.message = "Unknown planning exception";
     }
+    trace.generation_cost_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+    trace.success = success && result->trajectory->isValid();
     if (!success || !result->trajectory->isValid()) {
       result->trajectory->reset();
       result->fallback.build(input.points);
     }
+    trace.fallback_ready = result->fallback.isValid();
+    observe("finished");
+    bool discarded;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (stopping_ || generation != generation_)
-        continue;
+      discarded = stopping_ || generation != generation_;
+    }
+    if (discarded) {
+      observe("discarded");
+      continue;
     }
     // Debug 与规划共用非控制线程，最多 20000 个轨迹样本；任何导出异常不影响返航。
     if (success && result->trajectory->isValid() && (input.dumper || input.publisher)) {
@@ -92,7 +131,11 @@ void PlanningWorker::run() {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!stopping_ && generation == generation_)
         result_ = std::move(result);
+      else
+        discarded = true;
     }
+    if (discarded)
+      observe("discarded");
   }
 }
 } // namespace px4_backtrack::application

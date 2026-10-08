@@ -7,6 +7,14 @@
 namespace px4_backtrack {
 namespace domain {
 
+// 生成结果只读摘要；在规划失败后清理轨迹之前复制，供排查使用。
+struct GenerationDiagnostics {
+  std::string status = "NOT_ATTEMPTED";
+  std::string message;
+  uint32_t warning_flags = 0;
+  trajectory_core::Report report;
+};
+
 // ============================================================================
 // TrajectorySession类
 // ============================================================================
@@ -33,6 +41,10 @@ public:
   /// @return 是否生成成功
   bool generate(const std::vector<RecordPoint> &points,
                 const trajectory_core::TrajectoryConfig &config);
+
+  /// 为参考时钟留出加速度预算；生成与诊断使用同一份转换规则。
+  static trajectory_core::TrajectoryConfig planningConfiguration(
+      const trajectory_core::TrajectoryConfig &config);
 
   /// 根据飞机实际位置更新路径投影进度和预瞄目标
   /// @param current_position 飞机当前位置
@@ -93,6 +105,10 @@ public:
   /// 获取最近一次生成失败类型
   FailureKind getLastFailureKind() const;
 
+  const GenerationDiagnostics &getGenerationDiagnostics() const { return generation_diagnostics_; }
+  double getReferenceTime() const { return reference_time_; }
+  double getClockRate() const { return clock_rate_; }
+
 private:
   /// 轨迹对象
   std::unique_ptr<trajectory_core::Trajectory> traj_;
@@ -120,6 +136,7 @@ private:
 
   /// 最近一次生成失败类型
   FailureKind last_failure_kind_;
+  GenerationDiagnostics generation_diagnostics_;
 
   /// 轨迹生成器（复用）
   trajectory_core::TrajectoryGenerator generator_;

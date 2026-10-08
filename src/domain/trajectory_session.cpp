@@ -36,7 +36,18 @@ void TrajectorySession::reset() {
   trajectory_v_max_m_s_ = 0.0;
   last_failure_kind_ = FailureKind::None;
   last_generate_cost_ms_ = 0.0;
+  generation_diagnostics_ = GenerationDiagnostics();
   reference_time_ = clock_rate_ = 0.0;
+}
+
+trajectory_core::TrajectoryConfig TrajectorySession::planningConfiguration(
+    const trajectory_core::TrajectoryConfig &config) {
+  auto execution_config = config;
+  execution_config.a_tan_max *= 0.5;
+  execution_config.az_up_max *= 0.5;
+  execution_config.az_down_max *= 0.5;
+  execution_config.enable_output_acc = true;
+  return execution_config;
 }
 
 bool TrajectorySession::generate(const std::vector<RecordPoint> &points,
@@ -46,6 +57,8 @@ bool TrajectorySession::generate(const std::vector<RecordPoint> &points,
   if (!config.validate()) {
     ROS_ERROR("[TrajectorySession] Invalid trajectory configuration");
     last_failure_kind_ = FailureKind::InvalidConfig;
+    generation_diagnostics_.status = "INVALID_INPUT";
+    generation_diagnostics_.message = "Invalid trajectory configuration";
     return false;
   }
 
@@ -53,6 +66,8 @@ bool TrajectorySession::generate(const std::vector<RecordPoint> &points,
   if (points.size() < 2) {
     ROS_ERROR("[TrajectorySession] Not enough points to generate trajectory: %zu", points.size());
     last_failure_kind_ = FailureKind::Other;
+    generation_diagnostics_.status = "INVALID_INPUT";
+    generation_diagnostics_.message = "At least two recorded points are required";
     return false;
   }
 
@@ -92,12 +107,12 @@ bool TrajectorySession::generate(const std::vector<RecordPoint> &points,
 
   // 调用trajectory_core生成轨迹
   // 给执行时钟的加减速留一半切向/竖直加速度预算。
-  auto execution_config = config;
-  execution_config.a_tan_max *= 0.5;
-  execution_config.az_up_max *= 0.5;
-  execution_config.az_down_max *= 0.5;
-  execution_config.enable_output_acc = true;
+  const auto execution_config = planningConfiguration(config);
   auto result = generator_.generate(waypoints, execution_config);
+  generation_diagnostics_.status = trajectory_core::statusCodeToString(result.code);
+  generation_diagnostics_.message = result.message;
+  generation_diagnostics_.warning_flags = result.warning_flags;
+  generation_diagnostics_.report = result.report;
 
   // 记录结束时间并计算耗时
   auto end_time = std::chrono::high_resolution_clock::now();

@@ -12,6 +12,9 @@
 
   <buildtool_depend>catkin</buildtool_depend>
 
+  <build_depend>message_generation</build_depend>
+  <exec_depend>message_runtime</exec_depend>
+
   <!-- ROS core dependencies -->
   <depend>roscpp</depend>
   <depend>roslib</depend>

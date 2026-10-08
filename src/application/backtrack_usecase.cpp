@@ -16,6 +16,16 @@ constexpr double kYawAlignmentToleranceRad = 15.0 * kPi / 180.0;
 constexpr double kYawAlignmentTimeoutS = 10.0;
 constexpr double kReturnEndPositionToleranceM = 0.20;
 
+const char *triggerName(domain::Event event) {
+  switch (event) {
+  case domain::Event::Ch7LongPress: return "Ch7LongPress";
+  case domain::Event::Ch18FailsafeConfirmed: return "Ch18FailsafeConfirmed";
+  case domain::Event::RCLossTriggered: return "RCLossTriggered";
+  case domain::Event::LowBatteryTriggered: return "LowBatteryTriggered";
+  default: return "None";
+  }
+}
+
 double wrappedAngleError(double actual, double target) {
   return std::abs(std::atan2(std::sin(actual - target), std::cos(actual - target)));
 }
@@ -103,12 +113,17 @@ BacktrackUseCase::BacktrackUseCase(const UseCaseConfig &config, PlanningWorker::
 }
 
 TickOutput BacktrackUseCase::tick(double now) {
+  tick_clock_reset_ = false;
   if (!std::isfinite(now)) {
+    recordOperation("tick_nonfinite_clock", now);
     TickOutput output;
     output.current_state = state_machine_.getCurrentState();
     return output;
   }
   const bool clock_reset = last_tick_time_ >= 0.0 && now < last_tick_time_;
+  tick_clock_reset_ = clock_reset;
+  if (clock_reset)
+    recordOperation("tick_clock_moved_backward", now);
   last_tick_time_ = now;
   const bool state_fresh = state_received_at_ >= 0.0 && now >= state_received_at_ &&
                            now - state_received_at_ <= config_.state_timeout_s;
@@ -119,6 +134,7 @@ TickOutput BacktrackUseCase::tick(double now) {
     trajectory_session_->reset();
     waypoint_fallback_session_.reset();
     recorded_route_.reset();
+    route_projection_valid_ = route_prediction_valid_ = false;
     domain::TickInput disarm;
     disarm.armed = false;
     disarm.mode = current_mode_;
@@ -155,6 +171,7 @@ TickOutput BacktrackUseCase::tick(double now) {
     last_progress_time_ = -1.0;
     route_safety_hold_ = input_hold_ = false;
     state_machine_.yieldControl();
+    recordOperation("external_offboard_exit_yield", now);
   }
 
   if (clock_reset || !inputsFresh(now))
@@ -222,6 +239,88 @@ TickOutput BacktrackUseCase::tick(double now) {
   return output;
 }
 
+void BacktrackUseCase::recordOperation(const std::string &reason, double now) {
+  if (last_operation_ == reason)
+    return;
+  last_operation_ = reason;
+  operation_steady_time_ = now;
+  ++operation_sequence_;
+}
+
+void BacktrackUseCase::rejectOdometry(const std::string &reason, double now) {
+  if (odometry_rejection_reason_ != reason)
+    recordOperation("odometry_rejected:" + reason, now);
+  odometry_rejection_reason_ = reason;
+}
+
+std::string BacktrackUseCase::inputFailureReason(double now) const {
+  if (!std::isfinite(now)) return "nonfinite_tick_clock";
+  if (tick_clock_reset_) return "tick_clock_moved_backward";
+  if (localization_reset_) return "localization_reset";
+  if (!odom_valid_) return odom_received_at_ < 0.0 ? "odometry_missing" : "odometry_invalid";
+  if (odom_received_at_ < 0.0) return "odometry_missing";
+  if (state_received_at_ < 0.0) return "fcu_state_missing";
+  if (now < odom_received_at_ || now < state_received_at_) return "receipt_clock_ahead_of_tick";
+  if (now - odom_received_at_ > config_.odom_timeout_s) return "odometry_stale";
+  if (now - state_received_at_ > config_.state_timeout_s) return "fcu_state_stale";
+  return "";
+}
+
+ControlDiagnostics BacktrackUseCase::diagnostics(double now, const TickOutput &output) const {
+  ControlDiagnostics d;
+  d.flight_id = flight_id_;
+  d.plan_id = plan_id_;
+  d.steady_time = now;
+  d.actual_position = current_position_;
+  d.actual_velocity = current_velocity_;
+  d.actual_yaw = current_yaw_;
+  d.inputs_fresh = std::isfinite(now) && !tick_clock_reset_ && inputsFresh(now);
+  d.odom_valid = odom_valid_;
+  d.localization_reset = localization_reset_;
+  d.tick_clock_reset = tick_clock_reset_;
+  d.odom_stamp = odom_stamp_;
+  d.odom_receipt_age = odom_received_at_ < 0.0 ? -1.0 : now - odom_received_at_;
+  d.state_receipt_age = state_received_at_ < 0.0 ? -1.0 : now - state_received_at_;
+  d.input_failure_reason = inputFailureReason(now);
+  d.odometry_rejection_reason = odometry_rejection_reason_;
+  d.current_state = output.current_state;
+  d.fcu_mode = current_mode_;
+  d.armed = current_armed_;
+  d.last_trigger = last_trigger_;
+  d.last_trigger_reason = last_trigger_reason_;
+  d.recorded_points = recording_buffer_.size();
+  d.planning_requested = trajectory_generation_requested_;
+  d.planning_inflight = planning_inflight_;
+  d.trajectory_valid = trajectory_session_->isValid();
+  d.fallback_valid = waypoint_fallback_session_.isValid();
+  d.projection_valid = trajectory_session_->hasValidProjection();
+  d.projected_s = trajectory_session_->getProjectedArcLength();
+  d.target_s = trajectory_session_->getTargetArcLength();
+  d.cross_track_error = trajectory_session_->getCrossTrackError();
+  d.reference_time = trajectory_session_->getReferenceTime();
+  d.clock_rate = trajectory_session_->getClockRate();
+  d.fallback_index = waypoint_fallback_session_.currentIndex();
+  d.fallback_count = waypoint_fallback_session_.size();
+  d.route_safety_evaluation_time = route_safety_evaluation_time_;
+  d.route_projection_valid = route_projection_valid_;
+  d.route_distance = recorded_route_.distance();
+  d.route_prediction_valid = route_prediction_valid_;
+  d.route_predicted_deviation = route_predicted_deviation_;
+  d.route_safety_hold = route_safety_hold_;
+  d.input_hold = input_hold_;
+  d.yaw_alignment_timeout = yaw_alignment_timeout_reported_;
+  d.auto_land_yield = auto_land_yield_active_;
+  d.rc_loss = trigger_evaluator_.isRCLost();
+  d.low_battery = trigger_evaluator_.isLowBattery();
+  d.operation_sequence = operation_sequence_;
+  d.operation_steady_time = operation_steady_time_;
+  d.operation = last_operation_;
+  d.should_publish_setpoint = output.should_publish_setpoint;
+  d.setpoint = output.setpoint;
+  d.mode_request = output.mode_request;
+  return d;
+}
+
 bool BacktrackUseCase::inputsFresh(double now) const {
   return odom_valid_ && !localization_reset_ && odom_received_at_ >= 0.0 &&
          state_received_at_ >= 0.0 && now >= odom_received_at_ && now >= state_received_at_ &&
@@ -242,6 +341,7 @@ TickOutput BacktrackUseCase::holdForInvalidInput(double now) {
     safety_hold_position_ = current_position_;
     safety_hold_yaw_ = current_yaw_;
     input_hold_ = true;
+    recordOperation("input_hold:" + inputFailureReason(now), now);
     trajectory_session_->suspend();
     cancelPlanning();
     state_machine_.triggerPause();
@@ -274,14 +374,17 @@ void BacktrackUseCase::onOdomReceived(const domain::Vec3 &position, const domain
       !std::isfinite(stamp) || !std::isfinite(received_at) || stamp < 0.0 || received_at < 0.0) {
     ROS_WARN_THROTTLE(1.0, "[BacktrackUseCase] Invalid odometry values or receipt clock");
     odom_valid_ = false;
+    rejectOdometry("nonfinite_or_negative_values", received_at);
     return;
   }
   if (odom_received_at_ >= 0.0 && received_at < odom_received_at_) {
     odom_valid_ = false;
+    rejectOdometry("receipt_clock_moved_backward", received_at);
     return;
   }
   if (odom_stamp_ >= 0.0 && stamp <= odom_stamp_) {
     odom_valid_ = false;
+    rejectOdometry(stamp < odom_stamp_ ? "stamp_moved_backward" : "duplicate_stamp", received_at);
     if (stamp < odom_stamp_ && current_armed_) {
       if (!localization_reset_)
         ROS_ERROR("[BacktrackUseCase] Odometry stamp moved backward: %.6f -> %.6f", odom_stamp_,
@@ -298,6 +401,7 @@ void BacktrackUseCase::onOdomReceived(const domain::Vec3 &position, const domain
                 (position - current_position_).norm(), elapsed);
     localization_reset_ = true;
     odom_valid_ = false;
+    rejectOdometry("position_reset_suspected", received_at);
     return;
   }
   current_position_ = position;
@@ -306,6 +410,8 @@ void BacktrackUseCase::onOdomReceived(const domain::Vec3 &position, const domain
   odom_received_at_ = received_at;
   odom_stamp_ = stamp;
   odom_valid_ = true;
+  if (!localization_reset_)
+    odometry_rejection_reason_.clear();
   const auto state = state_machine_.getCurrentState();
   const bool recording =
       state == domain::State::Recording ||
@@ -328,11 +434,21 @@ void BacktrackUseCase::onStateReceived(bool armed, const std::string &mode, doub
   if (!std::isfinite(received_at) || received_at < 0.0 ||
       (state_received_at_ >= 0.0 && received_at < state_received_at_))
     return;
+  if (armed && !current_armed_) {
+    ++flight_id_;
+    last_trigger_.clear();
+    last_trigger_reason_.clear();
+    route_projection_valid_ = route_prediction_valid_ = false;
+    recordOperation("flight_armed", received_at);
+  } else if (!armed && current_armed_) {
+    recordOperation("flight_disarmed", received_at);
+  }
   current_armed_ = armed;
   current_mode_ = mode;
   state_received_at_ = received_at;
   if (!armed) {
     odom_stamp_ = -1.0;
+    odometry_rejection_reason_.clear();
     localization_reset_ = false;
     has_seen_disarm_ = true;
     arm_after_disarm_detected_ = false;
@@ -369,6 +485,7 @@ void BacktrackUseCase::handleFlightCycleReset(bool armed) {
     ROS_INFO("[BacktrackUseCase] Flight cycle reset: ARM after DISARM detected");
     recording_buffer_.reset();
     recorded_route_.reset();
+    route_projection_valid_ = route_prediction_valid_ = false;
     route_safety_hold_ = false;
     last_progress_time_ = -1.0;
     trajectory_session_->reset();
@@ -408,6 +525,7 @@ bool BacktrackUseCase::handleAutoLandYield() {
     has_last_path_target_velocity_ = false;
     record_delay_started_ = false;
     auto_land_yield_active_ = true;
+    recordOperation("auto_land_yield", last_tick_time_);
     route_safety_hold_ = input_hold_ = false;
   }
 
@@ -429,6 +547,7 @@ void BacktrackUseCase::handleRecordDelay(double now) {
     if (elapsed >= config_.record_delay_s) {
       ROS_INFO("[BacktrackUseCase] Record delay elapsed, starting recording");
       state_machine_.startRecording();
+      recordOperation("record_delay_elapsed", now);
     }
   } else {
     // 不在WaitRecordDelay状态，重置延时标志
@@ -489,6 +608,7 @@ void BacktrackUseCase::handleTriggers(double now) {
 
     if (trigger_evaluator_.checkCh7PressEvent()) {
       ROS_INFO("[BacktrackUseCase] Ch7 press event detected, pausing");
+      recordOperation("ch7_pause", now);
       cancelPlanning();
       trajectory_session_->suspend();
       last_progress_time_ = -1.0;
@@ -511,6 +631,11 @@ void BacktrackUseCase::handleTriggers(double now) {
 
 void BacktrackUseCase::handleReturnTrigger(domain::Event event, bool has_min_points,
                                            const char *trigger_name) {
+  last_trigger_ = triggerName(event);
+  last_trigger_reason_ = trigger_name;
+  recordOperation(has_min_points ? "return_trigger:" + last_trigger_
+                                 : "return_trigger_insufficient_points:" + last_trigger_,
+                  last_tick_time_);
   if (has_min_points) {
     ROS_INFO("[BacktrackUseCase] %s detected", trigger_name);
     cancelPlanning();
@@ -519,6 +644,7 @@ void BacktrackUseCase::handleReturnTrigger(domain::Event event, bool has_min_poi
     route_safety_hold_ = false;
     last_progress_time_ = -1.0;
     if (!recorded_route_.build(recording_buffer_.getPoints())) {
+      recordOperation("original_route_build_failed", last_tick_time_);
       triggerImmediateLanding();
       return;
     }
@@ -549,16 +675,21 @@ void BacktrackUseCase::handleTrajectoryGeneration(double now) {
     if (current_velocity_.norm() > 0.10)
       return;
     if (!recorded_route_.build(recording_buffer_.getPoints())) {
+      recordOperation("original_route_build_failed", last_tick_time_);
       triggerImmediateLanding();
       return;
     }
     PlanningInput input;
     input.points = recording_buffer_.getPointsCopy();
+    input.flight_id = flight_id_;
+    input.plan_id = ++plan_id_;
     input.config = config_.trajectory_config;
     input.debug_sample_dt = config_.debug_trajectory_sample_dt;
     input.dumper = debug_dumper_;
     input.publisher = debug_publisher_;
+    input.observer = planning_observer_;
     planning_worker_.request(std::move(input));
+    recordOperation("planning_requested", now);
     trajectory_generation_requested_ = false;
     planning_inflight_ = true;
   }
@@ -575,6 +706,8 @@ void BacktrackUseCase::handleTrajectoryGeneration(double now) {
   }
   trajectory_session_ = std::move(result->trajectory);
   waypoint_fallback_session_ = std::move(result->fallback);
+  recordOperation(trajectory_session_->isValid() ? "planning_accepted_trajectory"
+                                                : "planning_accepted_waypoint_fallback", now);
   rejoin_trigger_candidate_start_time_ = rejoin_success_candidate_start_time_ = -1.0;
   yaw_alignment_start_time_ = now;
   yaw_alignment_timeout_reported_ = false;
@@ -587,6 +720,7 @@ void BacktrackUseCase::handleTrajectoryGeneration(double now) {
   if ((trajectory_session_->isValid() || waypoint_fallback_session_.isValid()) && !local_ready) {
     ROS_WARN("[BacktrackUseCase] Planned route cannot join current local position; pausing");
     pauseForRouteSafety();
+    recordOperation("planned_route_local_join_failed", now);
     return;
   }
   if (trajectory_session_->isValid() || waypoint_fallback_session_.isValid()) {
@@ -619,6 +753,7 @@ void BacktrackUseCase::handleTrajectoryProgress(double now) {
   last_progress_time_ = now;
   if (!std::isfinite(dt) || dt <= 0.0 || dt > 0.1001) {
     trajectory_session_->suspend();
+    recordOperation("reference_clock_invalid_tick_interval", now);
     return;
   }
   const bool projection_ok =
@@ -630,6 +765,7 @@ void BacktrackUseCase::handleTrajectoryProgress(double now) {
           : trajectory_session_->updateProgress(
                 current_position_, config_.rejoin_config.lookahead_time_s, std::min(0.10, dt));
   if (!projection_ok) {
+    recordOperation("trajectory_local_projection_failed", now);
     ROS_ERROR_THROTTLE(
         1.0, "[BacktrackUseCase] Local path projection failed; holding last valid target");
     if (state == domain::State::ReturnActive) {
@@ -642,13 +778,19 @@ void BacktrackUseCase::handleTrajectoryProgress(double now) {
 
 bool BacktrackUseCase::resumeReturn(domain::Event event, double now) {
   if (!checkMinPoints() || !recorded_route_.valid() || !recorded_route_.update(current_position_) ||
-      recorded_route_.distance() > config_.rejoin_config.success_dist_m)
+      recorded_route_.distance() > config_.rejoin_config.success_dist_m) {
+    recordOperation("resume_rejected_original_route", now);
     return false;
-  if (trajectory_session_->isValid() && !trajectory_session_->resumeAt(current_position_))
+  }
+  if (trajectory_session_->isValid() && !trajectory_session_->resumeAt(current_position_)) {
+    recordOperation("resume_rejected_trajectory_projection", now);
     return false;
+  }
   if (waypoint_fallback_session_.isValid() &&
-      !waypoint_fallback_session_.resumeAt(current_position_))
+      !waypoint_fallback_session_.resumeAt(current_position_)) {
+    recordOperation("resume_rejected_waypoint_projection", now);
     return false;
+  }
   route_safety_hold_ = input_hold_ = false;
   last_progress_time_ = -1.0;
   const double yaw =
@@ -660,6 +802,9 @@ bool BacktrackUseCase::resumeReturn(domain::Event event, double now) {
   trajectory_generation_requested_ =
       !trajectory_session_->isValid() && !waypoint_fallback_session_.isValid();
   state_machine_.triggerReturn(event);
+  last_trigger_ = triggerName(event);
+  last_trigger_reason_ = "Explicit resume";
+  recordOperation("return_resumed:" + last_trigger_, now);
   yaw_alignment_start_time_ = now;
   yaw_alignment_timeout_reported_ = false;
   return true;
@@ -675,9 +820,13 @@ void BacktrackUseCase::handleRouteSafety() {
   if (preparing && trajectory_generation_requested_)
     return;
   const bool valid = recorded_route_.update(current_position_);
+  route_projection_valid_ = valid;
+  route_safety_evaluation_time_ = last_tick_time_;
   const double predicted = recorded_route_.predictedDeviation(
       current_position_, current_velocity_, config_.route_reaction_s, config_.route_braking_m_s2,
       config_.route_uncertainty_m);
+  route_prediction_valid_ = valid && std::isfinite(predicted);
+  route_predicted_deviation_ = predicted;
   const bool unsafe = !valid || recorded_route_.distance() >= config_.route_hard_limit_m ||
                       predicted >= config_.route_normal_limit_m;
   const bool fallback_off_route =
@@ -687,9 +836,13 @@ void BacktrackUseCase::handleRouteSafety() {
     ROS_ERROR("[BacktrackUseCase] Original route safety hold: distance=%.3f predicted=%.3f",
               recorded_route_.distance(), predicted);
     pauseForRouteSafety();
+    recordOperation(!valid ? "route_projection_failed_hold"
+                          : (unsafe ? "route_deviation_budget_hold"
+                                    : "fallback_off_route_hold"), last_tick_time_);
   } else if (state == domain::State::ReturnActive &&
              recorded_route_.distance() >= config_.rejoin_config.trigger_dist_m) {
     state_machine_.enterRejoin();
+    recordOperation("original_route_deviation_rejoin", last_tick_time_);
   }
 }
 
@@ -726,6 +879,7 @@ bool BacktrackUseCase::isTrajectoryActivationReady(double now) {
     ROS_ERROR("[BacktrackUseCase] Start yaw alignment timed out: error=%.1f deg; holding position",
               yaw_error * 180.0 / kPi);
     yaw_alignment_timeout_reported_ = true;
+    recordOperation("start_yaw_alignment_timeout", now);
   }
   return false;
 }
@@ -761,6 +915,7 @@ void BacktrackUseCase::handleRejoin(double now) {
         ROS_WARN("[BacktrackUseCase] Deviation detected for %.2f s, entering rejoin mode",
                  hold_duration);
         state_machine_.enterRejoin();
+        recordOperation("trajectory_cross_track_rejoin", now);
         rejoin_trigger_candidate_start_time_ = -1.0;
       }
     } else {
@@ -791,6 +946,7 @@ void BacktrackUseCase::handleRejoin(double now) {
         ROS_INFO("[BacktrackUseCase] Rejoin successful for %.2f s, returning to active mode",
                  hold_duration);
         state_machine_.exitRejoin();
+        recordOperation("rejoin_completed", now);
         rejoin_success_candidate_start_time_ = -1.0;
       }
     } else {
@@ -832,6 +988,7 @@ domain::SetpointTarget BacktrackUseCase::computeSetpoint() {
   }
   // 状态与会话不一致时保持有效当前位置，避免发送默认地图原点。
   ROS_ERROR_THROTTLE(1.0, "[BacktrackUseCase] Missing control target; holding current position");
+  recordOperation("control_target_missing_hold", last_tick_time_);
   domain::SetpointTarget hold;
   hold.position = current_position_;
   hold.yaw = current_yaw_;
@@ -860,6 +1017,10 @@ void BacktrackUseCase::triggerImmediateLanding() {
   has_last_path_target_velocity_ = false;
   state_machine_.lockPosition(current_position_, current_yaw_);
   state_machine_.triggerLanding();
+}
+
+void BacktrackUseCase::setPlanningObserver(PlanningObserver observer) {
+  planning_observer_ = std::move(observer);
 }
 
 void BacktrackUseCase::setDebugDumper(std::shared_ptr<infrastructure::DebugDumper> dumper) {

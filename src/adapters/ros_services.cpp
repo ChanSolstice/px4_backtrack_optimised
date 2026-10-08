@@ -60,6 +60,8 @@ void SetModeClient::run() {
                                         std::chrono::duration<double>(throttle_interval_s_));
     }
     try {
+      ROS_INFO("[SetModeClient] %s request started at steady=%.6f",
+               domain::modeRequestToString(mode).c_str(), ros::SteadyTime::now().toSec());
       const bool sent = transport_(mode);
       ROS_INFO(
           "[SetModeClient] %s request result: %s (activation requires fresh state confirmation)",

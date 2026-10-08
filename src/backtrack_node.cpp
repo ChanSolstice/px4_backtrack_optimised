@@ -5,6 +5,7 @@
 #include "px4_backtrack/adapters/ros_publishers.hpp"
 #include "px4_backtrack/adapters/ros_services.hpp"
 #include "px4_backtrack/adapters/debug_publishers.hpp"
+#include "px4_backtrack/adapters/diagnostics_publisher.hpp"
 #include <ros/ros.h>
 #include <memory>
 #include <cmath>
@@ -42,6 +43,10 @@ private:
   std::unique_ptr<adapters::StatusPublisher> status_pub_;
   std::unique_ptr<adapters::SetModeClient> set_mode_client_;
 
+  std::shared_ptr<adapters::DiagnosticsPublisher> diagnostics_pub_;
+  uint64_t tick_sequence_ = 0;
+  double previous_tick_time_ = -1.0;
+
   /// Application层对象
   std::unique_ptr<application::BacktrackUseCase> usecase_;
 
@@ -57,6 +62,20 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
   : nh_(nh), nh_private_(nh_private)
 {
   ROS_INFO("=== Initializing Backtrack Node ===");
+
+  // 配置快照先于加载/校验发布，初始化错误也保留原始配置证据。
+  if (nh_private_.param("log_enable", true)) {
+    try {
+      diagnostics_pub_ = std::make_shared<adapters::DiagnosticsPublisher>(nh_);
+      diagnostics_pub_->publishConfiguration(nh_private_);
+    } catch (const std::exception &e) {
+      ROS_WARN("[BacktrackNode] Diagnostics disabled after initialization error: %s", e.what());
+      diagnostics_pub_.reset();
+    } catch (...) {
+      ROS_WARN("[BacktrackNode] Diagnostics disabled after unknown initialization error");
+      diagnostics_pub_.reset();
+    }
+  }
 
   // 1. 加载配置
   ROS_INFO("[BacktrackNode] Loading configuration...");
@@ -88,6 +107,12 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
   // 3. 创建UseCase
   ROS_INFO("[BacktrackNode] Creating BacktrackUseCase...");
   usecase_ = std::make_unique<application::BacktrackUseCase>(config);
+  if (diagnostics_pub_) {
+    const auto publisher = diagnostics_pub_;
+    usecase_->setPlanningObserver([publisher](const application::PlanningTrace &trace) {
+      publisher->publishPlanning(trace);
+    });
+  }
 
   // 4. 配置 debug 功能（可选）
   if (config.debug_enable_csv_dump) {
@@ -137,7 +162,10 @@ void BacktrackNode::run() {
 
 void BacktrackNode::timerCallback(const ros::WallTimerEvent&) {
   // 获取当前时间
-  double now = ros::SteadyTime::now().toSec();
+  const double now = ros::SteadyTime::now().toSec();
+  const double tick_interval = previous_tick_time_ < 0.0 ? 0.0 : now - previous_tick_time_;
+  previous_tick_time_ = now;
+  ++tick_sequence_;
 
   // 驱动UseCase tick
   application::TickOutput output = usecase_->tick(now);
@@ -154,6 +182,19 @@ void BacktrackNode::timerCallback(const ros::WallTimerEvent&) {
 
   // 处理模式切换请求
   set_mode_client_->request(output.mode_request);
+
+  // 控制任务全部调度后才观测；诊断异常不影响已经派发的控制量。
+  if (diagnostics_pub_) {
+    const double tick_cost = ros::SteadyTime::now().toSec() - now;
+    try {
+      diagnostics_pub_->publishControl(usecase_->diagnostics(now, output), tick_sequence_,
+                                       tick_interval, tick_cost);
+    } catch (const std::exception &e) {
+      ROS_WARN_THROTTLE(1.0, "[BacktrackNode] Diagnostics query failed: %s", e.what());
+    } catch (...) {
+      ROS_WARN_THROTTLE(1.0, "[BacktrackNode] Diagnostics query failed: unknown exception");
+    }
+  }
 }
 
 }  // namespace px4_backtrack

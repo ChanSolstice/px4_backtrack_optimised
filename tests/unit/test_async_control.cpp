@@ -70,6 +70,91 @@ TEST(AsyncControlTest, CorridorFailureUsesOriginalCornerWaypoints) {
   EXPECT_TRUE(result->fallback.isValid());
 }
 
+TEST(AsyncControlTest, PlanningTracePreservesFailureInputAndStatusBeforeSessionReset) {
+  auto job = input();
+  job.flight_id = 7;
+  job.plan_id = 11;
+  job.config.v_max = -1.0;
+  std::mutex trace_mutex;
+  std::vector<std::string> phases;
+  std::string failure_status;
+  size_t input_count = 0;
+  bool fallback_ready = false;
+  job.observer = [&](const application::PlanningTrace &trace) {
+    std::lock_guard<std::mutex> lock(trace_mutex);
+    EXPECT_EQ(trace.flight_id, 7u);
+    EXPECT_EQ(trace.plan_id, 11u);
+    ASSERT_NE(trace.points, nullptr);
+    ASSERT_NE(trace.config, nullptr);
+    EXPECT_EQ(trace.points->back().position.x(), 2.0);
+    EXPECT_EQ(trace.config->v_max, -1.0);
+    phases.push_back(trace.phase);
+    if (trace.phase == "finished") {
+      failure_status = trace.generation.status;
+      input_count = trace.points->size();
+      fallback_ready = trace.fallback_ready;
+    }
+  };
+  application::PlanningWorker worker;
+  worker.request(std::move(job));
+  std::unique_ptr<application::PlanningResult> result;
+  for (int n = 0; n < 2000 && !result; ++n) {
+    result = worker.takeResult();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->fallback.isValid());
+  std::lock_guard<std::mutex> lock(trace_mutex);
+  EXPECT_EQ(phases, (std::vector<std::string>{"started", "finished"}));
+  EXPECT_EQ(failure_status, "INVALID_INPUT");
+  EXPECT_EQ(input_count, 2u);
+  EXPECT_TRUE(fallback_ready);
+}
+
+TEST(AsyncControlTest, ObserverExceptionCannotPreventPlanningOrFallback) {
+  auto job = input();
+  job.observer = [](const auto &) { throw std::runtime_error("logging unavailable"); };
+  application::PlanningWorker worker;
+  worker.request(std::move(job));
+  std::unique_ptr<application::PlanningResult> result;
+  for (int n = 0; n < 2000 && !result; ++n) {
+    result = worker.takeResult();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_TRUE(result);
+  EXPECT_TRUE(result->trajectory->isValid());
+}
+
+TEST(AsyncControlTest, CanceledRunningPlanReportsDiscardWithoutDeliveringResult) {
+  std::promise<void> entered, release, discarded;
+  auto gate = release.get_future().share();
+  auto began = entered.get_future();
+  auto discarded_future = discarded.get_future();
+  auto job = input();
+  job.plan_id = 21;
+  job.observer = [&](const auto &trace) {
+    if (trace.phase == "discarded") {
+      EXPECT_EQ(trace.plan_id, 21u);
+      EXPECT_EQ(trace.points->size(), 2u);
+      discarded.set_value();
+    }
+  };
+  application::PlanningWorker worker([&](auto &session, const auto &points, const auto &config) {
+    entered.set_value();
+    gate.wait();
+    return session.generate(points, config);
+  });
+  worker.request(std::move(job));
+  if (began.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+    release.set_value();
+    FAIL() << "Planner did not start";
+  }
+  worker.cancel();
+  release.set_value();
+  ASSERT_EQ(discarded_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+  EXPECT_FALSE(worker.takeResult());
+}
+
 TEST(AsyncControlTest, BlockedModeServiceDoesNotBlockAndCanceledQueuedModeIsNotSent) {
   std::promise<void> release, entered;
   auto gate = release.get_future().share();
