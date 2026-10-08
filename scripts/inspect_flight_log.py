@@ -449,8 +449,10 @@ class FlightLogInspector:
                            self.sequence_resets, self.sequence_duplicates))
         for key, plan in self.plans.items():
             if not plan["input_available"]:
-                self.issue("missing_planning_input", "Plan {} lacks its frozen input trace; retrieve "
-                           "earlier chunks to reproduce the original input.".format(key))
+                self.issue("missing_planning_input", "Plan {} has no observed frozen input trace. It may "
+                           "have been cancelled before the worker started, or earlier evidence may "
+                           "be absent. Check control operations and earlier chunks; this warning "
+                           "alone does not establish recording loss.".format(key))
             elif not any(phase in ("finished", "discarded") for phase in plan["phases"]):
                 self.issue("unfinished_planning_trace", "Plan {} has no observed finish/discard; "
                            "planning may still have been running, or the evidence may end early.".format(key))
