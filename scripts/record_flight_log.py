@@ -24,6 +24,10 @@ from typing import Any, Mapping, Optional
 
 OWNER = "px4_backtrack.record_flight_log"
 SCHEMA_VERSION = 1
+# Noetic --repeat-latched can repeatedly reopen bags if their initial latched
+# messages already exceed --size. Budget all built-in latched diagnostics/RViz
+# for the supported <1 h recording, with serialization/connection headroom.
+MIN_SPLIT_MB = 64
 DEFAULT_TOPICS = (
     "/Odometry_px4", "/mavros/state", "/mavros/rc/in", "/mavros/battery",
     "/mavros/setpoint_raw/local", "/px4_backtrack/state", "/status_rc_loss",
@@ -91,6 +95,14 @@ class Config:
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(parameter + " must be a positive integer")
             values[field] = value
+        rate = params.get("record_max_hz", 15.0)
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate <= 0:
+            raise ValueError("record_max_hz must be finite and positive for logging capacity validation")
+        latched_budget = (math.ceil(3600 * rate) + 2) * 512 + 20000 * 256 + 4 * 1024 * 1024
+        minimum_split_mb = max(MIN_SPLIT_MB, math.ceil(latched_budget / (1024 * 1024)))
+        if values["split_size_mb"] < minimum_split_mb:
+            raise ValueError("log_split_size_mb must be at least {} for the configured recording rate; "
+                             "smaller splits can loop when rosbag repeats latched messages".format(minimum_split_mb))
         topics = params.get("log_topics", list(DEFAULT_TOPICS))
         if not isinstance(topics, (list, tuple)) or not topics:
             raise ValueError("log_topics must be a nonempty list")

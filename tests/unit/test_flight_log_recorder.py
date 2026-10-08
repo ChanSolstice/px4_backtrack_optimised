@@ -62,11 +62,23 @@ class ConfigTest(unittest.TestCase):
         self.assertIn("/slam/status", config.topics)
         self.assertTrue(set(recorder_module.DEFAULT_TOPICS).issubset(config.topics))
 
+    def test_split_capacity_prevents_latched_reopen_loop(self):
+        for size in (1, 4, 32, 63):
+            with self.subTest(size=size), self.assertRaisesRegex(ValueError, "latched"):
+                recorder_module.Config.from_mapping({"log_split_size_mb": size})
+        recorder_module.Config.from_mapping({"record_max_hz": 20.0, "log_split_size_mb": 64})
+        with self.assertRaisesRegex(ValueError, "recording rate"):
+            recorder_module.Config.from_mapping({"record_max_hz": 100.0})
+        recorder_module.Config.from_mapping({"record_max_hz": 100.0, "log_split_size_mb": 256})
+        for rate in (0, -1, float("nan"), float("inf"), True, "15"):
+            with self.subTest(rate=rate), self.assertRaises(ValueError):
+                recorder_module.Config.from_mapping({"record_max_hz": rate})
+
     def test_bag_command_keeps_paths_with_spaces_as_one_argument(self):
-        config = recorder_module.Config.from_mapping({"log_split_size_mb": 12, "log_max_splits": 3})
+        config = recorder_module.Config.from_mapping({"log_split_size_mb": 96, "log_max_splits": 3})
         command = recorder_module.bag_command(config, Path("/mnt/logs/run with spaces"))
         self.assertEqual(command[command.index("-O") + 1], "/mnt/logs/run with spaces/flight")
-        self.assertEqual(command[command.index("--size") + 1], "12")
+        self.assertEqual(command[command.index("--size") + 1], "96")
         self.assertEqual(command[command.index("--max-splits") + 1], "3")
         self.assertEqual(command[command.index("--min-space") + 1], "256M")
         for flag in ("--split", "--lz4", "--tcpnodelay", "--repeat-latched"):

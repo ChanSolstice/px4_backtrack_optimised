@@ -142,7 +142,10 @@ log_enable: true
 # Docker 中填写容器内路径，例如已挂载的 /root/ROS_Noetic/backtrack_ws/flight_logs。
 log_output_dir: ""
 
-# 每片约 64 MiB，单运行滚动保留最多 16 片；32 MiB 有界录制缓冲。
+# 每片约 64 MiB；log_max_splits 是 rosbag 的历史片数，当前片另计。
+# 默认停止后可能有 17 片；32 MiB 有界录制缓冲，片大小不是精确字节上限。
+# 分片至少 64 MiB；按 <1h 和 record_max_hz 校验全部内置 latched 证据预算。
+# 更高录制频率可能需要更大分片，避免 rosbag 重录 latched 消息时连续开片。
 log_split_size_mb: 64
 log_max_splits: 16
 log_buffer_mb: 32
