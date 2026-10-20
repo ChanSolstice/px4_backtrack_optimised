@@ -63,6 +63,7 @@ set(DOMAIN_SOURCES
   src/domain/trajectory_session.cpp
   src/domain/waypoint_fallback_session.cpp
   src/domain/rejoin_policy.cpp
+  src/domain/link_monitor.cpp
 )
 
 ## Application层源文件
@@ -179,6 +180,17 @@ if(CATKIN_ENABLE_TESTING)
   )
   if(TARGET test_trigger_evaluator)
     target_link_libraries(test_trigger_evaluator
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
+  catkin_add_gtest(test_link_monitor
+    tests/unit/test_main.cpp
+    tests/unit/test_link_monitor.cpp
+  )
+  if(TARGET test_link_monitor)
+    target_link_libraries(test_link_monitor
       ${PROJECT_NAME}_lib
       ${catkin_LIBRARIES}
     )
