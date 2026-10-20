@@ -65,6 +65,7 @@ set(DOMAIN_SOURCES
   src/domain/rejoin_policy.cpp
   src/domain/link_monitor.cpp
   src/domain/pilot_input.cpp
+  src/domain/battery_monitor.cpp
 )
 
 ## Application层源文件
@@ -203,6 +204,17 @@ if(CATKIN_ENABLE_TESTING)
   )
   if(TARGET test_pilot_input)
     target_link_libraries(test_pilot_input
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
+  catkin_add_gtest(test_battery_monitor
+    tests/unit/test_main.cpp
+    tests/unit/test_battery_monitor.cpp
+  )
+  if(TARGET test_battery_monitor)
+    target_link_libraries(test_battery_monitor
       ${PROJECT_NAME}_lib
       ${catkin_LIBRARIES}
     )
