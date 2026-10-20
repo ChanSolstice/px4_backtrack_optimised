@@ -1,0 +1,1190 @@
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <cmath>
+#include <functional>
+#include <string>
+#include <vector>
+
+#include "px4_backtrack/domain/return_state_machine.hpp"
+
+namespace px4_backtrack::domain {
+namespace {
+
+constexpr double kDt = 0.05;  // 控制周期 20Hz
+
+ReturnStateMachineConfig makeConfig() {
+  ReturnStateMachineConfig config{};
+  config.record_delay_s = 15.0;
+  config.ch18_hover_wait_s = 15.0;
+  config.landing_hover_s = 5.0;
+  config.pre_offboard_setpoint_count = 6;
+  config.return_pending_max_s = 3.0;
+  config.fallback_timeout_s = 3.0;
+  config.handover_posctl_timeout_s = 3.0;
+  config.rejoin_trigger_dist_m = 0.5;
+  config.reclaim_max_offset_m = 1.0;
+  return config;
+}
+
+/// 测试驱动：维护一份"世界"条件，按 20Hz 推进状态机
+struct Harness {
+  Harness() : sm(makeConfig()) {
+    c.fcu_state_fresh = true;
+    c.armed = false;
+    c.mode = "POSCTL";
+    c.airborne.airborne = true;
+    c.airborne.landed_state = LandedState::InAir;
+    c.odom_stale = false;
+    c.odom_lost = false;
+    c.position = Vec3(10.0, 20.0, 3.0);
+    c.yaw = 0.3;
+    c.has_min_points = true;
+    c.projection_ok = true;
+  }
+
+  /// 下一拍的时间
+  double now() const { return k * kDt; }
+
+  const StepOutput& step() {
+    c.now = now();
+    ++k;
+    out = sm.step(c);
+    history.insert(history.end(), out.events.begin(), out.events.end());
+    return out;
+  }
+
+  void run(double seconds) {
+    const int n = static_cast<int>(std::lround(seconds / kDt));
+    for (int i = 0; i < n; ++i) {
+      step();
+    }
+  }
+
+  /// 推进直到条件成立；返回用掉的拍数，超过上限返回 -1
+  int runUntil(const std::function<bool(const StepOutput&)>& done,
+               double max_s = 60.0) {
+    const int n = static_cast<int>(std::lround(max_s / kDt));
+    for (int i = 1; i <= n; ++i) {
+      if (done(step())) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // ---- 链路 ----
+  void linkOk() { c.link = LinkStatus{}; }
+  void linkDegraded() {
+    c.link = LinkStatus{};
+    c.link.degraded = true;
+  }
+  void linkLost() {
+    c.link = LinkStatus{};
+    c.link.lost = true;
+    c.link.degraded = true;
+    c.link.source = LinkLossSource::Ch18;
+  }
+
+  // ---- CH7 指令（与 PilotInput 一样保留到下一条）----
+  void longPress(bool link_ok = true) {
+    ++press_id;
+    c.pilot.return_request = Ch7Command{press_id, now() - 2.0, now(), link_ok};
+    c.pilot.press_id = press_id;
+  }
+  void shortPress(double press_start_t, bool link_ok = true) {
+    ++press_id;
+    c.pilot.exit_request = Ch7Command{press_id, press_start_t, now(), link_ok};
+    c.pilot.press_id = press_id;
+  }
+  /// 任务开始后按下的短按（状态机只检查按下开始时间，时长由 PilotInput 保证）
+  void shortPressNow(bool link_ok = true) { shortPress(now() - kDt, link_ok); }
+
+  // ---- 常用阶段 ----
+  void toRecording() {
+    c.armed = true;
+    run(15.0 + kDt);
+    ASSERT_EQ(sm.phase(), MissionPhase::Recording);
+  }
+
+  void startLowBatteryMission() {
+    toRecording();
+    c.battery.low = true;
+    step();
+    ASSERT_EQ(sm.phase(), MissionPhase::Prepare);
+  }
+
+  void startLinkLossMission() {
+    toRecording();
+    linkLost();
+    step();
+    ASSERT_EQ(sm.phase(), MissionPhase::Hover);
+  }
+
+  /// 等到申请 OFFBOARD，然后飞控进入 OFFBOARD
+  void acquire() {
+    ASSERT_GT(runUntil([](const StepOutput& o) {
+      return o.mode_intent == ModeIntent::Offboard;
+    }, 5.0), 0);
+    c.mode = "OFFBOARD";
+    step();
+    ASSERT_EQ(sm.control(), ControlState::Owned);
+  }
+
+  /// 低电量任务进入跟随
+  void toFollow() {
+    startLowBatteryMission();
+    acquire();
+    c.plan_status = PlanStatus::Ready;
+    c.path_start_yaw = c.yaw;
+    c.path_target_yaw = c.yaw;
+    step();
+    ASSERT_EQ(sm.phase(), MissionPhase::Follow);
+  }
+
+  void toArrival() {
+    toFollow();
+    c.position = Vec3(1.0, 2.0, 3.0);
+    c.finished = true;
+    step();
+    ASSERT_EQ(sm.phase(), MissionPhase::Arrival);
+  }
+
+  void toHandover() {
+    toArrival();
+    run(5.0);
+    ASSERT_EQ(sm.phase(), MissionPhase::Handover);
+  }
+
+  bool sawEvent(EventType type, const std::string& to,
+                const std::string& rule = std::string(),
+                const std::string& reason = std::string()) const {
+    return std::any_of(history.begin(), history.end(), [&](const StepEvent& e) {
+      return e.type == type && e.to == to && (rule.empty() || e.rule == rule) &&
+             (reason.empty() || e.reason == reason);
+    });
+  }
+
+  bool sawNamed(EventType type, const std::string& name,
+                const std::string& detail = std::string()) const {
+    return std::any_of(history.begin(), history.end(), [&](const StepEvent& e) {
+      return e.type == type && e.name == name &&
+             (detail.empty() || e.detail.find(detail) != std::string::npos);
+    });
+  }
+
+  ReturnStateMachine sm;
+  Conditions c;
+  StepOutput out;
+  std::vector<StepEvent> history;
+  int k{0};
+  int press_id{0};
+};
+
+// ============================================================================
+// 飞行周期
+// ============================================================================
+
+TEST(ReturnStateMachineTest, ArmStartsFlightAndRecordsAfterDelay) {
+  Harness h;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Disarmed);
+
+  h.c.armed = true;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::RecordDelay);
+  EXPECT_TRUE(h.out.commands.new_flight);
+  EXPECT_EQ(h.out.flight_id, 1);
+  EXPECT_TRUE(h.sawEvent(EventType::State, "WaitRecordDelay", "1", "ARMED"));
+
+  h.run(15.0 - kDt);
+  EXPECT_EQ(h.out.phase, MissionPhase::RecordDelay);
+  EXPECT_FALSE(h.out.record);
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Recording);
+  EXPECT_TRUE(h.out.record);
+  // 任务开始前不发布、不请求模式（SC5）
+  EXPECT_EQ(h.out.setpoint, SetpointKind::None);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::None);
+}
+
+TEST(ReturnStateMachineTest, DisarmEndsMissionAndNewFlightRestartsMissionIds) {
+  Harness h;
+  h.toFollow();
+  EXPECT_EQ(h.out.mission_id, 1);
+
+  h.c.armed = false;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Disarmed);
+  EXPECT_EQ(h.out.control, ControlState::None);
+  EXPECT_TRUE(h.out.commands.cancel_planning);
+  EXPECT_FALSE(h.out.mission_active);
+  EXPECT_TRUE(h.sawNamed(EventType::Mission, "ended"));
+
+  h.c.battery.low = false;
+  h.c.mode = "POSCTL";
+  h.c.plan_status = PlanStatus::None;
+  h.c.finished = false;
+  h.toRecording();
+  EXPECT_EQ(h.out.flight_id, 2);
+  h.c.battery.low = true;
+  h.step();
+  EXPECT_EQ(h.out.mission_id, 1);
+}
+
+// ============================================================================
+// 启动任务（策略矩阵 Recording 列）
+// ============================================================================
+
+TEST(ReturnStateMachineTest, LinkLossInRecordingHoversThenPrepares) {
+  Harness h;
+  h.toRecording();
+  h.c.position = Vec3(5.0, 6.0, 7.0);
+  h.linkLost();
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Hover);
+  EXPECT_EQ(h.out.control, ControlState::Acquiring);
+  EXPECT_EQ(h.sm.mission().reason, MissionReason::LinkLost);
+  EXPECT_TRUE(h.out.commands.start_planning);
+  EXPECT_FALSE(h.out.record);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(5.0, 6.0, 7.0)));
+
+  // 预发 6 帧（含本拍）后申请 OFFBOARD（D27）
+  for (int i = 0; i < 5; ++i) {
+    h.step();
+    EXPECT_EQ(h.out.mode_intent, ModeIntent::None);
+  }
+  h.step();
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::Offboard);
+
+  h.c.mode = "OFFBOARD";
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Owned);
+  EXPECT_TRUE(h.sm.mission().offboard_confirmed);
+
+  // 悬停 15 s（从任务开始算）后进入准备
+  h.run(15.0 - 8 * kDt);
+  EXPECT_EQ(h.out.phase, MissionPhase::Hover);
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+}
+
+TEST(ReturnStateMachineTest, LowBatteryAndPilotRequestGoStraightToPrepare) {
+  Harness h;
+  h.startLowBatteryMission();
+  EXPECT_EQ(h.sm.mission().reason, MissionReason::LowBattery);
+  EXPECT_EQ(h.out.control, ControlState::Acquiring);
+
+  Harness p;
+  p.toRecording();
+  p.longPress();
+  p.step();
+  EXPECT_EQ(p.out.phase, MissionPhase::Prepare);
+  EXPECT_EQ(p.sm.mission().reason, MissionReason::Pilot);
+}
+
+TEST(ReturnStateMachineTest, SimultaneousTriggersTakeLinkLossPath) {
+  // S10：CH18 与低电量同一周期确认
+  Harness h;
+  h.toRecording();
+  h.linkLost();
+  h.c.battery.low = true;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Hover);
+  EXPECT_EQ(h.sm.mission().reason, MissionReason::LinkLost);
+  EXPECT_TRUE(h.sm.mission().start_battery_low);
+}
+
+TEST(ReturnStateMachineTest, TriggersBeforeRecordingOnlyAlert) {
+  // D4：录制前的低电量、失控只告警，长按忽略
+  Harness h;
+  h.c.armed = true;
+  h.step();
+  h.c.battery.low = true;
+  h.linkLost();
+  h.longPress();
+  h.run(5.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::RecordDelay);
+  EXPECT_TRUE(h.out.alerts.has(Alert::LowBattery));
+  EXPECT_TRUE(h.out.alerts.has(Alert::LinkLost));
+  EXPECT_EQ(h.out.setpoint, SetpointKind::None);
+
+  // 长按已被消费：进入 Recording 后只按电平条件启动
+  h.c.battery.low = false;
+  h.linkOk();
+  h.run(10.0 + kDt);
+  EXPECT_EQ(h.out.phase, MissionPhase::Recording);
+  h.run(1.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Recording);
+}
+
+TEST(ReturnStateMachineTest, LowBatteryDuringDelayReturnsOncePointsSuffice) {
+  // S9：录制延时内低电量，进入 Recording 补足点数后返航
+  Harness h;
+  h.c.armed = true;
+  h.c.has_min_points = false;
+  h.step();
+  h.c.battery.low = true;
+  h.run(15.0);
+  ASSERT_EQ(h.out.phase, MissionPhase::Recording);
+  h.step();
+  EXPECT_TRUE(h.out.alerts.has(Alert::ReturnPending));
+  h.run(2.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Recording);
+  h.c.has_min_points = true;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+  EXPECT_EQ(h.sm.mission().reason, MissionReason::LowBattery);
+  EXPECT_FALSE(h.out.alerts.has(Alert::ReturnPending));
+}
+
+TEST(ReturnStateMachineTest, InsufficientPointsLandsAfterPendingTimeout) {
+  Harness h;
+  h.toRecording();
+  h.c.has_min_points = false;
+  h.c.battery.low = true;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Recording);
+  EXPECT_TRUE(h.out.alerts.has(Alert::ReturnPending));
+  h.run(3.0 - kDt);  // 等待 2.95 s
+  EXPECT_EQ(h.out.phase, MissionPhase::Recording);
+  h.step();          // 等待 3.0 s
+  EXPECT_EQ(h.out.phase, MissionPhase::Handover);
+  EXPECT_EQ(h.sm.handoverReason(), HandoverReason::InsufficientPoints);
+  EXPECT_TRUE(h.out.mission_active);
+  // 不在 OFFBOARD：直接请求 AUTO.LAND，不发布
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::AutoLand);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::None);
+  EXPECT_TRUE(h.sawEvent(EventType::State, "LandingTransition", "7",
+                         "INSUFFICIENT_POINTS"));
+}
+
+TEST(ReturnStateMachineTest, PendingIsCancelledWhenTriggersClear) {
+  Harness h;
+  h.toRecording();
+  h.c.has_min_points = false;
+  h.linkLost();
+  h.step();
+  EXPECT_TRUE(h.out.alerts.has(Alert::ReturnPending));
+  h.linkOk();
+  h.step();
+  EXPECT_FALSE(h.out.alerts.has(Alert::ReturnPending));
+  h.run(5.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Recording);
+}
+
+TEST(ReturnStateMachineTest, NotAirborneBlocksStartUntilAirborne) {
+  // S13：不在空中时不启动任务，恢复后重新判定
+  Harness h;
+  h.toRecording();
+  h.c.airborne.airborne = false;
+  h.linkLost();
+  h.run(5.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Recording);
+  EXPECT_TRUE(h.out.alerts.has(Alert::TriggerIgnoredLanded));
+  EXPECT_EQ(h.out.setpoint, SetpointKind::None);
+  EXPECT_FALSE(h.out.alerts.has(Alert::ReturnPending));
+
+  h.c.airborne.airborne = true;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Hover);
+  EXPECT_FALSE(h.out.alerts.has(Alert::TriggerIgnoredLanded));
+}
+
+TEST(ReturnStateMachineTest, LongPressOnGroundIsDropped) {
+  Harness h;
+  h.toRecording();
+  h.c.airborne.airborne = false;
+  h.longPress();
+  h.step();
+  EXPECT_TRUE(h.out.alerts.has(Alert::TriggerIgnoredLanded));
+  h.c.airborne.airborne = true;
+  h.run(1.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Recording);
+}
+
+// ============================================================================
+// 任务中（策略矩阵"返航任务中"列）
+// ============================================================================
+
+TEST(ReturnStateMachineTest, ConditionsDuringMissionAreRecordedOnly) {
+  // S1、G1：低电量返航中失控、再长按，都只记录
+  Harness h;
+  h.toFollow();
+  h.linkLost();
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_EQ(h.out.control, ControlState::Owned);
+  EXPECT_TRUE(h.out.alerts.has(Alert::LinkLost));
+  EXPECT_TRUE(h.sm.mission().seen_link_lost_t.has_value());
+  EXPECT_TRUE(h.sawNamed(EventType::Mission, "condition_seen", "link_lost"));
+
+  h.longPress();
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_TRUE(h.sm.mission().seen_pilot_t.has_value());
+  EXPECT_EQ(h.sm.mission().reason, MissionReason::LowBattery);
+}
+
+TEST(ReturnStateMachineTest, ShortPressExitsMission) {
+  // S6：返航中链路正常时短按退出
+  Harness h;
+  h.toFollow();
+  h.c.position = Vec3(-3.0, 4.0, 5.0);
+  h.shortPressNow();
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Exited);
+  EXPECT_EQ(h.out.control, ControlState::Yielded);
+  EXPECT_FALSE(h.out.mission_active);
+  EXPECT_TRUE(h.out.record);
+  EXPECT_TRUE(h.out.commands.cancel_planning);
+  EXPECT_EQ(h.out.commands.trail_cut, TrailCut::AtCursor);
+  EXPECT_TRUE(h.out.alerts.has(Alert::ReturnExited));
+  EXPECT_TRUE(h.sawEvent(EventType::State, "Exited", "5", "PILOT_EXIT"));
+  // 飞控离开 OFFBOARD 之前保持当前位置并请求 POSCTL
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(-3.0, 4.0, 5.0)));
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::Posctl);
+
+  h.c.mode = "POSCTL";
+  h.step();
+  EXPECT_EQ(h.out.setpoint, SetpointKind::None);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::None);
+}
+
+TEST(ReturnStateMachineTest, ShortPressRejectedWhileLinkNotClean) {
+  Harness h;
+  h.toFollow();
+  h.linkDegraded();
+  h.shortPressNow(false);
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_TRUE(h.out.alerts.has(Alert::ExitRejectedLink));
+  h.run(1.0);
+  EXPECT_TRUE(h.out.alerts.has(Alert::ExitRejectedLink));
+
+  // R-66：链路恢复正常后告警消失；再次短按才退出
+  h.linkOk();
+  h.step();
+  EXPECT_FALSE(h.out.alerts.has(Alert::ExitRejectedLink));
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  h.shortPressNow();
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Exited);
+}
+
+TEST(ReturnStateMachineTest, PressStartedBeforeMissionDoesNotExit) {
+  // S5：飞手按住 CH7 时低电量先触发，这次按下不算退出
+  Harness h;
+  h.toRecording();
+  const double press_t = h.now();
+  h.run(0.5);
+  h.c.battery.low = true;
+  h.step();
+  ASSERT_EQ(h.out.phase, MissionPhase::Prepare);
+  h.run(0.5);
+  h.shortPress(press_t);
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+
+  h.run(1.0);
+  h.shortPressNow();
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Exited);
+  EXPECT_EQ(h.out.commands.trail_cut, TrailCut::None);
+}
+
+TEST(ReturnStateMachineTest, LongPressDuringMissionDoesNotExit) {
+  // S8
+  Harness h;
+  h.toFollow();
+  h.longPress();
+  h.run(1.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_FALSE(h.out.commands.cancel_planning);
+}
+
+TEST(ReturnStateMachineTest, ModeSwitchWithCleanLinkExits) {
+  // S7：链路正常时飞手拨模式开关
+  Harness h;
+  h.toFollow();
+  h.c.mode = "ALTCTL";
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Exited);
+  EXPECT_TRUE(h.sawEvent(EventType::State, "Exited", "4b", "EXTERNAL_MODE"));
+  // 已不在 OFFBOARD：不发布，不请求
+  EXPECT_EQ(h.out.setpoint, SetpointKind::None);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::None);
+}
+
+TEST(ReturnStateMachineTest, TakeoverBeforeOffboardConfirmedExits) {
+  // S27（H14）：OFFBOARD 确认前，链路正常时飞手拨到 ALTCTL
+  Harness h;
+  h.startLowBatteryMission();
+  h.run(0.2);
+  h.c.mode = "ALTCTL";
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Exited);
+  EXPECT_TRUE(h.sawEvent(EventType::State, "Exited", "4c", "EXTERNAL_MODE"));
+  h.run(2.0);
+  EXPECT_NE(h.out.mode_intent, ModeIntent::Offboard);
+
+  // 链路退化时不判为接管，继续申请 OFFBOARD（P4）
+  Harness d;
+  d.startLowBatteryMission();
+  d.linkDegraded();
+  d.c.mode = "ALTCTL";
+  d.run(1.0);
+  EXPECT_EQ(d.out.phase, MissionPhase::Prepare);
+  EXPECT_EQ(d.out.control, ControlState::Acquiring);
+  EXPECT_EQ(d.out.mode_intent, ModeIntent::Offboard);
+}
+
+TEST(ReturnStateMachineTest, OwnStreamGapIsFallbackNotTakeover) {
+  // S26（H13）：本模块卡顿，飞控回退 POSCTL，链路正常
+  Harness h;
+  h.toFollow();
+  h.c.mode = "POSCTL";
+  h.c.stream_gap_recent = true;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_EQ(h.out.control, ControlState::Fallback);
+  EXPECT_TRUE(h.out.alerts.has(Alert::OffboardFallback));
+  // 继续发布当前状态的 setpoint，进度冻结，不申请模式
+  EXPECT_EQ(h.out.setpoint, SetpointKind::PathTarget);
+  EXPECT_FALSE(h.out.follow_active);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::None);
+
+  h.run(1.0);
+  h.c.mode = "OFFBOARD";
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Owned);
+  EXPECT_TRUE(h.out.follow_active);
+  EXPECT_TRUE(h.sawEvent(EventType::Control, "owned", "4a", "FALLBACK_RECOVERED"));
+}
+
+TEST(ReturnStateMachineTest, FallbackTimeoutExitsOrReclaims) {
+  Harness h;
+  h.toFollow();
+  h.c.mode = "POSCTL";
+  h.c.stream_gap_recent = true;
+  h.step();
+  h.c.stream_gap_recent = false;
+  h.run(3.0 - kDt);
+  EXPECT_EQ(h.out.control, ControlState::Fallback);
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Exited);
+
+  Harness l;
+  l.toFollow();
+  l.c.mode = "POSCTL";
+  l.c.stream_gap_recent = true;
+  l.step();
+  l.linkLost();
+  l.run(3.0);
+  EXPECT_EQ(l.out.phase, MissionPhase::Follow);
+  EXPECT_EQ(l.out.control, ControlState::Reclaiming);
+  EXPECT_EQ(l.out.mode_intent, ModeIntent::Offboard);
+}
+
+TEST(ReturnStateMachineTest, SwitchOutWhileLinkLostReclaims) {
+  // H08、S12：链路丢失时被切出 OFFBOARD，重新申请
+  Harness h;
+  h.toFollow();
+  h.linkLost();
+  h.step();
+  h.c.position = Vec3(7.0, 8.0, 9.0);
+  h.c.path_target_yaw = 1.0;
+  h.c.mode = "POSCTL";
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Reclaiming);
+  EXPECT_TRUE(h.out.alerts.has(Alert::Reclaiming));
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(7.0, 8.0, 9.0)));
+  EXPECT_DOUBLE_EQ(h.out.hold_yaw, 1.0);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::Offboard);
+  EXPECT_FALSE(h.out.follow_active);
+
+  // 回到 OFFBOARD，对准且偏差 ≤ 0.5 m：回到原状态
+  h.c.mode = "OFFBOARD";
+  h.c.yaw = 1.0;
+  h.c.cross_track_m = 0.3;
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Owned);
+  EXPECT_EQ(h.out.follow, FollowMode::OnPath);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::PathTarget);
+}
+
+TEST(ReturnStateMachineTest, ReclaimChecksYawAndOffset) {
+  // S12：0.5～1.0 m 进入 Rejoin；超过 1.0 m 或投影失败时保持并告警
+  Harness h;
+  h.toFollow();
+  h.linkLost();
+  h.c.path_target_yaw = 0.3;
+  h.c.mode = "POSCTL";
+  h.step();
+  ASSERT_EQ(h.out.control, ControlState::Reclaiming);
+
+  h.c.mode = "OFFBOARD";
+  h.c.cross_track_m = 1.5;
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Reclaiming);
+  EXPECT_TRUE(h.out.alerts.has(Alert::ReclaimOffset));
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+
+  h.c.cross_track_m = 0.3;
+  h.c.projection_ok = false;
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Reclaiming);
+  EXPECT_TRUE(h.out.alerts.has(Alert::ReclaimOffset));
+
+  // yaw 未对准：等待，不算偏差超限
+  h.c.projection_ok = true;
+  h.c.cross_track_m = 0.7;
+  h.c.yaw = 0.3 + 0.5;
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Reclaiming);
+  EXPECT_FALSE(h.out.alerts.has(Alert::ReclaimOffset));
+
+  h.c.yaw = 0.3;
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Owned);
+  EXPECT_EQ(h.out.follow, FollowMode::Rejoin);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::PathTargetRejoin);
+}
+
+TEST(ReturnStateMachineTest, ReclaimExitsWhenLinkRecoversInPilotMode) {
+  // R-63：重新申请期间链路恢复，模式仍不是 OFFBOARD
+  Harness h;
+  h.toFollow();
+  h.linkLost();
+  h.c.mode = "ALTCTL";
+  h.step();
+  ASSERT_EQ(h.out.control, ControlState::Reclaiming);
+  h.linkDegraded();
+  h.run(1.0);
+  EXPECT_EQ(h.out.control, ControlState::Reclaiming);
+  h.linkOk();
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Exited);
+}
+
+TEST(ReturnStateMachineTest, ReclaimDuringHoverKeepsHoverTimer) {
+  Harness h;
+  h.startLinkLossMission();
+  const Vec3 trigger = h.c.position;
+  h.acquire();
+  h.c.mode = "POSCTL";
+  h.c.position = Vec3(0.5, 0.5, 3.0);
+  h.step();
+  ASSERT_EQ(h.out.control, ControlState::Reclaiming);
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(0.5, 0.5, 3.0)));
+  h.c.mode = "OFFBOARD";
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Owned);
+  EXPECT_TRUE(h.out.hold_position.isApprox(trigger));
+  // 悬停计时从任务开始算，不因重新申请重置
+  const int ticks = h.runUntil([](const StepOutput& o) {
+    return o.phase == MissionPhase::Prepare;
+  });
+  EXPECT_GT(ticks, 0);
+  EXPECT_NEAR(h.c.now, 15.05 + 15.0, 1e-6);
+}
+
+TEST(ReturnStateMachineTest, HoverKeepsPlanningResultsUntilPrepare) {
+  // D3：悬停期间的规划结果在悬停结束后才处理
+  Harness h;
+  h.startLinkLossMission();
+  h.acquire();
+  h.c.plan_status = PlanStatus::FailedTooClose;
+  h.run(5.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Hover);
+  const int ticks = h.runUntil([](const StepOutput& o) {
+    return o.phase != MissionPhase::Hover;
+  });
+  EXPECT_GT(ticks, 0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Handover);
+  EXPECT_EQ(h.sm.handoverReason(), HandoverReason::PlanTooClose);
+  // 链路丢失时直接 AUTO.LAND
+  EXPECT_TRUE(h.sm.handoverDirect());
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::AutoLand);
+}
+
+TEST(ReturnStateMachineTest, PrepareNeedsOwnedReadyAndAligned) {
+  Harness h;
+  h.startLowBatteryMission();
+  h.c.plan_status = PlanStatus::Ready;
+  h.c.path_start_yaw = 1.2;
+  h.run(1.0);
+  // 未进入 OFFBOARD：不开始跟随；规划就绪后 yaw 改为路径起始切向
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+  EXPECT_DOUBLE_EQ(h.out.hold_yaw, 1.2);
+
+  h.c.mode = "OFFBOARD";
+  h.run(1.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);  // yaw 未对准
+  h.c.yaw = 1.2;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_TRUE(h.out.follow_active);
+  EXPECT_TRUE(h.sawEvent(EventType::State, "ReturnActive", "7", "PLAN_READY"));
+
+  // 航点降级没有起始切向，不要求对准
+  Harness f;
+  f.startLowBatteryMission();
+  f.acquire();
+  f.c.plan_status = PlanStatus::ReadyFallback;
+  f.c.yaw = 2.5;
+  f.step();
+  EXPECT_EQ(f.out.phase, MissionPhase::Follow);
+}
+
+TEST(ReturnStateMachineTest, PlanFailuresLandOrHold) {
+  Harness t;
+  t.startLowBatteryMission();
+  t.acquire();
+  t.c.plan_status = PlanStatus::FailedFallback;
+  t.step();
+  EXPECT_EQ(t.out.phase, MissionPhase::Handover);
+  EXPECT_EQ(t.sm.handoverReason(), HandoverReason::FallbackFailed);
+  // 链路正常且在 OFFBOARD：先请求 POSCTL，期间保持
+  EXPECT_FALSE(t.sm.handoverDirect());
+  EXPECT_EQ(t.out.mode_intent, ModeIntent::Posctl);
+  EXPECT_EQ(t.out.setpoint, SetpointKind::Hold);
+
+  // 配置非法：保持并等待（由 R6 的准备超时兜底）
+  Harness cfg;
+  cfg.startLowBatteryMission();
+  cfg.acquire();
+  cfg.c.plan_status = PlanStatus::FailedConfig;
+  cfg.run(5.0);
+  EXPECT_EQ(cfg.out.phase, MissionPhase::Prepare);
+  EXPECT_EQ(cfg.out.setpoint, SetpointKind::Hold);
+}
+
+TEST(ReturnStateMachineTest, FollowSwitchesBetweenPathAndRejoin) {
+  Harness h;
+  h.toFollow();
+  EXPECT_EQ(h.out.setpoint, SetpointKind::PathTarget);
+  h.c.deviation_confirmed = true;
+  h.step();
+  EXPECT_EQ(h.out.follow, FollowMode::Rejoin);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::PathTargetRejoin);
+  EXPECT_TRUE(h.sawEvent(EventType::Follow, "rejoin", "7", "DEVIATION"));
+  h.c.deviation_confirmed = false;
+  h.c.rejoin_confirmed = true;
+  h.step();
+  EXPECT_EQ(h.out.follow, FollowMode::OnPath);
+}
+
+TEST(ReturnStateMachineTest, ProgressFrozenWhileNotOwned) {
+  // 区域 B 不处于 owned 时，区域 C 冻结，完成也不进入到点（R-18）
+  Harness h;
+  h.toFollow();
+  h.c.mode = "POSCTL";
+  h.c.stream_gap_recent = true;
+  h.step();
+  ASSERT_EQ(h.out.control, ControlState::Fallback);
+  h.c.deviation_confirmed = true;
+  h.c.finished = true;
+  h.run(1.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_EQ(h.out.follow, FollowMode::OnPath);
+
+  h.linkLost();
+  h.run(3.0);
+  ASSERT_EQ(h.out.control, ControlState::Reclaiming);
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_EQ(h.out.follow, FollowMode::OnPath);
+}
+
+TEST(ReturnStateMachineTest, ArrivalHoversThenStagedHandover) {
+  Harness h;
+  h.toArrival();
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(1.0, 2.0, 3.0)));
+  h.c.finished = false;
+  h.c.position = Vec3(1.2, 2.1, 3.0);
+  h.run(5.0 - kDt);
+  EXPECT_EQ(h.out.phase, MissionPhase::Arrival);
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Handover);
+  EXPECT_EQ(h.sm.handoverReason(), HandoverReason::Arrived);
+  // 沿用到点位置；链路正常：OFFBOARD → POSCTL → AUTO.LAND
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(1.0, 2.0, 3.0)));
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::Posctl);
+
+  h.c.mode = "POSCTL";
+  h.step();
+  EXPECT_EQ(h.out.setpoint, SetpointKind::None);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::AutoLand);
+
+  h.c.mode = "AUTO.LAND";
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::FcuLanding);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::None);
+  EXPECT_FALSE(h.out.mission_active);
+}
+
+TEST(ReturnStateMachineTest, ArrivalTimerOnlyRunsWhileOwned) {
+  Harness h;
+  h.toArrival();
+  h.run(2.0);
+  h.c.mode = "POSCTL";
+  h.c.stream_gap_recent = true;
+  h.run(2.0);
+  ASSERT_EQ(h.out.control, ControlState::Fallback);
+  h.c.mode = "OFFBOARD";
+  h.c.stream_gap_recent = false;
+  h.run(2.5);
+  EXPECT_EQ(h.out.phase, MissionPhase::Arrival);
+  h.run(0.6);
+  EXPECT_EQ(h.out.phase, MissionPhase::Handover);
+}
+
+TEST(ReturnStateMachineTest, HandoverGoesDirectWhenPosctlDoesNotTakeEffect) {
+  Harness h;
+  h.toHandover();
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::Posctl);
+  h.run(3.0 - kDt);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::Posctl);
+  h.step();
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::AutoLand);
+  EXPECT_TRUE(h.out.alerts.has(Alert::HandoverDirectLand));
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+}
+
+TEST(ReturnStateMachineTest, HandoverWithLinkLostGoesDirect) {
+  Harness h;
+  h.toArrival();
+  h.linkLost();
+  h.run(5.0);
+  ASSERT_EQ(h.out.phase, MissionPhase::Handover);
+  EXPECT_TRUE(h.sm.handoverDirect());
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::AutoLand);
+
+  // 交接途中链路丢失：不再经过 POSCTL
+  Harness m;
+  m.toHandover();
+  ASSERT_EQ(m.out.mode_intent, ModeIntent::Posctl);
+  m.linkLost();
+  m.step();
+  EXPECT_EQ(m.out.mode_intent, ModeIntent::AutoLand);
+  EXPECT_EQ(m.out.setpoint, SetpointKind::Hold);
+}
+
+TEST(ReturnStateMachineTest, HandoverPilotTakeoverOnlyWithCleanLink) {
+  // S18：交接中飞手拨开关，进入 Exited
+  Harness h;
+  h.toHandover();
+  h.c.mode = "POSCTL";
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Handover);  // POSCTL 是我方请求的模式
+  h.c.mode = "ALTCTL";
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Exited);
+  EXPECT_EQ(h.out.commands.trail_cut, TrailCut::ToStart);
+  h.run(2.0);
+  EXPECT_NE(h.out.mode_intent, ModeIntent::AutoLand);
+
+  // S23：链路丢失时出现其他模式，不算接管，继续请求 AUTO.LAND
+  Harness l;
+  l.toHandover();
+  l.linkLost();
+  l.c.mode = "ALTCTL";
+  l.run(2.0);
+  EXPECT_EQ(l.out.phase, MissionPhase::Handover);
+  EXPECT_EQ(l.out.mode_intent, ModeIntent::AutoLand);
+
+  // 交接中短按退出
+  Harness e;
+  e.toHandover();
+  e.shortPressNow();
+  e.step();
+  EXPECT_EQ(e.out.phase, MissionPhase::Exited);
+}
+
+TEST(ReturnStateMachineTest, LandedDuringHoverLandsDirectly) {
+  // S25：悬停阶段高度差降到 0.5 m 以下
+  Harness h;
+  h.startLinkLossMission();
+  h.acquire();
+  h.c.airborne.airborne = false;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Handover);
+  EXPECT_EQ(h.sm.handoverReason(), HandoverReason::MissionLanded);
+  EXPECT_TRUE(h.sm.handoverDirect());
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::AutoLand);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+  EXPECT_TRUE(h.out.alerts.has(Alert::MissionLanded));
+  EXPECT_TRUE(h.sawEvent(EventType::State, "LandingTransition", "3", "MISSION_LANDED"));
+}
+
+TEST(ReturnStateMachineTest, LandedDuringFollowUsesFcuLandedState) {
+  // 跟随阶段路径末端可能贴近起飞高度：只看飞控的落地判定
+  Harness h;
+  h.toFollow();
+  h.c.airborne.airborne = false;
+  h.run(1.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  h.c.airborne.landed_state = LandedState::OnGround;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Handover);
+  EXPECT_TRUE(h.sm.handoverDirect());
+}
+
+// ============================================================================
+// AutoLandYield（规则 2）
+// ============================================================================
+
+TEST(ReturnStateMachineTest, AutoLandYieldIsLatchedAndReRequestedOnLinkLoss) {
+  Harness h;
+  h.toFollow();
+  h.c.mode = "AUTO.LAND";
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::FcuLanding);
+  EXPECT_EQ(h.out.control, ControlState::FcuLanding);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::None);
+  EXPECT_TRUE(h.out.commands.cancel_planning);
+  EXPECT_FALSE(h.out.mission_active);
+
+  // 链路正常时飞手从 AUTO.LAND 接管：不再干预（D18）
+  h.c.mode = "POSCTL";
+  h.run(1.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::FcuLanding);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::None);
+
+  // S21：链路丢失期间被切走：重新请求 AUTO.LAND
+  h.linkLost();
+  h.step();
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::AutoLand);
+  EXPECT_TRUE(h.out.alerts.has(Alert::AutolandOverridden));
+  h.linkOk();
+  h.step();
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::None);
+
+  h.c.armed = false;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Disarmed);
+}
+
+TEST(ReturnStateMachineTest, AutoLandYieldsFromRecordingAndExited) {
+  Harness r;
+  r.toRecording();
+  r.c.mode = "AUTO.LAND";
+  r.step();
+  EXPECT_EQ(r.out.phase, MissionPhase::FcuLanding);
+
+  Harness e;
+  e.toFollow();
+  e.c.mode = "ALTCTL";
+  e.step();
+  ASSERT_EQ(e.out.phase, MissionPhase::Exited);
+  e.c.mode = "AUTO.LAND";
+  e.step();
+  EXPECT_EQ(e.out.phase, MissionPhase::FcuLanding);
+}
+
+// ============================================================================
+// Exited
+// ============================================================================
+
+TEST(ReturnStateMachineTest, ExitedStartsNewMissionOnLinkLoss) {
+  // S11：退出后失控，开始新任务
+  Harness h;
+  h.toFollow();
+  h.c.mode = "POSCTL";
+  h.step();
+  ASSERT_EQ(h.out.phase, MissionPhase::Exited);
+  EXPECT_TRUE(h.out.record);
+  h.run(10.0);
+  h.linkLost();
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Hover);
+  EXPECT_EQ(h.out.mission_id, 2);
+  EXPECT_EQ(h.sm.mission().reason, MissionReason::LinkLost);
+  EXPECT_EQ(h.sm.mission().start_mode, "POSCTL");
+  EXPECT_TRUE(h.out.commands.start_planning);
+  EXPECT_FALSE(h.out.record);
+}
+
+TEST(ReturnStateMachineTest, ExitedOnlyAlertsForBatteryAndLongPress) {
+  // D1：退出后低电量、长按只告警
+  Harness h;
+  h.toFollow();
+  h.c.battery.low = false;
+  h.c.mode = "POSCTL";
+  h.step();
+  ASSERT_EQ(h.out.phase, MissionPhase::Exited);
+
+  h.c.battery.low = true;
+  h.run(1.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Exited);
+  EXPECT_TRUE(h.out.alerts.has(Alert::LowBattery));
+
+  h.longPress();
+  h.c.pilot.pressed = true;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Exited);
+  EXPECT_TRUE(h.out.alerts.has(Alert::ReturnRequestIgnored));
+  h.c.pilot.pressed = false;
+  h.step();
+  EXPECT_FALSE(h.out.alerts.has(Alert::ReturnRequestIgnored));
+}
+
+TEST(ReturnStateMachineTest, ExitedDoesNotRestartOnGround) {
+  Harness h;
+  h.toFollow();
+  h.c.mode = "POSCTL";
+  h.step();
+  h.c.airborne.airborne = false;
+  h.linkLost();
+  h.run(2.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Exited);
+  EXPECT_TRUE(h.out.alerts.has(Alert::TriggerIgnoredLanded));
+}
+
+TEST(ReturnStateMachineTest, ExitTrailCutDependsOnPhase) {
+  // R-65：悬停、准备不截断；跟随截断到游标；到点、交接截断到起点
+  Harness hover;
+  hover.startLinkLossMission();
+  hover.acquire();
+  hover.linkOk();
+  hover.shortPressNow();
+  hover.step();
+  ASSERT_EQ(hover.out.phase, MissionPhase::Exited);
+  EXPECT_EQ(hover.out.commands.trail_cut, TrailCut::None);
+
+  Harness arrival;
+  arrival.toArrival();
+  arrival.shortPressNow();
+  arrival.step();
+  ASSERT_EQ(arrival.out.phase, MissionPhase::Exited);
+  EXPECT_EQ(arrival.out.commands.trail_cut, TrailCut::ToStart);
+}
+
+// ============================================================================
+// 输入中断
+// ============================================================================
+
+TEST(ReturnStateMachineTest, OdomStaleFreezesAndHolds) {
+  Harness h;
+  h.toFollow();
+  h.c.position = Vec3(4.0, 4.0, 4.0);
+  h.c.odom_stale = true;
+  h.step();
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(4.0, 4.0, 4.0)));
+  EXPECT_FALSE(h.out.follow_active);
+  EXPECT_TRUE(h.out.alerts.has(Alert::OdomStale));
+  h.c.deviation_confirmed = true;
+  h.c.finished = true;
+  h.run(1.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_EQ(h.out.follow, FollowMode::OnPath);
+
+  h.c.odom_stale = false;
+  h.c.finished = false;
+  h.step();
+  EXPECT_EQ(h.out.follow, FollowMode::Rejoin);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::PathTargetRejoin);
+}
+
+TEST(ReturnStateMachineTest, StaleFcuStateFreezesModeDecisions) {
+  // R-62：飞控状态中断期间不按过时的模式判定
+  Harness h;
+  h.toFollow();
+  h.c.mode = "POSCTL";
+  h.c.stream_gap_recent = true;
+  h.step();
+  ASSERT_EQ(h.out.control, ControlState::Fallback);
+  h.c.stream_gap_recent = false;
+  h.c.fcu_state_fresh = false;
+  h.run(5.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_EQ(h.out.control, ControlState::Fallback);
+  EXPECT_TRUE(h.out.alerts.has(Alert::FcuStateStale));
+
+  // 恢复后按当时的数据判定：飞控已自动回到 OFFBOARD
+  h.c.fcu_state_fresh = true;
+  h.c.mode = "OFFBOARD";
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Owned);
+  EXPECT_FALSE(h.out.alerts.has(Alert::FcuStateStale));
+}
+
+TEST(ReturnStateMachineTest, ConditionAlertsArePassedThrough) {
+  Harness h;
+  h.toRecording();
+  h.c.mode_request_failed = true;
+  h.c.link.ch18_unexpected = true;
+  h.c.link.ch18_value = 998;
+  h.c.battery.invalid = true;
+  h.step();
+  EXPECT_TRUE(h.out.alerts.has(Alert::ModeRequestFailed));
+  EXPECT_TRUE(h.out.alerts.has(Alert::Ch18Unexpected));
+  EXPECT_TRUE(h.out.alerts.has(Alert::BatteryInvalid));
+  EXPECT_TRUE(h.sawNamed(EventType::Condition, "ch18_unexpected", "value=998"));
+  EXPECT_TRUE(h.sawNamed(EventType::Alert, "CH18_UNEXPECTED"));
+  EXPECT_EQ(h.out.phase, MissionPhase::Recording);
+}
+
+// ============================================================================
+// 事件
+// ============================================================================
+
+TEST(ReturnStateMachineTest, EventsTraceLowBatteryThenLinkLoss) {
+  // S29 的状态机部分：低电量返航中失控，到点后直接 AUTO.LAND
+  Harness h;
+  h.toFollow();
+  h.linkLost();
+  h.step();
+  h.c.finished = true;
+  h.step();
+  h.c.finished = false;
+  h.run(5.0);
+  h.c.mode = "AUTO.LAND";
+  h.step();
+  h.c.armed = false;
+  h.step();
+
+  const std::vector<std::string> expected = {
+      "condition:battery_low", "mission:started", "state:ReturnPreOffboard",
+      "fcu:OFFBOARD", "control:owned", "state:ReturnActive",
+      "condition:link_lost", "state:LandingHover", "state:LandingTransition",
+      "fcu:AUTO.LAND", "state:AutoLandYield", "state:IdleDisarmed"};
+  std::vector<std::string> seen;
+  for (const auto& e : h.history) {
+    std::string key = std::string(eventTypeName(e.type)) + ":" +
+                      (e.name.empty() ? e.to : e.name);
+    if (std::find(expected.begin(), expected.end(), key) != expected.end()) {
+      seen.push_back(key);
+    }
+  }
+  // 按顺序出现（允许重复的键只取第一次）
+  std::size_t next = 0;
+  for (const auto& key : seen) {
+    if (next < expected.size() && key == expected[next]) {
+      ++next;
+    }
+  }
+  EXPECT_EQ(next, expected.size());
+
+  // 每条区域转换都带规则编号和原因
+  for (const auto& e : h.history) {
+    if (e.type == EventType::State || e.type == EventType::Control ||
+        e.type == EventType::Follow) {
+      EXPECT_FALSE(e.rule.empty()) << e.from << " -> " << e.to;
+      EXPECT_FALSE(e.reason.empty()) << e.from << " -> " << e.to;
+    }
+  }
+  // 链路丢失时交接直接 AUTO.LAND，不经过 POSCTL
+  EXPECT_TRUE(h.sawEvent(EventType::Alert, "on") &&
+              h.sawNamed(EventType::Alert, "HANDOVER_DIRECT_LAND"));
+}
+
+}  // namespace
+}  // namespace px4_backtrack::domain
