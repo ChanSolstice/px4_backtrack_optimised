@@ -26,24 +26,18 @@ void AirborneMonitor::onArmed(bool armed) {
   }
 
   if (!armed_) {
-    // 从未解锁到解锁：新的飞行周期，取当时的里程计高度
+    // 从未解锁到解锁：新的飞行周期，取当时的里程计高度；还没有里程计时
+    // 与空中重启一样只按 landed_state 判定
     armed_ = true;
-    if (has_height_) {
-      z_arm_ = z_;
-      status_.arm_height = ArmHeightRef::Known;
-    } else {
-      status_.arm_height = ArmHeightRef::Pending;
-    }
+    z_arm_ = z_;
+    status_.arm_height = has_height_ ? ArmHeightRef::Known
+                                     : ArmHeightRef::NotApplicable;
   }
 }
 
 void AirborneMonitor::onHeight(double z) {
   has_height_ = true;
   z_ = z;
-  if (status_.arm_height == ArmHeightRef::Pending) {
-    z_arm_ = z;
-    status_.arm_height = ArmHeightRef::Known;
-  }
 }
 
 void AirborneMonitor::onLandedState(double t, LandedState state) {
@@ -70,7 +64,6 @@ void AirborneMonitor::update(double t) {
       height_ok = true;
       break;
     case ArmHeightRef::None:
-    case ArmHeightRef::Pending:
       height_ok = false;
       break;
   }

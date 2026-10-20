@@ -272,6 +272,7 @@ public:
   ControlState control() const { return control_; }
   FollowMode follow() const { return follow_; }
   const MissionInfo& mission() const { return mission_; }
+  /// 最近一次交接的原因和是否直接降落，只在 Handover 阶段有意义
   HandoverReason handoverReason() const { return handover_reason_; }
   bool handoverDirect() const { return handover_direct_; }
   int flightId() const { return flight_id_; }
@@ -350,7 +351,6 @@ private:
   PendingStart pending_;
   HandoverReason handover_reason_{HandoverReason::None};
   bool handover_direct_{false};   ///< 交接直接请求 AUTO.LAND（不经过 POSCTL）
-  bool handover_landed_{false};   ///< 交接因任务中落地而直接降落（告警 MISSION_LANDED）
 
   // 计时
   double record_delay_start_t_{0.0};

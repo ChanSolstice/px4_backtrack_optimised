@@ -191,14 +191,14 @@ TEST(LinkMonitorTest, RcTimeoutConfirmsAfterTimeoutPlusDebounceAndRecovers) {
   EXPECT_TRUE(rig.status().lost);
   EXPECT_EQ(rig.status().source, LinkLossSource::RcTimeout);
 
-  // t=2.0 起恢复收帧：从这一帧起连续正常 2 s 才清除
+  // t=2.0 起恢复收帧：从最后一次判定超时（t=1.95）起连续正常 2 s 才清除
   while (rig.now() < 2.0 - 1e-9) {
     rig.tick();
   }
-  rig.frames(40, kNormal);  // 2.0 .. 3.95
+  rig.frames(39, kNormal);  // 2.0 .. 3.9
   EXPECT_FALSE(rig.status().rc_timeout);
   EXPECT_TRUE(rig.status().lost);
-  rig.frame(kNormal);       // 4.0
+  rig.frame(kNormal);       // 3.95
   EXPECT_FALSE(rig.status().lost);
   EXPECT_TRUE(rig.status().degraded);
 }

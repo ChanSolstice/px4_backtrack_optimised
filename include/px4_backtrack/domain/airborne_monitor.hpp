@@ -33,9 +33,8 @@ enum class LandedState : uint8_t {
 /// 解锁高度的来源
 enum class ArmHeightRef {
   None,           ///< 还没有收到飞控状态，或未解锁
-  Pending,        ///< 已解锁，等待第一帧里程计
   Known,          ///< 已记录解锁高度
-  NotApplicable   ///< 节点在已解锁时启动，没有观察到解锁过程：只按 landed_state 判定
+  NotApplicable   ///< 没有观察到解锁过程（空中重启）或解锁时还没有里程计：只按 landed_state 判定
 };
 
 /// 在空中判定快照

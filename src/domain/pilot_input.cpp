@@ -26,13 +26,10 @@ void PilotInput::onRcFrame(double t,
   }
 
   // RC超时后到达的帧与之前的帧不相连：之前的按下作废，本帧不能构成按下沿
-  const bool continuous = has_frame_ &&
-      t - last_frame_t_ + kTimeEpsS < config_.rc_loss_timeout_s;
-  has_frame_ = true;
-  last_frame_t_ = t;
-  if (!continuous) {
+  if (t - last_frame_t_ + kTimeEpsS >= config_.rc_loss_timeout_s) {
     cancelPress();
   }
+  last_frame_t_ = t;
 
   // 失控帧：通道值是接收机的失控输出，不可信
   if (link.ch18_low_now) {
@@ -88,7 +85,7 @@ void PilotInput::update(double t, const LinkStatus& link) {
   }
 
   // RC超时：之前的按下作废
-  if (has_frame_ && t - last_frame_t_ + kTimeEpsS >= config_.rc_loss_timeout_s) {
+  if (t - last_frame_t_ + kTimeEpsS >= config_.rc_loss_timeout_s) {
     cancelPress();
     return;
   }

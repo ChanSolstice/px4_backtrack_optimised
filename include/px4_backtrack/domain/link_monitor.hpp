@@ -106,11 +106,8 @@ private:
 
   bool has_frame_{false};        ///< 是否收到过RC消息
   double last_frame_t_{0.0};     ///< 最近一帧的接收时间
-  bool has_time_{false};         ///< 是否已有积分起点
   double last_t_{0.0};           ///< 漏桶积分到的时间
-  bool has_update_{false};       ///< 是否调用过 update
   double last_update_t_{0.0};    ///< 上一次 update 的时间（判定自身卡顿）
-  bool in_rc_timeout_{false};    ///< 已判定RC超时，等待下一帧（超时在下一帧到达时结束）
   bool has_bad_{false};          ///< 是否出现过链路异常
   double last_bad_t_{0.0};       ///< 最近一次链路异常的时间
 };

@@ -130,22 +130,19 @@ TEST(AirborneMonitorTest, NodeStartedWhileArmedUsesLandedStateOnly) {
   EXPECT_FALSE(monitor.status().airborne);
 }
 
-TEST(AirborneMonitorTest, ArmBeforeOdometryWaitsForFirstHeight) {
+TEST(AirborneMonitorTest, ArmBeforeOdometryUsesLandedStateOnly) {
+  // 解锁时还没有里程计：与空中重启一样只按飞控落地状态判定
   AirborneMonitor monitor(makeConfig());
   monitor.onArmed(false);
   monitor.onArmed(true);
-  monitor.update(0.0);
-  EXPECT_EQ(monitor.status().arm_height, ArmHeightRef::Pending);
-  EXPECT_FALSE(monitor.status().airborne);
-
   monitor.onHeight(0.2);
-  monitor.update(0.1);
-  EXPECT_EQ(monitor.status().arm_height, ArmHeightRef::Known);
-  EXPECT_FALSE(monitor.status().airborne);
-
-  monitor.onHeight(1.0);
-  monitor.update(0.2);
+  monitor.update(0.0);
+  EXPECT_EQ(monitor.status().arm_height, ArmHeightRef::NotApplicable);
   EXPECT_TRUE(monitor.status().airborne);
+
+  monitor.onLandedState(0.1, LandedState::OnGround);
+  monitor.update(0.1);
+  EXPECT_FALSE(monitor.status().airborne);
 }
 
 TEST(AirborneMonitorTest, EachFlightCycleRecordsItsOwnArmHeight) {

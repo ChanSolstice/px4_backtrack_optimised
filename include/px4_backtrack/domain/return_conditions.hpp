@@ -63,7 +63,6 @@ struct Conditions {
   bool finished{false};                   ///< 轨迹或航点降级会话完成
   bool projection_ok{false};              ///< 局部投影有效（航点降级按 true）
   double cross_track_m{0.0};              ///< 横向偏差 (m)（航点降级按 0）
-  double remaining_m{0.0};                ///< 剩余路径长度 (m)，用于停滞判定
   bool stream_gap_recent{false};          ///< 最近 fallback_window_s 内本模块发布间隔 ≥ fallback_gap_s
   bool mode_request_failed{false};        ///< 最近一次模式请求超时未生效、被拒或服务不可用
 };

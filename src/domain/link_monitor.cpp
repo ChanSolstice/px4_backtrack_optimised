@@ -28,27 +28,16 @@ void LinkMonitor::onRcFrame(double t, const std::vector<uint16_t>& channels) {
   has_frame_ = true;
   last_frame_t_ = t;
   status_.rc_timeout = false;
-  if (in_rc_timeout_) {
-    // RC超时到本帧为止，连续正常从本帧算起
-    in_rc_timeout_ = false;
-    markBad(t);
-  }
 
   if (config_.enable_ch18) {
-    if (channels.size() > kCh18Index) {
-      const int value = channels[kCh18Index];
-      status_.ch18_unavailable = false;
-      status_.ch18_value = value;
-      status_.ch18_low_now = value < config_.ch18_failsafe_threshold;
-      status_.ch18_unexpected =
-          value != kCh18NormalValue && value != kCh18FailsafeValue;
-    } else {
-      // 通道数不足：通道18不参与判定，既不算失控帧，也不算退化
-      status_.ch18_unavailable = true;
-      status_.ch18_value = -1;
-      status_.ch18_low_now = false;
-      status_.ch18_unexpected = false;
-    }
+    // 通道数不足时通道18不参与判定：既不算失控帧，也不算退化
+    const bool available = channels.size() > kCh18Index;
+    const int value = available ? channels[kCh18Index] : -1;
+    status_.ch18_unavailable = !available;
+    status_.ch18_value = value;
+    status_.ch18_low_now = available && value < config_.ch18_failsafe_threshold;
+    status_.ch18_unexpected = available && value != kCh18NormalValue &&
+                              value != kCh18FailsafeValue;
     if (status_.ch18_low_now) {
       markBad(t);
     }
@@ -63,15 +52,13 @@ void LinkMonitor::update(double t) {
   // 两次 update 间隔超过RC超时，说明本模块自身卡顿过：这期间到达的RC消息
   // 可能还在回调队列里，没到达不代表链路中断，这一拍不判RC超时。
   const bool self_stalled =
-      !has_update_ || t - last_update_t_ + kTimeEpsS >= config_.rc_loss_timeout_s;
-  has_update_ = true;
+      t - last_update_t_ + kTimeEpsS >= config_.rc_loss_timeout_s;
   last_update_t_ = t;
 
   const double since_frame = t - last_frame_t_;
   status_.rc_timeout =
       has_frame_ && since_frame + kTimeEpsS >= config_.rc_loss_timeout_s;
   if (config_.enable_rc_loss && status_.rc_timeout && !self_stalled) {
-    in_rc_timeout_ = true;
     markBad(t);
     if (since_frame + kTimeEpsS >=
         config_.rc_loss_timeout_s + config_.rc_loss_debounce_s) {
@@ -83,11 +70,6 @@ void LinkMonitor::update(double t) {
 }
 
 void LinkMonitor::integrate(double t) {
-  if (!has_time_) {
-    has_time_ = true;
-    last_t_ = t;
-    return;
-  }
   const double dt = t - last_t_;
   if (dt <= 0.0) {
     return;
@@ -123,7 +105,7 @@ void LinkMonitor::evaluate(double t) {
 
 void LinkMonitor::markBad(double t) {
   has_bad_ = true;
-  last_bad_t_ = std::max(last_bad_t_, t);
+  last_bad_t_ = t;
 }
 
 void LinkMonitor::setLost(LinkLossSource source) {

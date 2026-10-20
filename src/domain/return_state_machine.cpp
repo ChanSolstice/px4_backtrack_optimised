@@ -236,7 +236,6 @@ StepOutput ReturnStateMachine::step(const Conditions& c) {
       setPhase(MissionPhase::Disarmed, "1", "DISARMED", out);
     }
     pending_ = PendingStart{};
-    exit_rejected_ = false;
     consumeCommands(c);
   } else {
     if (phase_ == MissionPhase::Disarmed) {
@@ -244,7 +243,6 @@ StepOutput ReturnStateMachine::step(const Conditions& c) {
       ++flight_id_;
       mission_count_ = 0;
       mission_ = MissionInfo{};
-      handover_reason_ = HandoverReason::None;
       out.commands.new_flight = true;
       record_delay_start_t_ = c.now;
       setPhase(MissionPhase::RecordDelay, "1", "ARMED", out);
@@ -436,7 +434,6 @@ void ReturnStateMachine::stepPrepare(const Conditions& c, StepOutput& out) {
   if (c.path_start_yaw && !yawAligned(c.yaw, *c.path_start_yaw)) {
     return;
   }
-  follow_ = FollowMode::OnPath;
   setPhase(MissionPhase::Follow, "7", "PLAN_READY", out);
 }
 
@@ -480,7 +477,7 @@ void ReturnStateMachine::stepHandover(const Conditions& c, StepOutput& out) {
   // 规则 3：交接中落地，改为直接降落
   if (c.airborne.landed_state == LandedState::OnGround) {
     handover_direct_ = true;
-    handover_landed_ = true;
+    handover_reason_ = HandoverReason::MissionLanded;
   }
   // 链路丢失时不经过 POSCTL（第 7.6 节）
   if (c.link.lost) {
@@ -648,14 +645,6 @@ void ReturnStateMachine::startMission(const Conditions& c, bool enter_phase,
   trigger_position_ = c.position;
   trigger_yaw_ = c.yaw;
   pre_frames_ = 0;
-  follow_ = FollowMode::OnPath;
-  handover_reason_ = HandoverReason::None;
-  handover_direct_ = false;
-  handover_landed_ = false;
-  reclaim_offset_ = false;
-  exit_rejected_ = false;
-  odom_hold_active_ = false;
-  ignored_return_press_id_ = 0;
   out.commands.start_planning = true;
 
   std::string conditions;
@@ -692,10 +681,8 @@ void ReturnStateMachine::enterHandover(const Conditions& c, HandoverReason reaso
     handover_yaw_ = c.yaw;
   }
   handover_reason_ = reason;
-  handover_landed_ = reason == HandoverReason::MissionLanded;
   handover_direct_ = direct || c.link.lost;
   handover_start_t_ = c.now;
-  reclaim_offset_ = false;
   out.commands.cancel_planning = true;
   setControl(ControlState::Handover, rule, handoverReasonName(reason), out);
   setPhase(MissionPhase::Handover, rule, handoverReasonName(reason), out);
@@ -719,8 +706,6 @@ void ReturnStateMachine::exitMission(const Conditions& c, const char* rule,
   out.commands.cancel_planning = true;
   exit_position_ = c.position;
   exit_yaw_ = c.yaw;
-  pending_ = PendingStart{};
-  reclaim_offset_ = false;
   endMission(reason, out);
   setControl(ControlState::Yielded, rule, reason, out);
   setPhase(MissionPhase::Exited, rule, reason, out);
@@ -973,12 +958,14 @@ void ReturnStateMachine::computeAlerts(const Conditions& c, StepOutput& out) {
   if (pending_.active) alerts.set(Alert::ReturnPending);
   if (trigger_ignored_landed_) alerts.set(Alert::TriggerIgnoredLanded);
   if (phase_ == MissionPhase::Handover) {
-    if (handover_landed_) alerts.set(Alert::MissionLanded);
+    if (handover_reason_ == HandoverReason::MissionLanded) {
+      alerts.set(Alert::MissionLanded);
+    }
     if (handover_direct_) alerts.set(Alert::HandoverDirectLand);
   }
 
-  // 拒绝退出的告警持续到链路恢复正常或任务结束（R-66）
-  if (exit_rejected_ && (linkClean(c) || !mission_.active)) {
+  // 拒绝退出的告警持续到链路恢复正常或任务结束（R-66，任务结束时由 endMission 清除）
+  if (exit_rejected_ && linkClean(c)) {
     exit_rejected_ = false;
   }
   if (exit_rejected_) alerts.set(Alert::ExitRejectedLink);

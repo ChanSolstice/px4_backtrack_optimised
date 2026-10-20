@@ -92,7 +92,6 @@ private:
   /// 当前状态
   PilotInputStatus status_;
 
-  bool has_frame_{false};         ///< 是否收到过RC消息
   double last_frame_t_{0.0};      ///< 最近一帧的接收时间
   bool long_fired_{false};        ///< 本次按下已产生长按指令
   bool press_link_clean_{false};  ///< 本次按下至今链路正常且未退化
