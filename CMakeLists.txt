@@ -244,6 +244,17 @@ if(CATKIN_ENABLE_TESTING)
     )
   endif()
 
+  catkin_add_gtest(test_return_state_machine_invariants
+    tests/unit/test_main.cpp
+    tests/unit/test_return_state_machine_invariants.cpp
+  )
+  if(TARGET test_return_state_machine_invariants)
+    target_link_libraries(test_return_state_machine_invariants
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
   catkin_add_gtest(test_state_machine
     tests/unit/test_main.cpp
     tests/unit/test_state_machine.cpp
