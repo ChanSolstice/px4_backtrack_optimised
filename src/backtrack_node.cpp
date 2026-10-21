@@ -152,16 +152,17 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
   // 1. 加载配置（全部必填，缺失时退出）
   application::UseCaseConfig config;
   infrastructure::DebugLogConfig debug_log_config;
+  double publish_hz = 0.0;
   try {
     config = infrastructure::ConfigLoader::loadFromROS(nh_private_);
     debug_log_config = infrastructure::ConfigLoader::loadDebugLog(nh_private_);
+    publish_hz = infrastructure::ConfigLoader::loadPublishHz(nh_private_);
   } catch (const std::exception& e) {
     ROS_FATAL("[BacktrackNode] Failed to load configuration: %s", e.what());
     ros::shutdown();
     return;
   }
 
-  double publish_hz = nh_private_.param("publish_hz", 20.0);
   ROS_INFO("[BacktrackNode] Publish frequency: %.1f Hz", publish_hz);
 
   // 2. 调试日志：第一条为生效参数和版本

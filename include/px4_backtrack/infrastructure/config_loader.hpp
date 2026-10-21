@@ -23,6 +23,10 @@ public:
   /// @param nh 节点私有句柄
   static DebugLogConfig loadDebugLog(ros::NodeHandle& nh);
 
+  /// 从ROS参数服务器加载控制周期频率（节点定时器使用）
+  /// @param nh 节点私有句柄
+  static double loadPublishHz(ros::NodeHandle& nh);
+
   /// 从YAML文件加载trajectory_core配置
   /// @param path YAML文件路径
   static trajectory_core::TrajectoryConfig loadTrajectoryConfig(const std::string& path);

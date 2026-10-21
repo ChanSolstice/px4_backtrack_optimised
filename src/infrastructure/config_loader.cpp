@@ -100,6 +100,12 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   return c;
 }
 
+double ConfigLoader::loadPublishHz(ros::NodeHandle& nh) {
+  double publish_hz = 0.0;
+  requireParam(nh, "publish_hz", publish_hz);
+  return publish_hz;
+}
+
 DebugLogConfig ConfigLoader::loadDebugLog(ros::NodeHandle& nh) {
   DebugLogConfig c;
   requireParam(nh, "debug_log_enable", c.enable);
