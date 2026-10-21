@@ -1,7 +1,8 @@
 // 闭环危害场景：用 PX4 行为模型（假飞控）驱动真实的 BacktrackUseCase，逐场景检查安全约束。
 // - 飞控规则逐条注明 PX4 v1.15.4 源码出处，参数取 v1.15.4 默认值；
 // - 接收机失控时（用户确认）：持续输出帧，摇杆回中，开关和 CH7 保持，CH18 = 800；
-// - 控制循环的阻塞按真实耗时计入仿真时间：节点是单线程 ros::spin，tick 阻塞期间不发 setpoint、不处理回调。
+// - 控制循环的阻塞按真实耗时计入仿真时间：节点是单线程 ros::spin，tick 阻塞期间不发 setpoint、不处理回调；
+// - 模式请求由 UseCase 内的 ModeCommander 决定何时发出，服务调用按异步处理（结果随后送回）。
 // 用法：hazard_scenarios <trajectory_config.yaml> [场景编号 ...]，例如 H01 H06a；不带编号运行全部场景
 #include "px4_backtrack/application/backtrack_usecase.hpp"
 
@@ -23,10 +24,8 @@ namespace {
 using px4_backtrack::application::BacktrackUseCase;
 using px4_backtrack::application::TickOutput;
 using px4_backtrack::application::UseCaseConfig;
-using px4_backtrack::domain::ModeRequest;
+using px4_backtrack::domain::LandedState;
 using px4_backtrack::domain::SetpointTarget;
-using px4_backtrack::domain::State;
-using px4_backtrack::domain::stateToString;
 using px4_backtrack::domain::Vec3;
 
 // ---- PX4 v1.15.4 默认参数 ----
@@ -39,11 +38,11 @@ constexpr double kLndmcZVelMax = 0.5;    // LNDMC_Z_VEL_MAX：地面接触要求
 
 // ---- 话题频率与调度 ----
 constexpr double kStatePeriod = 1.0;        // /mavros/state 由 1 Hz HEARTBEAT 驱动（mavlink_main.cpp）
+constexpr double kExtStatePeriod = 0.2;     // onboard 模式 EXTENDED_SYS_STATE 5 Hz（mavlink_main.cpp）
 constexpr double kRcPeriod = 0.05;          // onboard 模式 RC_CHANNELS 20 Hz（mavlink_main.cpp）
 constexpr double kOdomPeriod = 1.0 / 30.0;  // SLAM 里程计
 constexpr double kBatteryPeriod = 1.0;
 constexpr double kTickPeriod = 0.05;        // publish_hz = 20
-constexpr double kSetModeThrottle = 1.0;    // SetModeClient 默认节流（ros_services.hpp），对所有模式请求共用
 constexpr double kModeCmdLatency = 0.05;
 constexpr double kSimDt = 0.01;
 constexpr double kTimeOffset = 1000.0;      // ros::Time 不能为 0
@@ -53,9 +52,9 @@ constexpr uint16_t kCh7Pressed = 1100;      // 按下 = CH7 < ch7_pressed_thresh
 constexpr uint16_t kCh18Ok = 1400;          // 改动后的固件：正常 1400，失控 800
 constexpr uint16_t kCh18Lost = 800;
 
-bool isMission(State s) {
-  return s == State::Ch18HoverWait || s == State::ReturnPreOffboard || s == State::ReturnActive ||
-         s == State::ReturnRejoin || s == State::LandingHover || s == State::LandingTransition;
+bool isMission(const std::string& s) {
+  return s == "Ch18HoverWait" || s == "ReturnPreOffboard" || s == "ReturnActive" ||
+         s == "ReturnRejoin" || s == "LandingHover" || s == "LandingTransition";
 }
 
 std::string fmt(const char* f, double a) {
@@ -267,7 +266,7 @@ struct World {
   std::string held_switch = "POSCTL";
   uint16_t held_ch7 = kCh7Released;
   bool prev_link_ok = true;
-  State module_state = State::IdleDisarmed;  // 供场景脚本按模块状态触发动作
+  std::string module_state = "IdleDisarmed";  // 供场景脚本按模块状态触发动作
   double prepare_seen_t = -1.0;              // 首次进入 ReturnPreOffboard 的时间
   double stall_at = -1.0;                    // 注入一次控制循环卡顿（例如 CPU 被抢占）
   double stall_s = 0.0;
@@ -275,12 +274,12 @@ struct World {
 
 struct Metrics {
   std::vector<std::pair<double, std::string>> states;
-  State last_state = State::IdleDisarmed;
+  std::string last_state = "IdleDisarmed";
   double mission_start_t = -1.0;
   double mission_start_z = 0.0;
   bool mission_started_on_ground = false;
   Vec3 trail_start = Vec3::Zero();
-  bool paused = false;
+  bool exited = false;                  // 进入了 Exited
   double posctl_lost_since = -1.0;
   double max_posctl_while_lost = 0.0;   // 任务开始后、链路丢失时，在 POSCTL 下的最长连续时间
   double touchdown_t = -1.0;
@@ -309,26 +308,46 @@ struct Scenario {
 
 UseCaseConfig productionConfig(const std::string& traj_cfg) {
   UseCaseConfig c;  // 取值与 config/backtrack_params.yaml 一致
-  c.record_delay_s = 15.0;
   c.record_max_hz = 15.0;
   c.record_min_points = 30;
-  c.state_machine_config.pre_offboard_setpoint_count = 20;
-  c.state_machine_config.ch18_hover_wait_s = 15.0;
-  c.state_machine_config.landing_hover_s = 5.0;
-  c.state_machine_config.offboard_attempt_interval_s = 1.0;
-  auto& t = c.trigger_config;
-  t.enable_ch7 = true;
-  t.ch7_pressed_threshold = 1500;
-  t.ch7_hold_s = 2.0;
-  t.enable_ch18 = true;
-  t.ch18_failsafe_threshold = 900;
-  t.ch18_confirm_s = 1.0;
-  t.enable_rc_loss = true;
-  t.rc_loss_timeout_s = 0.15;
-  t.rc_loss_debounce_s = 0.1;
-  t.enable_low_battery = true;
-  t.low_battery_threshold = 0.15;
-  t.low_battery_confirm_s = 3.0;
+  auto& link = c.link_config;
+  link.enable_ch18 = true;
+  link.ch18_failsafe_threshold = 900;
+  link.ch18_confirm_s = 1.0;
+  link.link_loss_leak_rate = 0.2;
+  link.enable_rc_loss = true;
+  link.rc_loss_timeout_s = 0.15;
+  link.rc_loss_debounce_s = 0.1;
+  link.link_recover_s = 2.0;
+  link.link_degraded_window_s = 5.0;
+  auto& pilot = c.pilot_config;
+  pilot.enable_ch7 = true;
+  pilot.ch7_pressed_threshold = 1500;
+  pilot.ch7_hold_s = 2.0;
+  pilot.ch7_exit_min_s = 0.3;
+  pilot.rc_loss_timeout_s = 0.15;
+  c.battery_config.enable_low_battery = true;
+  c.battery_config.low_battery_threshold = 0.15;
+  c.battery_config.low_battery_confirm_s = 3.0;
+  c.airborne_config.airborne_min_height_m = 0.5;
+  c.airborne_config.fcu_state_stale_s = 3.0;
+  c.odom_stale_s = 0.25;
+  c.odom_timeout_s = 2.0;
+  c.fcu_state_stale_s = 3.0;
+  auto& sm = c.state_machine_config;
+  sm.record_delay_s = 15.0;
+  sm.ch18_hover_wait_s = 15.0;
+  sm.landing_hover_s = 5.0;
+  sm.pre_offboard_setpoint_count = 6;
+  sm.return_pending_max_s = 3.0;
+  sm.fallback_timeout_s = 3.0;
+  sm.handover_posctl_timeout_s = 3.0;
+  sm.rejoin_trigger_dist_m = 0.5;
+  sm.reclaim_max_offset_m = 1.0;
+  c.mode_commander_config.request_interval_s = 1.0;
+  c.mode_commander_config.request_timeout_s = 3.0;
+  c.fallback_gap_s = 0.5;
+  c.fallback_window_s = 3.0;
   auto& r = c.rejoin_config;
   r.trigger_dist_m = 0.5;
   r.success_dist_m = 0.4;
@@ -337,8 +356,7 @@ UseCaseConfig productionConfig(const std::string& traj_cfg) {
   r.trigger_hold_s = 0.25;
   r.success_hold_s = 0.10;
   c.trajectory_config = trajectory_core::TrajectoryConfig::loadFromYaml(traj_cfg);
-  c.debug_enable_csv_dump = false;
-  c.debug_enable_rviz_publish = false;
+  c.debug_trajectory_sample_dt = 0.1;
   return c;
 }
 
@@ -382,7 +400,7 @@ bool landedNearTrailStart(const World& w, const Metrics& m, std::string& detail)
 }
 
 Check noPausedCheck(const Metrics& m) {
-  return {"任务不被非预期结束", !m.paused, m.paused ? "进入了 Paused（飞手没有发出退出指令）" : "未进入 Paused"};
+  return {"任务不被非预期结束", !m.exited, m.exited ? "进入了 Exited（飞手没有发出退出指令）" : "未退出"};
 }
 
 Check returnPersistsCheck(const Metrics& m) {
@@ -517,7 +535,7 @@ std::vector<Scenario> buildScenarios() {
                  outbound(t, w);
                  if (t >= 60.0) w.battery = 0.10;
                  // 到点悬停阶段，飞手把模式开关拨到 ALTCTL
-                 if (!w.pilot_took_over && w.module_state == State::LandingHover) {
+                 if (!w.pilot_took_over && w.module_state == "LandingHover") {
                    w.pilot.mode_switch = "ALTCTL";
                    w.pilot_took_over = true;
                  }
@@ -608,15 +626,15 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
   World w;
   Metrics m;
   BacktrackUseCase uc(productionConfig(traj_cfg));
-  double last_set_mode = -1e9;
 
   auto setNow = [](double t) { ros::Time::setNow(ros::Time(kTimeOffset + t)); };
-  double next_tick = 0.0, next_rc = 0.0, next_odom = 0.0, next_state = 0.0, next_batt = 0.0;
+  double next_tick = 0.0, next_rc = 0.0, next_odom = 0.0, next_state = 0.0, next_ext = 0.0, next_batt = 0.0;
 
   auto deliverCallbacks = [&](double t, bool force) {
     setNow(t);
+    const double now = kTimeOffset + t;  // 回调时刻即接收时间
     if (force || t >= next_odom) {
-      uc.onOdomReceived(w.fcu.pos, w.fcu.vel, w.fcu.yaw, kTimeOffset + t);
+      uc.onOdom(now, w.fcu.pos, w.fcu.vel, w.fcu.yaw, now);
       next_odom = t + kOdomPeriod;
     }
     if (force || t >= next_rc) {
@@ -636,16 +654,20 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
         w.inject_ch7_dip = false;
       }
       ch[17] = w.link_ok ? kCh18Ok : kCh18Lost;
-      uc.onRCReceived(ch);
+      uc.onRc(now, ch);
       w.fcu.onRcFrame(t, throttle_seen, switch_seen);
       next_rc = t + kRcPeriod;
     }
     if (force || t >= next_state) {
-      uc.onStateReceived(w.fcu.armed, w.fcu.nav);
+      uc.onFcuState(now, true, w.fcu.armed, w.fcu.nav);
       next_state = t + kStatePeriod;
     }
+    if (force || t >= next_ext) {
+      uc.onExtendedState(now, w.fcu.landed ? LandedState::OnGround : LandedState::InAir);
+      next_ext = t + kExtStatePeriod;
+    }
     if (force || t >= next_batt) {
-      uc.onBatteryReceived(w.battery);
+      uc.onBattery(now, w.battery);
       next_batt = t + kBatteryPeriod;
     }
   };
@@ -668,8 +690,9 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
     if (m.touchdown_t > 0.0) m.max_z_after_touchdown = std::max(m.max_z_after_touchdown, w.fcu.pos.z());
   };
 
-  w.fcu.arm(0.0);
+  // 节点在解锁前启动：先收到 t=0 的未解锁状态，0.5 s 时解锁（否则按空中重启处理，R-58）
   for (double t = 0.0; t < sc.duration;) {
+    if (!w.fcu.armed && t >= 0.5 && t < 1.0) w.fcu.arm(t);
     sc.script(t, w);
     deliverCallbacks(t, false);
 
@@ -703,35 +726,32 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
         t_after = t + wall;
       }
 
-      w.module_state = out.current_state;
-      if (out.current_state == State::ReturnPreOffboard && w.prepare_seen_t < 0.0) w.prepare_seen_t = t_after;
-      if (out.current_state != m.last_state) {
-        m.states.push_back({t_after, stateToString(out.current_state)});
-        if (out.current_state == State::Recording && m.last_state == State::WaitRecordDelay) {
+      w.module_state = out.state;
+      if (out.state == "ReturnPreOffboard" && w.prepare_seen_t < 0.0) w.prepare_seen_t = t_after;
+      if (out.state != m.last_state) {
+        m.states.push_back({t_after, out.state});
+        if (out.state == "Recording" && m.last_state == "WaitRecordDelay") {
           m.trail_start = w.fcu.pos;
         }
-        if (out.current_state == State::Paused) m.paused = true;
-        if (isMission(out.current_state) && m.mission_start_t < 0.0) {
+        if (out.state == "Exited") m.exited = true;
+        if (isMission(out.state) && m.mission_start_t < 0.0) {
           m.mission_start_t = t_after;
           m.mission_start_z = w.fcu.pos.z();
           m.mission_started_on_ground = w.fcu.pos.z() < 0.3;
         }
-        m.last_state = out.current_state;
+        m.last_state = out.state;
       }
-      if (out.should_publish_setpoint && out.setpoint) {
+      if (out.setpoint) {
         w.fcu.onSetpoint(t_after, *out.setpoint);
         m.last_sp_t = t_after;
       }
-      if (out.mode_request && *out.mode_request != ModeRequest::None) {
-        // SetModeClient：所有模式请求共用 1 s 节流
-        if (t_after - last_set_mode >= kSetModeThrottle) {
-          last_set_mode = t_after;
-          ++m.mode_requests_sent;
-          const ModeRequest r = *out.mode_request;
-          const std::string mode = r == ModeRequest::OFFBOARD ? "OFFBOARD" : r == ModeRequest::POSCTL ? "POSCTL" : "AUTO.LAND";
-          if (w.pilot_took_over && w.link_ok && r != ModeRequest::POSCTL) ++m.fight_requests;
-          w.fcu.onModeRequest(t_after, mode);
-        }
+      if (out.mode_request) {
+        // ModeCommander 决定何时发出；服务调用异步，mode_sent 为真（MAVROS 已发出 SET_MODE）
+        const std::string& mode = *out.mode_request;
+        ++m.mode_requests_sent;
+        if (w.pilot_took_over && w.link_ok && mode != "POSCTL") ++m.fight_requests;
+        w.fcu.onModeRequest(t_after, mode);
+        uc.onModeRequestResult(kTimeOffset + t_after, mode, true);
       }
       if (t_after > t) {
         t = t_after;
