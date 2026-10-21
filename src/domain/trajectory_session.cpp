@@ -236,14 +236,7 @@ bool TrajectorySession::updateProgressImpl(
   }
 
   const double path_length = traj_->pathLength();
-  const double forward_window = std::max(
-      kLookaheadMaxM,
-      trajectory_v_max_m_s_ * kProjectionCycleHorizonS +
-          kProjectionWindowMarginM);
-  const double s_min = std::max(0.0, projected_s_ - kProjectionBackwardWindowM);
-  const double s_max = std::min(
-      path_length, projected_s_ + forward_window * forward_window_scale);
-  const auto projection = traj_->projectPosition(current_position, s_min, s_max);
+  const auto projection = projectLocal(current_position, forward_window_scale);
   if (!projection.valid) {
     projection_valid_ = false;
     return false;
@@ -271,6 +264,29 @@ bool TrajectorySession::updateProgressImpl(
   target_s_ = std::max(target_s_, candidate_target_s);
   target_state_ = traj_->evaluateByArcLength(target_s_);
   return true;
+}
+
+trajectory_core::ProjectionResult TrajectorySession::projectLocal(
+    const Vec3& position, double forward_window_scale) const {
+  const double forward_window = std::max(
+      kLookaheadMaxM,
+      trajectory_v_max_m_s_ * kProjectionCycleHorizonS +
+          kProjectionWindowMarginM);
+  const double s_min = std::max(0.0, projected_s_ - kProjectionBackwardWindowM);
+  const double s_max = std::min(
+      traj_->pathLength(), projected_s_ + forward_window * forward_window_scale);
+  return traj_->projectPosition(position, s_min, s_max);
+}
+
+bool TrajectorySession::probe(const Vec3& position, double& cross_track_m) const {
+  if (!traj_ || !traj_->isValid() || !position.allFinite()) {
+    return false;
+  }
+  const auto projection = projectLocal(position, 1.0);
+  if (projection.valid) {
+    cross_track_m = projection.distance;
+  }
+  return projection.valid;
 }
 
 const trajectory_core::TrajectoryState& TrajectorySession::getTargetState() const {

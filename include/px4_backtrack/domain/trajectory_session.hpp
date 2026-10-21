@@ -46,6 +46,12 @@ public:
                             double lookahead_time_s,
                             double trigger_distance_m);
 
+  /// 当前位置在跟随进度附近的局部投影，只查询、不推进进度（R-74）
+  /// @param position 飞机当前位置
+  /// @param cross_track_m 输出：投影有效时为横向偏差
+  /// @return 投影是否有效
+  bool probe(const Vec3& position, double& cross_track_m) const;
+
   /// 获取当前预瞄目标状态
   const trajectory_core::TrajectoryState& getTargetState() const;
 
@@ -119,6 +125,10 @@ private:
 
   /// 轨迹生成器（复用）
   trajectory_core::TrajectoryGenerator generator_;
+
+  /// 在当前进度附近的局部窗口内投影
+  trajectory_core::ProjectionResult projectLocal(const Vec3& position,
+                                                 double forward_window_scale) const;
 
   /// 空间进度更新的共用实现
   bool updateProgressImpl(const Vec3& current_position,

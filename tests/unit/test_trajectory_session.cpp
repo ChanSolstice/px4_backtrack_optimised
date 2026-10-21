@@ -219,6 +219,26 @@ TEST(TrajectorySessionTest, ProjectionFailureKeepsLastValidTarget) {
   EXPECT_TRUE(session.getTargetState().velocity.isApprox(previous_target.velocity));
 }
 
+TEST(TrajectorySessionTest, ProbeReportsCurrentOffsetWithoutAdvancingProgress) {
+  // R-74：重新申请期间进度冻结，偏差仍按当前位置计算
+  TrajectorySession session;
+  trajectory_core::TrajectoryConfig config;
+  ASSERT_TRUE(session.generate(makeRecordPoints(), config));
+  ASSERT_TRUE(session.updateProgress(Vec3(1.8, 0.0, 1.0), 0.5));
+  const double projected_s = session.getProjectedArcLength();
+  const double target_s = session.getTargetArcLength();
+
+  double cross_track = -1.0;
+  ASSERT_TRUE(session.probe(Vec3(1.6, 0.7, 1.0), cross_track));
+  EXPECT_NEAR(cross_track, 0.7, 0.05);
+  EXPECT_DOUBLE_EQ(session.getProjectedArcLength(), projected_s);
+  EXPECT_DOUBLE_EQ(session.getTargetArcLength(), target_s);
+
+  Vec3 invalid_position = Vec3::Zero();
+  invalid_position.x() = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(session.probe(invalid_position, cross_track));
+}
+
 TEST(TrajectorySessionTest, DensePauseClusterDoesNotBlowUpPathLength) {
   TrajectorySession session;
   trajectory_core::TrajectoryConfig config;
