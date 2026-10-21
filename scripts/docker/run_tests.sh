@@ -18,6 +18,8 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 CORE_REPO="${TRAJECTORY_CORE_REPO:-$(dirname "$REPO_ROOT")/trajectory_core}"
 CORE_EXPORT="${TMPDIR:-/tmp}/backtrack_trajectory_core_${ARCH}"
 IMAGE="backtrack-noetic:${ARCH}"
+BASE="ros:noetic-ros-base-focal"
+[ "$ARCH" = arm64 ] && BASE="arm64v8/ros:noetic-ros-base-focal"
 CONTAINER="backtrack_noetic_${ARCH}"
 
 # 导出算法库的指定版本，不改动其仓库的检出状态
@@ -26,7 +28,7 @@ git -C "$CORE_REPO" archive "$CORE_REF" | tar -x -C "$CORE_EXPORT"
 echo "trajectory_core: $CORE_REF @ $(git -C "$CORE_REPO" rev-parse --short "$CORE_REF")"
 
 if ! $DOCKER image inspect "$IMAGE" >/dev/null 2>&1; then
-  $DOCKER build --platform "linux/${ARCH}" -t "$IMAGE" "$HERE"
+  $DOCKER build --platform "linux/${ARCH}" --build-arg BASE="$BASE" -t "$IMAGE" "$HERE"
 fi
 
 $DOCKER rm -f "$CONTAINER" >/dev/null 2>&1 || true
