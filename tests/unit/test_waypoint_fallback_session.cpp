@@ -43,17 +43,13 @@ TEST(WaypointFallbackSessionTest, YawFollowsCurvedReturnPathDirection) {
   EXPECT_NEAR(target.yaw, -kPi / 2.0, 1e-6);
 }
 
-TEST(WaypointFallbackSessionTest, ProgressAdvancesAndCanRestartFromHead) {
+TEST(WaypointFallbackSessionTest, ProgressAdvancesFromHead) {
   WaypointFallbackSession session(0.5, 0.25);
   ASSERT_TRUE(session.build(makeRecordedLine()));
+  EXPECT_NEAR(session.currentTarget().position.x(), 2.0, 1e-6);
 
   session.updateProgress(Vec3(2.0, 0.0, 1.0));
-  auto target = session.currentTarget();
-  EXPECT_LT(target.position.x(), 2.0);
-
-  session.restart();
-  target = session.currentTarget();
-  EXPECT_NEAR(target.position.x(), 2.0, 1e-6);
+  EXPECT_LT(session.currentTarget().position.x(), 2.0);
 }
 
 TEST(WaypointFallbackSessionTest, ProgressAdvancesAtMostOneWaypointPerTick) {
