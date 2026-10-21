@@ -1,333 +1,166 @@
 # LLM_MAP
 
-文档入口见 [doc/README.md](doc/README.md)。文档分为 `reference/`、`design/`、`testing/`、`reviews/` 和 `archive/`。本分支正在实施[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)，它是重构目标行为的唯一依据；`archive/` 只有已修复缺陷的分析报告，不能据其恢复旧的执行策略。
+文档入口见 [doc/README.md](doc/README.md)。本文给后续阅读或修改本仓库的 LLM/自动化代理看：先建立正确的代码地图，再动手改动。当前实现的完整说明见 [系统总览](doc/reference/SYSTEM_OVERVIEW.md)；要达到的行为和全部规则以[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)（下称"方案"）为准。
 
-这份文档不是给最终用户看的，而是给后续阅读、解释或修改本仓库的 LLM/自动化代理看的。目标是让模型先建立正确的代码地图，再动手改动，减少把旧版 Python 文档误当成现状、或者只改一层没改全链路的风险。
+## 先记住这些
 
-## 先记住这 13 条
+1. ROS1 `catkin` 工程（Noetic），不是 ROS2。本机没有 ROS，编译和测试都在 Docker 中。
+2. 入口 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)：单线程 `ros::spin`，20 Hz 定时器驱动控制周期。另有两个后台线程：异步 `set_mode`（[`ros_services.cpp`](src/adapters/ros_services.cpp)）和调试日志写盘（[`debug_log.cpp`](src/infrastructure/debug_log.cpp)）。
+3. 编排在 [`src/application/backtrack_usecase.cpp`](src/application/backtrack_usecase.cpp)：组装 `Conditions` → `ReturnStateMachine::step()` → 执行命令、计算 setpoint。UseCase 不访问 ROS，所有输入的接收时间由节点传入，所以可以在单测里完全控制时间。
+4. 所有状态转移都在 [`return_state_machine.cpp`](src/domain/return_state_machine.cpp) 的 `step()` 中完成，规则编号对应方案第 6.3 节。不要在 UseCase 里改状态或加分支。
+5. 条件层（`link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor`）只做检测，输出电平和带编号的按键指令，是否响应由状态机决定。
+6. 设计变化先改方案文档，并在第 15 节记一条审核记录（R-xx），再改代码；用户已确认的决策是 D1–D29。
+7. 本分支实施到 R3。后台规划（R4）、退出截断（R5）、超时升级（R6）、JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+8. 参数全部在 [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 中必填，代码中没有默认值；新增参数要同时改 config 结构体、[`config_loader.cpp`](src/infrastructure/config_loader.cpp) 和 YAML。
+9. 用户要求整体简洁、避免过度防御：不加初值已保证的标志、不重复复位、不为小概率场景堆保护；不了解下方环境时，悬停优先于降落。
 
-1. 这是 ROS1 `catkin` 工程，不是 ROS2。
-2. 当前主实现入口是 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。
-3. 控制主循环在 `BacktrackNode` 的 20Hz `timerCallback()`，不是在订阅回调里直接控飞。
-4. 真正的编排核心在 [`src/application/backtrack_usecase.cpp`](src/application/backtrack_usecase.cpp)。
-5. 返航轨迹由 `trajectory_core` 生成，配置来自 [`config/trajectory_config.yaml`](config/trajectory_config.yaml)。
-6. 坐标语义按 ENU 处理，但 setpoint 通过 `mavros_msgs/PositionTarget` 发到 `/mavros/setpoint_raw/local`。
-7. 录制点保留相对时间戳；生成轨迹时会在逆序后把时间戳镜像成新的单调递增序列，以保留原始 dt 间隔用于 `trajectory_core` 的时间质量诊断。
-8. 旧版 Python 基线已从仓库删除（需要时查 git 历史），不要按它恢复旧行为。
-9. 需要判断“行为真相”时，优先级是：`src/*.cpp` + `include/*.hpp` > `config/*.yaml` > `launch/` > `doc/reference/`（描述 dev 的实现）。重构要达到的行为以重构方案为准。
-10. 当前代码有开发中痕迹，写说明或补丁前要先检查接口是否自洽。
-11. 仓库有 156 个 `gtest` 用例，用 `scripts/docker/run_tests.sh amd64` 在容器中全量编译运行；改了条件层或 `ReturnStateMachine` 还要跑 `scripts/analysis/run_mutation_check.sh amd64`，注入项要全部被发现。
-12. dev 的触发方式包括 `CH7` 长按、`CH18` 故障确认、RC 消息丢失和低电量触发；低电量采用边沿触发与持续锁存，Paused 状态不自动恢复返航，通过 `/px4_backtrack/low_battery` 广播状态。
-13. 本分支按重构方案第 13 节分阶段实施：R1 的条件层（`link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor`）和 R2 的 `return_conditions.hpp`、`return_state_machine` 已有单测，但还没有接入 UseCase（R3 接入）；当前运行的仍是 `state_machine` + `trigger_evaluator`。动手前先确认改动属于哪个阶段。
+## 每个控制周期
 
-## 真正的入口与控制流
+见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 3.1 节。要点：
 
-控制流从 [`src/backtrack_node.cpp`](src/backtrack_node.cpp) 开始：
-
-1. `ConfigLoader::loadFromROS()` 读取 ROS 参数和 `trajectory_core` 配置。
-   其中 `CH7` / `CH18` / `RC loss` / `Low battery` 触发参数是必填参数，缺失会直接抛异常，不会回退到 `TriggerConfig` 头文件默认值。
-2. 构造 ROS adapters：
-   - `StateSubscriber`
-   - `OdomSubscriber`
-   - `RCSubscriber`
-   - `SetpointPublisher`
-   - `StatusPublisher`
-   - `SetModeClient`
-3. 构造 `application::BacktrackUseCase`。
-4. 根据 `debug_enable_csv_dump` / `debug_enable_rviz_publish` 配置，可选创建 `DebugDumper` 和 `DebugPublisher` 并通过 setter 注入 usecase。
-5. 将 3 个订阅回调直接转发到 usecase：
-   - `onOdomReceived()`
-   - `onRCReceived()`
-   - `onStateReceived()`
-6. 20Hz 定时器调用 `BacktrackUseCase::tick(now)`。
-7. `tick()` 返回 `TickOutput`，入口层再决定：
-   - 是否发布 setpoint
-   - 是否请求 `set_mode`
-   - 发布当前状态和 RC 丢失相关输出
-
-如果你要理解“系统为什么这样飞”，重点读 `BacktrackUseCase` 和 `BacktrackStateMachine`，而不是 ROS adapters。
+- 先把异步模式请求的结果送回 `ModeCommander`，再让条件层推进到当前时间；
+- 用执行层"最近一次"的结果组装条件、调用 `step()`，之后才推进跟随进度、计算 setpoint（执行事实晚一拍，R-71）；
+- 模式意图交给 `ModeCommander`，由它决定本拍是否发出请求；
+- 事件（区域转换、条件边沿、任务、规划、模式请求、断流）随 `TickOutput` 返回，节点写到 rosout 和调试日志。
 
 ## 文件地图
 
-### 入口层
+### 入口与应用层
 
-- [`src/backtrack_node.cpp`](src/backtrack_node.cpp)
-  组装对象、绑定回调、驱动 20Hz tick。改这里通常意味着你在改进程级 wiring 或主循环频率。
+- [`src/backtrack_node.cpp`](src/backtrack_node.cpp)：加载参数、创建适配器和 UseCase、驱动控制周期、写事件。
+- [`backtrack_usecase`](src/application/backtrack_usecase.cpp)：条件组装、命令执行、setpoint 计算、自身断流判定（R-69）、偏离与回归的持续判定。
+- [`mode_commander`](src/application/mode_commander.cpp)：模式请求的发送、重发、生效观察和失败告警（方案第 7.7 节，R-70）。
 
-### Application 层
+### 领域层
 
-- [`include/px4_backtrack/application/backtrack_usecase.hpp`](include/px4_backtrack/application/backtrack_usecase.hpp)
-- [`src/application/backtrack_usecase.cpp`](src/application/backtrack_usecase.cpp)
+条件层（方案第 5 节）：
 
-这里是最重要的编排层，职责包括：
+- [`link_monitor`](src/domain/link_monitor.cpp)：CH18 漏桶、RC 超时（含本模块卡顿保护）、恢复与退化。
+- [`pilot_input`](src/domain/pilot_input.cpp)：CH7 逐帧门控、`press_id`、长按与短按指令。
+- [`battery_monitor`](src/domain/battery_monitor.cpp)：读数有效性、低电量确认与锁存。
+- [`airborne_monitor`](src/domain/airborne_monitor.cpp)：在空中判定（落地状态 + 相对解锁高度）。
 
-- 持有所有核心 domain 对象
-- 缓存当前 `armed/mode/position/velocity/yaw`
-- 处理飞行周期复位和录制延时
-- 检测触发条件
-- 请求轨迹生成
-- 检测偏离并进入/退出 rejoin
-- 根据状态机输出决定 setpoint 与 mode request
-- 轨迹生成成功后可选调用 `performDebugDump()`，将航点和轨迹导出 CSV 并发布 rviz 话题
+决策：
 
-如果需求是”改变返航流程”，先看这里。
+- [`return_conditions.hpp`](include/px4_backtrack/domain/return_conditions.hpp)：每拍的条件快照。
+- [`return_state_machine`](src/domain/return_state_machine.cpp)：三个并行区域（任务阶段、控制权、跟随方式），输出 setpoint 策略、模式意图、命令、告警和事件。
 
-### Domain 层
+执行层：
 
-- [`include/px4_backtrack/domain/state_machine.hpp`](include/px4_backtrack/domain/state_machine.hpp)
-- [`src/domain/state_machine.cpp`](src/domain/state_machine.cpp)
-  纯状态迁移与每态输出。它不直接读 ROS，也不直接调 `trajectory_core`。
+- [`recording_buffer`](src/domain/recording_buffer.cpp)：录制节流与相对时间戳。
+- [`trajectory_session`](src/domain/trajectory_session.cpp)：抽稀、逆序、调用 `trajectory_core`、局部投影、单调弧长进度、预瞄、完成判定；`probe()` 只查询当前偏差不推进进度（R-74）。
+- [`waypoint_fallback_session`](src/domain/waypoint_fallback_session.cpp)：轨迹生成可恢复地失败时的航点降级。
+- [`rejoin_policy`](src/domain/rejoin_policy.cpp)：偏离阈值、回归限速、退出时的速度收敛。
+- [`path_yaw`](src/domain/path_yaw.cpp)：按稳定弦长估计返航切向 yaw。
+- [`types.hpp`](include/px4_backtrack/domain/types.hpp)：`Vec3`、`SetpointTarget`。
 
-- [`include/px4_backtrack/domain/recording_buffer.hpp`](include/px4_backtrack/domain/recording_buffer.hpp)
-- [`src/domain/recording_buffer.cpp`](src/domain/recording_buffer.cpp)
-  用 `record_max_hz` 节流录制 `/Odometry_px4`，存相对时间戳。
+### 适配层与基础设施
 
-- [`include/px4_backtrack/domain/trigger_evaluator.hpp`](include/px4_backtrack/domain/trigger_evaluator.hpp)
-- [`src/domain/trigger_evaluator.cpp`](src/domain/trigger_evaluator.cpp)
-  处理 `CH7`、`CH18` 和 RC 消息丢失。`TriggerConfig` 现在只是承载值的 struct，运行时参数来源是 `ConfigLoader + backtrack_params.yaml`，不是头文件默认构造。
-
-- [`include/px4_backtrack/domain/trajectory_session.hpp`](include/px4_backtrack/domain/trajectory_session.hpp)
-- [`src/domain/trajectory_session.cpp`](src/domain/trajectory_session.cpp)
-  封装 `trajectory_core::TrajectoryGenerator`、轨迹对象、局部路径投影、单调弧长进度和预瞄目标。执行进度只由实际位置推进，不再维护 wall-time 秒表或冻结/恢复接口。
-
-- [`include/px4_backtrack/domain/rejoin_policy.hpp`](include/px4_backtrack/domain/rejoin_policy.hpp)
-- [`src/domain/rejoin_policy.cpp`](src/domain/rejoin_policy.cpp)
-  负责三维路径偏离阈值、Rejoin 平滑限速和退出速度连续性判定。`ReturnRejoin` 与正常返航复用 `TrajectorySession` 的局部弧长投影目标，不存在全轨迹最近时间搜索或冻结点回拉接口。
-
-- [`include/px4_backtrack/domain/waypoint_fallback_session.hpp`](include/px4_backtrack/domain/waypoint_fallback_session.hpp)
-- [`src/domain/waypoint_fallback_session.cpp`](src/domain/waypoint_fallback_session.cpp)
-  轨迹生成可恢复地失败时的航点降级返航：逆序稀疏航点，逐点位置目标，每拍最多推进一个航点。
-
-- [`include/px4_backtrack/domain/path_yaw.hpp`](include/px4_backtrack/domain/path_yaw.hpp)
-- [`src/domain/path_yaw.cpp`](src/domain/path_yaw.cpp)
-  按至少 `0.20 m` 的稳定弦长估计返航路径切向 yaw，避免端点悬停漂移导致 yaw 翻转。
-
-- [`include/px4_backtrack/domain/types.hpp`](include/px4_backtrack/domain/types.hpp)
-  共用类型（`Vec3`）。
-
-重构新增、尚未接入流程的组件（R1、R2，方案第 5–7 节）：
-
-- [`link_monitor`](src/domain/link_monitor.cpp)：CH18 漏桶、RC 超时（含本模块卡顿保护）、恢复与退化窗口，输出链路丢失与来源。
-- [`pilot_input`](src/domain/pilot_input.cpp)：CH7 逐帧门控（失控帧、RC 超时作废按下），`press_id` 与锁存的长按/短按指令（带按下时间和 `link_ok`）。
-- [`battery_monitor`](src/domain/battery_monitor.cpp)：电量读数有效性、低电量确认与锁存。
-- [`airborne_monitor`](src/domain/airborne_monitor.cpp)：在空中判定（`landed_state` 与相对解锁高度），空中重启和解锁时没有里程计只按 `landed_state`。
-- [`return_conditions.hpp`](include/px4_backtrack/domain/return_conditions.hpp)：每拍的条件快照 `Conditions`。
-- [`return_state_machine`](src/domain/return_state_machine.cpp)：`step(Conditions)` 驱动的三区域状态机（任务阶段、控制权、跟随方式），输出 setpoint 策略、模式意图、命令、告警和事件。规则编号对应方案第 6.3 节。
-
-### Adapters 层
-
-- [`include/px4_backtrack/adapters/ros_subscribers.hpp`](include/px4_backtrack/adapters/ros_subscribers.hpp)
-- [`src/adapters/ros_subscribers.cpp`](src/adapters/ros_subscribers.cpp)
-  封装 4 个订阅器，默认话题分别是 `/mavros/state`、`/Odometry_px4`、`/mavros/rc/in`、`/mavros/battery`。
-
-- [`include/px4_backtrack/adapters/ros_publishers.hpp`](include/px4_backtrack/adapters/ros_publishers.hpp)
-- [`src/adapters/ros_publishers.cpp`](src/adapters/ros_publishers.cpp)
-  封装 `/mavros/setpoint_raw/local`、`/px4_backtrack/state`、`/status_rc_loss`、`/px4_backtrack/low_battery`。
-
-- [`include/px4_backtrack/adapters/ros_services.hpp`](include/px4_backtrack/adapters/ros_services.hpp)
-- [`src/adapters/ros_services.cpp`](src/adapters/ros_services.cpp)
-  封装 `/mavros/set_mode`，带 1s 节流。
-
-- [`include/px4_backtrack/adapters/debug_publishers.hpp`](include/px4_backtrack/adapters/debug_publishers.hpp)
-- [`src/adapters/debug_publishers.cpp`](src/adapters/debug_publishers.cpp)
-  可选的 debug 可视化发布器，发布录制航点 `MarkerArray` 和返航轨迹 `nav_msgs/Path` 到 latched 话题，由 config 开关控制。
-
-### Infrastructure 层
-
-- [`include/px4_backtrack/infrastructure/config_loader.hpp`](include/px4_backtrack/infrastructure/config_loader.hpp)
-- [`src/infrastructure/config_loader.cpp`](src/infrastructure/config_loader.cpp)
-
-- [`include/px4_backtrack/infrastructure/debug_dumper.hpp`](include/px4_backtrack/infrastructure/debug_dumper.hpp)
-- [`src/infrastructure/debug_dumper.cpp`](src/infrastructure/debug_dumper.cpp)
-  可选的 CSV debug 导出器，将录制航点和采样轨迹写入带时间戳的 CSV 文件，由 config 开关控制。
-
-修改参数字段时，通常必须同时改：
-
-- `UseCaseConfig` / 相关 domain config
-- `ConfigLoader`
-- [`config/backtrack_params.yaml`](config/backtrack_params.yaml)
-- `README.md`
-
-如果改的是触发参数，额外注意：
-
-- 不能只改 `TriggerConfig` 字段定义，还要同步 `ConfigLoader` 的必填读取逻辑
-- 不要把运行默认值重新塞回 `trigger_evaluator.hpp`，否则会重新出现“双重默认来源”
+- [`ros_subscribers`](src/adapters/ros_subscribers.cpp)：`/mavros/state`（含 `connected`）、`/mavros/extended_state`、`/Odometry_px4`（速度旋转到父 ENU）、`/mavros/rc/in`、`/mavros/battery`。
+- [`ros_publishers`](src/adapters/ros_publishers.cpp)：`/mavros/setpoint_raw/local`、`/px4_backtrack/state`、`/status_rc_loss`、`/px4_backtrack/low_battery`。
+- [`ros_services`](src/adapters/ros_services.cpp)：异步 `set_mode`。
+- [`debug_publishers`](src/adapters/debug_publishers.cpp)、[`debug_dumper`](src/infrastructure/debug_dumper.cpp)：规划结果的可视化和 CSV。
+- [`config_loader`](src/infrastructure/config_loader.cpp)：参数必填。
+- [`debug_log`](src/infrastructure/debug_log.cpp)：调试日志（运行目录、`events.jsonl`、后台写线程、有界队列）。
 
 ### Scripts
 
-- [`scripts/plot_debug_csv.py`](scripts/plot_debug_csv.py)
-  Python 可视化脚本，读取 `DebugDumper` 导出的 CSV，绘制 3D 路径对比、俯视图、高度剖面和偏航剖面。`python3 scripts/plot_debug_csv.py --latest` 自动选取最新文件。
-- [`scripts/docker/run_tests.sh`](scripts/docker/run_tests.sh)：在全新的 ROS Noetic 容器中编译并运行全部单测（本机没有 ROS）。
-- [`scripts/analysis/`](scripts/analysis/)：闭环危害场景（假飞控驱动真实 `BacktrackUseCase`）和错误注入检查，复用上面的容器。
+- [`scripts/docker/run_tests.sh`](scripts/docker/run_tests.sh)：在全新的 ROS Noetic 容器中编译并运行全部单测。
+- [`scripts/analysis/`](scripts/analysis/)：闭环危害场景（假飞控驱动真实 UseCase，H01–H14）和错误注入检查，复用上面的容器。
 - [`scripts/bench/`](scripts/bench/)：轨迹生成耗时基准。
 - [`scripts/sitl/`](scripts/sitl/)：PX4 v1.15.4 SITL（SIH）中确认方案依赖的飞控行为。
-
-测试方法与执行记录见 [`doc/testing/`](doc/testing/)。
+- [`scripts/plot_debug_csv.py`](scripts/plot_debug_csv.py)：规划 CSV 绘图。
 
 ## 行为语义上的关键点
 
-### 1. 录制和轨迹生成不是一回事
+### 1. 录制与规划不是一回事
 
-- `RecordingBuffer` 保存录制点与相对时间戳。
-- `TrajectorySession::generate()` 会先基于 `max(min_point_dist_m, ds_m * 0.5)` 对录制点做一次空间抽稀，再把点序逆转，并把时间戳映射为 `t_new = t_last - t_rev`，从而在保持单调递增的同时保留原始采样间隔信息。
-- 抽稀语义是“距离上一个有效点达到阈值才新增点”；距离不足的中间点直接忽略，不覆盖上一个有效点。不要把它改回 `reduced.back() = point`，否则低速连续飞行段会因为锚点不断前移而被整段吞掉。
-- `trajectory_core` 最终执行的轨迹时间轴仍由库内部速度剖面生成；录制时间戳主要用于时间质量检查与 warning，而不是直接决定返航执行时序。
-- 这层抽稀的主要目的不是“减少点数”，而是压缩停顿/悬停阶段形成的高密度点云团，降低停顿点附近的局部折返和抽动。
+- 只在 `Recording` 和 `Exited` 中录制，任务期间不录制；时间戳为相对首点的里程计消息时间。
+- 规划时先空间抽稀（`max(min_point_dist_m, ds_m * 0.5)`），距离不足的中间点直接忽略，不覆盖上一个有效点。不要改回 `reduced.back() = point`，否则低速连续飞行段会被整段吞掉。
+- 逆序后时间戳映射为 `t_new = t_last − t_rev`，只用于 `trajectory_core` 的时间质量诊断；执行由实际位置的弧长投影推进，不使用录制时间或 wall time。
 
-### 2. `CH7` 的“按下事件”和“长按事件”共享一套内部状态
+### 2. CH7：长按返航、短按退出
 
-`TriggerEvaluator::checkCh7PressEvent()` 依赖 `ch7_state_` 已经被 `checkCh7LongPress()` 更新过。在当前实现里，`BacktrackUseCase::handleTriggers()` 先调用 `checkCh7LongPress()`，再决定是否调用 `checkCh7PressEvent()`。
+- 长按（≥ 2 s）只在 `Recording` 中、链路未丢失时启动任务；任务中只记录；退出后只告警。
+- 短按（0.3～2 s，松开时生效）只在任务中、按下全程链路正常、按下晚于任务开始时退出；链路异常时告警 `EXIT_REJECTED_LINK`。
+- 失控帧或 RC 超时期间 CH7 不可信；指令按 `press_id` 消费，不会因落在两个 tick 之间而丢失。
 
-如果你改触发顺序，可能把暂停逻辑改坏。
+### 3. 链路丢失与低电量是电平
 
-### 3. RC 丢失检测：边沿触发与电平查询分离
+条件都是电平，没有"被消费的边沿"：录制延时内已经成立的失控或低电量，进入 `Recording` 后照常启动任务（dev 的 A2、AR-07 问题由此解决）。同一拍多个条件成立时，只要有失控就先悬停。
 
-RC 丢失检测已拆分为两个方法：
+### 4. 控制权：退出、回退与重新申请
 
-- `checkRCLossEvent()` — 边沿语义，仅在 `rc_loss_triggered_` 从 `false` 变为 `true` 的那一刻返回一次 `true`，用于 `handleTriggers()` 触发返航
-- `isRCLost()` — 电平语义，只要 `rc_loss_triggered_` 为 `true` 就持续返回 `true`，用于填充 `TickOutput.rc_loss` 并发布到 `/status_rc_loss`
+- 链路正常时被切出 OFFBOARD，或短按，进入 `Exited`（不再有 `Paused` 和恢复）。
+- 本模块自身断流引起的飞控回退不算接管：继续发布，等飞控自动回到 OFFBOARD（D22，N1 已在 SITL 确认）。
+- 链路丢失或退化时被切出：重新申请控制权；跟随阶段回到 OFFBOARD 且对准、偏差 ≤ 1.0 m 才重新接入。
+- OFFBOARD 确认前、链路正常时飞手切到其他模式：进入 `Exited`。为了先看到飞手的切换，链路正常时预发结束后要等下一条飞控状态才申请 OFFBOARD（R-75）。
 
-两者共享底层状态：
+### 5. AUTO.LAND 让步锁存到上锁
 
-- `onRCReceived()` 中调用 `updateLastRcMsgTime(ros::Time::now().toSec())`
-- `tick(now)` 中调用 `updateNow(now)`
-- 超时+防抖逻辑在 `checkRCLossEvent()` 中推进，`isRCLost()` 只读 `rc_loss_triggered_`
+飞控进入 AUTO.LAND 后状态机进入 `AutoLandYield` 并锁存到上锁，不发 setpoint、不重启返航。唯一例外：链路丢失期间模式被切走时，按间隔重新请求 AUTO.LAND（方案第 7.6 节）。
 
-重要：`AUTO.LAND` 让步优先于 RC 丢失边沿推进。`handleTriggers()` 先判断当前模式是否为 `AUTO.LAND`，命中时直接返回；只有非 `AUTO.LAND` 时才调用 `checkRCLossEvent()`，避免降落让步期间消费掉 RC loss 边沿。
+### 6. 落地保护
 
-如果只改其中一条链路，RC loss 会失真。
+不在空中（飞控未报告落地，且高出解锁高度 0.5 m）时不启动任务；任务的悬停、准备阶段变为不在空中，或其他阶段飞控报告落地，直接请求 AUTO.LAND。只用 `connected` 为真的 `/mavros/state` 判断解锁过程；节点在已解锁时启动视为空中重启，只看落地状态。
 
-### 4. pause/resume 的恢复不是直接回到 `ReturnActive`
+### 7. 规划失败的分流
 
-暂停时：
+点过近 → 原地降落；配置非法 → 保持；其他失败 → 航点降级；航点降级也失败 → 原地降落；点数不足 → 最多等 3 s 补点，仍不足则原地降落。
 
-- `state_machine_.triggerPause()`
-- 空间进度自然停止更新，保留最后合法的 `projected_s` 和目标状态
+### 8. Rejoin 是同一路径跟随器的低速模式
 
-恢复时：
+偏离用当前位置到局部路径投影点的距离判定，持续 0.25 s 才进入；回归时扩大前向窗口、缩短预瞄、平滑限速，位置和 yaw 仍取路径目标；退出要求横向偏差、实际速度和已发布目标速度同时满足。生产配置触发/退出距离为 0.5 m / 0.4 m，终点精度独立为 0.2 m。不要重新引入全轨迹最近点搜索、冻结时间点或固定冷却时间。
 
-- `state_machine_.triggerReturn(Event::Ch7LongPress)`
-- 固定当前位置，并把悬停 yaw 更新为保留路径目标的切向 yaw
+### 9. 起始对准
 
-因此恢复路径会重新走 `ReturnPreOffboard` 完成航向对准，而不是直接跳回 `ReturnActive`；进入 `ReturnActive` 后再由实际位置重新投影，不需要修正任何时间基准。
-
-注意：`ReturnPreOffboard` 的保持位置 setpoint 会一步切换到目标路径 yaw，应用层只用 `15°` 误差门限和 `10 s` 超时做放行检查，没有 yaw 斜坡或角速度限制器。`trajectory_config.yaml::yaw_rate_max` 只作用于生成后的运动轨迹；原地对准速度由 PX4（如 `MC_YAWRATE_MAX`）及飞控内环约束。
-
-### 5. AUTO.LAND 是全局让步分支，并在 UseCase 层锁存到 DISARM
-
-`BacktrackUseCase::handleAutoLandYield()` 一旦看到 armed 状态下 `mode == "AUTO.LAND"`，会锁存 `auto_land_yield_active_`，清理轨迹/退化返航/rejoin 临时状态，并在 DISARM 之前跳过录制延时、触发检测、轨迹生成、fallback 推进和 rejoin 处理。这样即使 PX4/MAVROS 模式短暂跳出 `AUTO.LAND`，节点也不会重新触发返航或请求 `OFFBOARD`。
-
-`BacktrackStateMachine::tick()` 一开始也检查 `mode == "AUTO.LAND"`。如果命中，会清理 setpoint 和 mode request；armed 时进入专用 `AutoLandYield`，disarmed 时进入 `IdleDisarmed`。`AutoLandYield` 不执行录制或返航，仅准确表达飞控已接管降落；不要把 armed 的 `AUTO.LAND` 直接改成 `IdleDisarmed`。
-
-如果你改降落逻辑，必须评估这条全局分支是否还成立。
-
-### 6. 触发时点数不足会降级为原地降落
-
-所有触发路径（CH7 长按、CH18 故障确认、RC 丢失）在 `Recording` 状态下会先检查 `checkMinPoints()`：
-
-- 点数足够 → 正常进入返航流程
-- 点数不足 → 调用 `state_machine_.triggerLanding()` 直接进入 `LandingTransition`
-
-Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而非恢复返航。
-
-`triggerLanding()` 进入的 `LandingTransition` 会判断当前模式：非 OFFBOARD 直接请求 `AUTO.LAND`，OFFBOARD 先走 `POSCTL` 过渡。
-
-### 7. Debug 输出是 setter 注入的可选能力
-
-`DebugDumper` 和 `DebugPublisher` 通过 `setDebugDumper()` / `setDebugPublisher()` 注入 `BacktrackUseCase`，默认为 `nullptr`（不启用）。`performDebugDump()` 在 `handleTrajectoryGeneration()` 成功后调用，内部先判空再执行。这意味着 debug 功能对正常飞行路径零侵入——不启用时没有任何额外开销。
-
-### 8. rejoin 是同一路径跟随器的低速模式
-
-当前实现里，偏离距离是当前位置到局部路径投影点的三维距离，不是到 wall-time 参考点的位置差。rejoin 的进入/退出除了距离阈值，还带持续时间判定：
-
-- 进入：`cross_track_error > rejoin_trigger_dist_m` 持续达到 `rejoin_trigger_hold_s`
-- 执行：扩大局部前向投影窗口、随横向误差缩短预瞄，速度向 `rejoin_v_max_m_s` 平滑限幅；位置和 yaw 仍取自路径目标
-- 退出：横向误差、实际速度误差、已发布目标速度连续性同时满足，并持续达到 `rejoin_success_hold_s`
-
-生产配置的触发/退出距离分别为 `0.5 m / 0.4 m`。最终到点仍独立要求 `0.2 m`，不要为了 Rejoin 调参而同步放宽终点精度。不要重新引入全轨迹最近点搜索、冻结时间点或固定冷却时间来处理 Rejoin。
-
-### 9. 返航开始前必须完成路径切向 yaw 对准
-
-轨迹生成后，`ReturnPreOffboard` 保持触发位置，但将 hold yaw 更新为 `evaluateByArcLength(0).yaw`。只有 OFFBOARD、轨迹就绪且 yaw 误差不大于 15° 时才进入 `ReturnActive`；10s 超时只报错并继续悬停，不允许带大角度误差开始平移。暂停恢复使用保留路径目标的 yaw，语义相同。
-
-### 10. 低电量返航触发语义与竞态防护
-
-低电量触发具备以下关键语义：
-- **边沿触发与确认延时**：电量百分比（来自 `/mavros/battery` 的 `percentage`，0~1）必须持续低于阈值达到 `low_battery_confirm_s`（默认 3.0s），`checkLowBatteryEvent()` 仅在确认瞬间返回一次 `true`。
-- **不可逆锁存**：一旦触发，`isLowBattery()` 持续返回 `true`，即使后续电压回弹也不取消已触发标记。
-- **优先级与时序隔离**：`Recording` 下排在 RC loss 之后；在每个 tick 开头统一读取一次事件边沿并在主线程中消费，避免并发竞态。
-- **Paused 状态行为**：暂停状态下低电量**不自动恢复返航**，仅持续通过 `/px4_backtrack/low_battery` 广播电平状态供前端弹窗提示。
+准备阶段保持触发位置，yaw 设为路径起始切向，误差 ≤ 15° 且已持有控制权才开始跟随；没有 yaw 斜坡，原地转速由 PX4（`MC_YAWRATE_MAX`）限制。航点降级没有切向，不要求对准。
 
 ## 常见改动应该改哪里
 
 | 目标 | 必看文件 |
 | --- | --- |
-| 改返航状态、加新状态 | `state_machine.hpp/.cpp`，然后回看 `backtrack_usecase.cpp` |
-| 改触发阈值或触发语义 | `trigger_evaluator.hpp/.cpp`、`backtrack_params.yaml`、`config_loader.cpp` |
-| 改录制条件或录制节流 | `recording_buffer.hpp/.cpp`、`backtrack_usecase.cpp` |
-| 改轨迹生成方式 | `trajectory_session.hpp/.cpp`、`trajectory_config.yaml` |
-| 改偏离检测或回归策略 | `rejoin_policy.hpp/.cpp`、`backtrack_usecase.cpp` |
-| 改话题名或消息类型 | `ros_subscribers.hpp/.cpp`、`ros_publishers.hpp/.cpp`、`launch/backtrack.launch` |
-| 改参数加载方式 | `config_loader.hpp/.cpp`、`backtrack_params.yaml` |
-| 改启动频率 | `backtrack_params.yaml`、`src/backtrack_node.cpp` |
-| 改 debug 输出或可视化 | `debug_dumper.hpp/.cpp`、`debug_publishers.hpp/.cpp`、`backtrack_usecase.cpp`、`backtrack_params.yaml` |
-
-## 配置文件地图
-
-- [`config/backtrack_params.yaml`](config/backtrack_params.yaml)
-  返航节点参数，按录制、触发、OFFBOARD、rejoin、降落、debug 分组
-- [`config/trajectory_config.yaml`](config/trajectory_config.yaml)
-  直接传给 `trajectory_core::TrajectoryConfig::loadFromYaml()`
-- [`launch/backtrack.launch`](launch/backtrack.launch)
-  默认只启动 `backtrack_node` 并加载 `backtrack_params.yaml`
+| 改状态转移或输出 | 方案第 6、7 节 → `return_state_machine.hpp/.cpp` → 状态机单测与穷举检查 → 注入表 |
+| 改条件判定（链路、CH7、电量、在空中） | 方案第 5 节 → 对应 `domain/*_monitor`、`pilot_input` → 单测 → 注入表 |
+| 改条件组装或执行（规划、跟随、setpoint） | `backtrack_usecase.cpp`，以及 `trajectory_session`、`rejoin_policy`、`waypoint_fallback_session` |
+| 改模式请求 | `mode_commander.cpp`、`ros_services.cpp` |
+| 改话题名或消息类型 | `ros_subscribers`、`ros_publishers`、`backtrack_node.cpp`、`launch/backtrack.launch`，并同步前端对接文档 |
+| 改参数 | 对应 config 结构体、`config_loader.cpp`、`backtrack_params.yaml`；闭环场景的 `productionConfig()` 和单测的 `makeConfig()` |
+| 改调试日志 | `debug_log.cpp`、`backtrack_node.cpp` |
 
 ## 文档可信度排序
 
-按“接近当前代码”的程度排序：
+1. `src/**`、`include/**`
+2. `config/*.yaml`、`launch/`
+3. [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)：当前实现的说明
+4. [`doc/testing/`](doc/testing/)：测试方法和执行记录
 
-1. [`src/backtrack_node.cpp`](src/backtrack_node.cpp) 和 `src/**`
-2. [`include/px4_backtrack/**`](include/px4_backtrack)
-3. [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 与 [`config/trajectory_config.yaml`](config/trajectory_config.yaml)
-4. [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)、[`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)：描述 dev 的实现，R3 时合并更新
+重构要达到的行为（R4–R8 还没有实现）以方案为准。`doc/testing/` 中注明"只适用于 dev"的文档不描述当前行为。
 
-重构要达到的行为（还没有全部实现）以 [`doc/design/返航触发与状态机重构方案.md`](doc/design/返航触发与状态机重构方案.md) 为准。
+## 容易踩坑的地方
 
-## 当前容易踩坑的地方
-
-- `AUTO.LAND` 让步检查必须早于 `checkRCLossEvent()`。非 `AUTO.LAND` 下，`checkRCLossEvent()` 仍应放在状态分支之前；如果挪到 `Recording` 分支内部，`isRCLost()` 在某些状态下会失真。
-- `auto_land_yield_active_` 是“直到 DISARM”的锁存，不是只看当前 tick 的 `mode == "AUTO.LAND"`。不要为了允许中途恢复返航而直接删除它；如果需求变化，需要先定义清楚外部取消降落后的安全语义。
-- `nav_msgs/Odometry.twist` 按消息语义位于 `child_frame_id`。`OdomSubscriber` 会用姿态四元数将其旋转到父 ENU；不要再次把这份速度当作机体系速度，也不要跳过旋转直接用于 Rejoin 速度判据。
-- `handleReturnTrigger()` 在点数不足时调用 `triggerLanding()`，这会跳过 `ReturnPreOffboard` 直接进 `LandingTransition`。如果你在 `LandingTransition` 之前加了新逻辑，要评估这条直达路径是否会绕过它。
-- 当前代码有四类“不可直接走平滑轨迹”的分支：一类是触发时点数不足，直接降落；一类是点数足够但几何路径退化为“点过近/起终点近乎重合”，轨迹生成失败后直接降落；一类是其它可恢复轨迹生成失败，会切到 waypoint 退化返航；最后一类是非法轨迹配置，这时不会走 fallback，而是停留在 `ReturnPreOffboard` 并停止重试。
-- [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](src/domain/trajectory_session.cpp) 为准。
-- `tests/unit/` 主要覆盖领域层和轻集成逻辑，没有 ROS topic 级 mock/rostest。涉及 adapters、launch、参数装配时，除单测外还要跑闭环场景；涉及与飞控的交互时做 SITL。
+- 修改 `step()` 的判定顺序会改变规则优先级；先读方案第 6.3 节，再看穷举检查（`test_return_state_machine_invariants.cpp`）是否覆盖到。
+- 条件比执行层的事实晚一拍：在单测里断言时间时要算上这一拍。
+- 单测和闭环场景都要先送一条"未解锁"的飞控状态再解锁，并在解锁前就有里程计；否则 `AirborneMonitor` 按空中重启处理，高度条件不起作用。
+- `nav_msgs/Odometry.twist` 位于 `child_frame_id`，订阅适配器已经旋转到父 ENU，不要再当作机体系速度处理。
+- 加了新的关键判定，就在 [`scripts/analysis/mutation_check.py`](scripts/analysis/mutation_check.py) 的注入表中加一项，确认有单测能发现。
 
 ## 测试地图
 
-用例逐条说明见 [`doc/testing/单元测试文档.md`](doc/testing/单元测试文档.md)。
+用例逐条说明见 [`doc/testing/单元测试文档.md`](doc/testing/单元测试文档.md)，闭环场景、SITL 和基准见 [`doc/testing/闭环仿真与SITL测试.md`](doc/testing/闭环仿真与SITL测试.md)。
 
-- [`tests/unit/test_recording_buffer.cpp`](tests/unit/test_recording_buffer.cpp)：录制节流、时间戳单调性和 `reset()`
-- [`tests/unit/test_trigger_evaluator.cpp`](tests/unit/test_trigger_evaluator.cpp)：dev 的 `CH7` / `CH18` / RC loss / 低电量触发语义（R3 后删除）
-- [`tests/unit/test_state_machine.cpp`](tests/unit/test_state_machine.cpp)：dev 状态机的主状态迁移和 `AUTO.LAND` 高优先级（R3 后删除）
-- [`tests/unit/test_rejoin_policy.cpp`](tests/unit/test_rejoin_policy.cpp)：偏离/回归阈值、路径目标平滑限速、退出时的速度收敛
-- [`tests/unit/test_trajectory_session.cpp`](tests/unit/test_trajectory_session.cpp)：轨迹生成、逆序语义、局部投影、单调弧长进度、自交分支、停顿点云团、末端抽稀和空间完成判定
-- [`tests/unit/test_waypoint_fallback_session.cpp`](tests/unit/test_waypoint_fallback_session.cpp)：退化航点路径的逆序稀疏化、单步推进与 restart
-- [`tests/unit/test_path_yaw.cpp`](tests/unit/test_path_yaw.cpp)：返航切向 yaw 与端点漂移
-- [`tests/unit/test_ros_subscribers.cpp`](tests/unit/test_ros_subscribers.cpp)：里程计速度旋转到父 ENU
-- [`tests/unit/test_backtrack_usecase.cpp`](tests/unit/test_backtrack_usecase.cpp)：轻集成，覆盖轨迹失败分流、AUTO.LAND 让步、wall time 不推进空间轨迹、起始 yaw 对准、Rejoin 连续恢复、终点精度与 Rejoin 走廊解耦、低电量（R3 按新语义迁移）
-- [`tests/unit/test_link_monitor.cpp`](tests/unit/test_link_monitor.cpp)、[`test_pilot_input.cpp`](tests/unit/test_pilot_input.cpp)、[`test_battery_monitor.cpp`](tests/unit/test_battery_monitor.cpp)、[`test_airborne_monitor.cpp`](tests/unit/test_airborne_monitor.cpp)：R1 条件层
-- [`tests/unit/test_return_state_machine.cpp`](tests/unit/test_return_state_machine.cpp)：R2 状态机场景
-- [`tests/unit/test_return_state_machine_invariants.cpp`](tests/unit/test_return_state_machine_invariants.cpp)：随机游走和单步穷举，检查安全约束 SC1–SC7、SC9
+- [`test_link_monitor`](tests/unit/test_link_monitor.cpp)、[`test_pilot_input`](tests/unit/test_pilot_input.cpp)、[`test_battery_monitor`](tests/unit/test_battery_monitor.cpp)、[`test_airborne_monitor`](tests/unit/test_airborne_monitor.cpp)：条件层
+- [`test_return_state_machine`](tests/unit/test_return_state_machine.cpp)：状态机场景
+- [`test_return_state_machine_invariants`](tests/unit/test_return_state_machine_invariants.cpp)：随机游走和单步穷举，检查安全约束 SC1–SC7、SC9
+- [`test_backtrack_usecase`](tests/unit/test_backtrack_usecase.cpp)：UseCase 闭环场景，用简化的飞控与链路模型覆盖方案第 11 节的场景
+- [`test_mode_commander`](tests/unit/test_mode_commander.cpp)、[`test_debug_log`](tests/unit/test_debug_log.cpp)：模式请求、调试日志
+- [`test_trajectory_session`](tests/unit/test_trajectory_session.cpp)、[`test_rejoin_policy`](tests/unit/test_rejoin_policy.cpp)、[`test_waypoint_fallback_session`](tests/unit/test_waypoint_fallback_session.cpp)、[`test_recording_buffer`](tests/unit/test_recording_buffer.cpp)、[`test_path_yaw`](tests/unit/test_path_yaw.cpp)、[`test_ros_subscribers`](tests/unit/test_ros_subscribers.cpp)：执行层与适配
 
-运行方式：
-
-- 本机：`DOCKER="sudo docker" scripts/docker/run_tests.sh amd64`
-- 已有 ROS 工作空间：`catkin_make --pkg trajectory_core px4_backtrack_optimised`，再 `catkin_make run_tests_px4_backtrack_optimised`，最后 `catkin_test_results`
+运行：`DOCKER="sudo docker" scripts/docker/run_tests.sh amd64`；之后 `scripts/analysis/run_mutation_check.sh amd64`、`scripts/analysis/run_hazard_scenarios.sh amd64`。
 
 ## 给后续 LLM 的工作建议
 
-- 先从 `src/backtrack_node.cpp -> src/application/backtrack_usecase.cpp -> src/domain/state_machine.cpp` 读一遍，再决定改动面。
-- 需要改参数时，不要只改 YAML，`ConfigLoader` 和 config struct 往往也要同步改。
-- 触发参数这条链路现在是 `backtrack_params.yaml -> launch/backtrack.launch -> ROS 参数服务器 -> ConfigLoader -> TriggerConfig`；排查参数不生效时沿这条链路查，不要先怀疑 `TriggerEvaluator` 自己有隐藏默认值。
-- 需要改状态名、话题名、接口语义时，记得同步更新 `README.md` 和本文件。
-- 遇到“文档和代码不一致”时，优先相信代码，并把不一致显式写出来，不要擅自脑补。
+- 先读方案第 6、7 节和[系统总览](doc/reference/SYSTEM_OVERVIEW.md)，再从 `backtrack_node.cpp → backtrack_usecase.cpp → return_state_machine.cpp` 读一遍。
+- 先计划后改动；设计变化先写回方案并记审核记录，再写代码和单测；提交按依赖顺序分步，每个提交只做一件事。
+- 改完跑全部单测、错误注入和闭环场景；涉及与飞控的交互时做 SITL。
+- 遇到文档和代码不一致，以代码为准，并把不一致写出来修正文档。

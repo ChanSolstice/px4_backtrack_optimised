@@ -1,567 +1,214 @@
-# 系统总览文档
+# 系统总览
 
-> 适用范围：本文按 dev（重构前）的代码整理。[返航触发与状态机重构方案](../design/返航触发与状态机重构方案.md)从 R3 起替换状态机和触发流程，届时本文与[返航实现技术文档](返航实现技术文档.md)合并更新为一份系统说明。
+本文按代码现状说明 `px4_backtrack_optimised` 的目标、接口、处理流程和模块划分，适用于 `feat/return-state-policy` 分支实施到 R3 的版本（2026-10-21）。设计依据和完整规则见[返航触发与状态机重构方案](../design/返航触发与状态机重构方案.md)（下称"方案"）；还没有实现的部分见第 9 节。
 
-## 1. 文档目的与依据
+## 1. 目标与边界
 
-本文档用于说明 `px4_backtrack_optimised` 当前 C++ 实现的系统目标、输入输出、处理流程、模块划分与关键设计思想。
+节点在飞行中录制里程计轨迹，在失控、低电量或飞手长按 CH7 时启动返航任务：沿录制轨迹的逆序飞回录制起点，悬停后交给 PX4 的 `AUTO.LAND` 降落。
 
-本文所有结论均基于仓库当前代码整理，主要依据如下：
+- 只做"按已飞路径回退"，不做全局规划或避障。
+- 运行在 ROS1 Noetic + MAVROS 上，以改动后的 PX4 v1.15.4 为目标：接收机失控时 CH18 = 800，正常时为 1400；失控帧仍是有效遥控输入，摇杆回中、开关和 CH7 保持（方案第 1.4 节）。
+- PX4 原生的失控保护已在固件中屏蔽，低电量动作只告警，这两类情况由本模块处理（D10、D12）。不了解下方环境时，悬停优先于降落。
+- 轨迹生成由同级的 `trajectory_core` 库完成。
 
-- `src/backtrack_node.cpp`
-- `src/application/backtrack_usecase.cpp`
-- `src/domain/*.cpp`
-- `include/px4_backtrack/**/*.hpp`
-- `config/backtrack_params.yaml`
-- `config/trajectory_config.yaml`
+## 2. 接口
 
-说明：
+### 2.1 输入
 
-- 当前实现是 ROS1 `catkin` 工程，不是 ROS2。
-- 当前实现并不是“直接订阅外部 waypoint 列表后立即优化输出轨迹”。
-- 实际流程是：节点先在 `Recording` 状态录制飞行中的里程计点，再在触发返航时把这些录制点逆序重建为 `trajectory_core::Waypoint`，然后调用 `trajectory_core` 生成返航轨迹。
+接收时间统一取回调时刻的 `ros::Time::now()`。
 
-## 2. 系统整体目标
-
-该系统的目标是为 PX4 飞行器提供一个“按已飞路径回退”的返航能力。
-
-从代码可确认的功能目标如下：
-
-1. 飞行器在正常飞行阶段持续录制自身轨迹。
-2. 当满足返航触发条件时，系统基于已录制轨迹生成一条逆向返航轨迹。
-3. 系统通过 MAVROS 持续发布局部位置控制 setpoint，并按需要请求切换飞控模式，使飞行器沿优化后的返航轨迹执行。
-4. 当执行中发生偏离时，系统进入 rejoin 逻辑，先回归轨迹，再继续沿轨迹返航。
-5. 当轨迹结束或触发条件不满足时，系统进入降落流程，最终请求 `AUTO.LAND`。
-
-换句话说，这个节点解决的问题不是“通用路径规划”，而是“基于已录制航迹的可触发返航执行”。
-
-## 3. 输入输出定义
-
-### 3.1 ROS 输入
-
-系统实际接收的外部输入来自 3 个 ROS 话题。
-
-| 输入接口 | 消息类型 | 在代码中的处理 | 作用 |
-| --- | --- | --- | --- |
-| `/mavros/state` | `mavros_msgs/State` | `StateSubscriber::stateCallback()` | 提供 `armed` 和当前飞控模式 |
-| `/Odometry_px4` | `nav_msgs/Odometry` | `OdomSubscriber::odomCallback()` | 提供当前位置、姿态中的 yaw、时间戳 |
-| `/mavros/rc/in` | `mavros_msgs/RCIn` | `RCSubscriber::rcCallback()` | 提供 RC 通道值，用于 `CH7`、`CH18` 和 RC 丢失判定 |
-
-其中：
-
-- 位置使用 ENU 语义，内部类型为 `domain::Vec3`。
-- yaw 从里程计四元数中提取。
-- RC 使用 `channels[6]` 表示 `CH7`，`channels[17]` 表示 `CH18`。
-
-### 3.2 内部输入数据结构
-
-虽然外部没有直接输入 waypoint 数组，但系统内部会构造两类“轨迹输入”。
-
-#### 3.2.1 录制点 `RecordPoint`
-
-定义于 `include/px4_backtrack/domain/recording_buffer.hpp`：
-
-| 字段 | 类型 | 含义 |
+| 话题 | 类型 | 用途 |
 | --- | --- | --- |
-| `position` | `Vec3` | 录制位置，ENU，单位 m |
-| `yaw` | `double` | 录制时航向角，单位 rad |
-| `timestamp` | `double` | 相对时间戳，首点为 0，单位 s |
+| `/mavros/state` | `mavros_msgs/State` | 解锁状态和飞控模式；只用 `connected` 为真的消息（MAVROS 未连上飞控时也发布 `armed=false`） |
+| `/mavros/extended_state` | `mavros_msgs/ExtendedState` | 飞控落地状态 `landed_state`，用于在空中判定 |
+| `/Odometry_px4` | `nav_msgs/Odometry` | 位置（ENU）、yaw、速度（按消息语义从 `child_frame_id` 旋转到父 ENU）；含非有限值的消息视为没有收到 |
+| `/mavros/rc/in` | `mavros_msgs/RCIn` | CH7（下标 6，按钮）、CH18（下标 17，失控标志）和 RC 消息时序 |
+| `/mavros/battery` | `sensor_msgs/BatteryState` | 电量百分比 `percentage`（0～1） |
 
-这组数据由 `RecordingBuffer::addPoint()` 在 `Recording` 状态下持续积累。
+### 2.2 输出
 
-#### 3.2.2 轨迹生成输入 `trajectory_core::Waypoint`
-
-定义不在本仓库，但本仓库在 `TrajectorySession::generate()` 中明确按以下方式构造：
-
-1. 将 `RecordPoint` 序列逆序。
-2. 使用 `t_new = i * (1 / record_max_hz)` 重建时间轴。
-3. 以 `position + yaw + t_new` 构造 `trajectory_core::Waypoint`。
-
-因此，`trajectory_core` 真正收到的“waypoints”不是外部直接给入，而是系统对录制点做逆序和重采样后的结果。
-
-### 3.3 ROS 输出
-
-系统对外输出 2 类 ROS 话题和 1 个服务调用。
-
-| 输出接口 | 类型 | 来源 | 作用 |
-| --- | --- | --- | --- |
-| `/mavros/setpoint_raw/local` | `mavros_msgs/PositionTarget` | `SetpointPublisher::publish()` | 发布悬停、返航、rejoin 控制目标 |
-| `/px4_backtrack/state` | `std_msgs/String` | `StatusPublisher::publishState()` | 发布内部状态机状态 |
-| `/status_rc_loss` | `std_msgs/Bool` | `StatusPublisher::publishRCLoss()` | 发布 RC 丢失持续状态 |
-| `/mavros/set_mode` | `mavros_msgs/SetMode` | `SetModeClient::callSetMode()` | 请求切换 `OFFBOARD`、`POSCTL`、`AUTO.LAND` |
-
-### 3.4 内部输出数据结构
-
-#### 3.4.1 `TickOutput`
-
-定义于 `include/px4_backtrack/application/backtrack_usecase.hpp`：
-
-| 字段 | 类型 | 含义 |
+| 接口 | 类型 | 内容 |
 | --- | --- | --- |
-| `should_publish_setpoint` | `bool` | 当前周期是否应下发 setpoint |
-| `setpoint` | `optional<SetpointTarget>` | 位置控制目标 |
-| `mode_request` | `optional<ModeRequest>` | 模式切换请求 |
-| `current_state` | `domain::State` | 当前状态机状态 |
-| `rc_loss` | `bool` | RC 丢失电平状态 |
-
-`BacktrackNode::timerCallback()` 每个周期消费该输出，再转成 ROS 行为。
-
-#### 3.4.2 `SetpointTarget`
-
-定义于 `include/px4_backtrack/domain/state_machine.hpp`：
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `position` | `Vec3` | 位置目标 |
-| `velocity` | `Vec3` | 速度目标 |
-| `yaw` | `double` | 航向角目标 |
-| `yaw_rate` | `double` | 航向角速度目标 |
-| `acceleration` | `optional<Vec3>` | 可选加速度目标 |
-| `type_mask` | `uint16_t` | 对应 `PositionTarget.type_mask` |
-| `coordinate_frame` | `uint8_t` | 对应 `PositionTarget.coordinate_frame` |
-
-## 4. 核心处理流程
-
-### 4.1 启动与装配
-
-系统从 `src/backtrack_node.cpp` 启动，初始化顺序如下：
-
-1. `ConfigLoader::loadFromROS()` 从参数服务器加载返航参数。
-2. `ConfigLoader::loadTrajectoryConfig()` 加载 `trajectory_core` 配置文件。
-3. 创建订阅器、发布器、模式服务客户端。
-4. 创建 `BacktrackUseCase`。
-5. 将 3 个订阅回调转发给 `BacktrackUseCase`。
-6. 启动 20Hz 定时器，周期执行 `BacktrackUseCase::tick(now)`。
-
-这说明系统采用“订阅回调采集数据 + 定时器驱动控制”的结构，而不是在订阅回调里直接发控制指令。
-
-### 4.2 数据采集阶段
-
-#### 4.2.1 状态输入
-
-`onStateReceived(bool armed, const std::string& mode)` 更新：
-
-- 当前是否 ARM
-- 当前 PX4 模式字符串
-
-#### 4.2.2 里程计输入
-
-`onOdomReceived(const Vec3& position, double yaw, double stamp)` 更新当前位置与航向。
-
-当状态机处于 `Recording` 时，还会调用 `recording_buffer_.addPoint()` 录制航迹点。
-
-#### 4.2.3 RC 输入
-
-`onRCReceived(const std::vector<uint16_t>& channels)` 做两件事：
-
-1. 更新 RC 通道缓存。
-2. 更新最近一次收到 RC 消息的时间，用于 RC 丢失检测。
-
-### 4.3 周期控制阶段
-
-`BacktrackUseCase::tick(now)` 是核心编排函数，每个周期固定按以下顺序执行：
-
-1. `trigger_evaluator_.updateNow(now)` 更新当前时间。
-2. `handleFlightCycleReset()` 检测 `DISARM -> ARM` 飞行周期切换，并重置录制与轨迹会话。
-3. `handleRecordDelay(now)` 在 `WaitRecordDelay` 状态内等待 `record_delay_s`，到时进入 `Recording`。
-4. `handleTriggers(now)` 检测返航、暂停、恢复、RC 丢失等触发条件。
-5. `handleTrajectoryGeneration()` 在 `ReturnPreOffboard` 内请求并执行轨迹生成。
-6. `handleWaypointFallbackProgress()` 在退化 waypoint 返航期间推进当前目标索引。
-7. `handleRejoin()` 在返航过程中检查偏离与回归成功。
-8. 组装 `TickInput` 驱动 `BacktrackStateMachine::tick()`。
-9. 根据状态机输出计算本周期 setpoint 与模式请求。
-
-### 4.4 返航触发阶段
-
-系统在 `Recording` 状态下支持 3 类返航触发：
-
-1. `CH7` 长按
-2. `CH18` 故障确认
-3. RC 消息丢失
-
-处理规则由 `handleReturnTrigger()` 统一实现：
-
-- 若录制点数 `>= record_min_points`，则锁定当前位置，进入返航流程，并标记需要生成轨迹。
-- 若录制点数不足，则不生成轨迹，直接进入 `LandingTransition`，后续请求降落。
-
-这说明“点数不足时直接降落”是当前实现中的明确降级策略。
-
-### 4.5 轨迹生成阶段
-
-轨迹只会在以下条件同时满足时生成：
-
-1. 当前状态为 `ReturnPreOffboard`
-2. `trajectory_generation_requested_ == true`
-3. 当前 `trajectory_session_` 尚未持有有效轨迹
-
-生成动作位于 `TrajectorySession::generate()`，核心步骤如下：
-
-1. 先调用 `TrajectoryConfig::validate()`，非法配置直接返回 `InvalidConfig`。
-2. 检查录制点数是否至少为 2。
-3. 基于 `max(min_point_dist_m, ds_m * 0.5)` 对录制点做空间抽稀。
-4. 将录制点逆序。
-5. 将逆序后的录制时间戳镜像映射为新的单调递增时间轴。
-6. 构造 `trajectory_core::Waypoint` 数组。
-7. 调用 `trajectory_core::TrajectoryGenerator::generate()`。
-8. 若成功，保存轨迹对象并重置执行进度。
-
-生成失败时的处理也已分流：
-
-- 点过近/起终点几何退化：直接降级为原地降落
-- 其它可恢复失败：切到 `WaypointFallbackSession` 做退化 waypoint 返航
-- 非法配置：记录错误并停留在 `ReturnPreOffboard`，不进入 fallback
-
-### 4.6 OFFBOARD 切换与轨迹执行阶段
-
-在返航真正开始之前，状态机会先进入 `ReturnPreOffboard`：
-
-1. 发布锁定位置的固定点 setpoint。
-2. 累积 `pre_offboard_setpoint_count` 次预发送。
-3. 满足次数后，以 1 秒节流频率请求切换到 `OFFBOARD`。
-4. 当模式已进入 `OFFBOARD`、轨迹已就绪且实际 yaw 与返航起始切向误差不大于 `15°` 时，进入 `ReturnActive`。
-
-进入 `ReturnActive` 后：
-
-1. 若当前是退化返航，则直接从 `WaypointFallbackSession` 取当前位置对应的 sparse waypoint 目标。
-2. 否则，`TrajectorySession` 将当前位置投影到局部路径窗口，单调推进 `projected_s`，并在前方选择预瞄 `target_s`。
-3. `computeSetpoint()` 通过 `evaluateByArcLength(target_s)` 取得位置、速度和路径切向 yaw。
-4. 将轨迹状态或 waypoint 目标转成 `SetpointTarget`。
-5. 通过 `/mavros/setpoint_raw/local` 持续下发。
-6. 当剩余弧长、实际终点距离 `<=0.2 m` 和实际水平低速条件同时满足，或退化 waypoint 会话完成时，进入 `LandingHover`。
-
-### 4.7 偏离检测与回归阶段
-
-系统会计算当前位置到局部路径投影点的三维欧氏距离：
-
-- `ReturnActive` 中大于 `rejoin_trigger_dist_m`，进入 `ReturnRejoin`
-- `ReturnRejoin` 中小于 `rejoin_success_dist_m` 且速度连续，退出回到 `ReturnActive`
-
-`ReturnRejoin` 继续使用同一个弧长路径跟随器：
-
-1. 局部投影前向搜索窗口扩大，但不做全路径最近点搜索。
-2. 偏差增大时缩短预瞄距离。
-3. `RejoinPolicy` 对路径目标速度平滑限幅；偏差较大时限到 `rejoin_v_max_m_s`，接近安全走廊后恢复路径速度。
-4. 位置、yaw 和 yaw_rate 始终来自路径预瞄点，不朝横向回拉向量转头。
-5. 退出还要求实际速度和已发布目标速度接近恢复后的路径目标速度，并持续满足 `rejoin_success_hold_s`。
-
-生产配置以 `0.5 m` 触发、以 `0.4 m` 退出；最终到点仍独立要求 `0.2 m`。
-
-### 4.8 暂停、恢复与降落阶段
-
-#### 4.8.1 暂停
-
-在 `Ch18HoverWait`、`ReturnPreOffboard`、`ReturnActive`、`ReturnRejoin` 中：
-
-- 若检测到 `CH7` 按下事件，则进入 `Paused`
-- 停止更新空间投影进度，自然保留最后合法的 `projected_s` 和目标状态
-- 状态机会请求 `POSCTL`
-
-#### 4.8.2 恢复
-
-在 `Paused` 中：
-
-- `CH7` 长按可恢复返航
-- RC 丢失也可强制恢复返航
-
-恢复时系统不是直接回到 `ReturnActive`，而是：
-
-1. 重新锁定当前位置
-2. 调用 `triggerReturn(...)`
-3. 用保留路径目标的切向 yaw 更新悬停航向
-4. 再次经过 `ReturnPreOffboard`，对准后由实际位置继续局部投影
-
-#### 4.8.3 降落
-
-降落相关逻辑分两段：
-
-1. `LandingHover`：轨迹结束后在当前位置固定点悬停 `landing_hover_s`
-2. `LandingTransition`：执行模式切换
-
-`LandingTransition` 的行为是：
-
-- 若当前不在 `OFFBOARD`，直接请求 `AUTO.LAND`
-- 若当前仍在 `OFFBOARD`，先请求 `POSCTL`
-- 等待 1 秒后再请求 `AUTO.LAND`
-
-另外，`AUTO.LAND` 在状态机中具有全局高优先级。一旦检测到当前模式已经是 `AUTO.LAND`，系统会清理返航控制输出，进入 `AutoLandYield` 并保持到 DISARM。
-
-## 5. 模块划分与职责
-
-### 5.1 入口层
-
-文件：`src/backtrack_node.cpp`
-
-职责：
-
-- 加载配置
-- 创建各层对象
-- 绑定订阅回调
-- 通过 20Hz 定时器驱动 `tick`
-- 将 `TickOutput` 转换为 ROS 发布与服务调用
-
-### 5.2 Application 层
-
-文件：
-
-- `include/px4_backtrack/application/backtrack_usecase.hpp`
-- `src/application/backtrack_usecase.cpp`
-
-职责：
-
-- 维护系统级上下文快照
-- 串联录制、触发、轨迹生成、rejoin、状态机
-- 决定什么时候请求轨迹生成
-- 按实际位置编排局部投影、Rejoin 与终点完成判定
-- 计算最终 setpoint 输出
-
-这一层是整个系统的编排中心。
-
-### 5.3 Domain 层
-
-#### `BacktrackStateMachine`
-
-职责：
-
-- 管理系统状态迁移
-- 给出是否发布 setpoint
-- 给出模式切换请求
-- 管理固定点悬停、OFFBOARD 预发送、降落过渡等流程态
-
-#### `RecordingBuffer`
-
-职责：
-
-- 节流录制里程计点
-- 存储位置、yaw、相对时间戳
-- 为轨迹生成提供原始录制数据
-
-#### `TriggerEvaluator`
-
-职责：
-
-- 维护 `CH7`、`CH18`、RC 丢失判定状态
-- 提供边沿触发事件和持续电平状态
-
-#### `TrajectorySession`
-
-职责：
-
-- 将录制点转换为 `trajectory_core` 输入
-- 调用 `trajectory_core` 生成轨迹
-- 维护轨迹执行进度
-- 提供暂停/恢复能力
-- 对外提供轨迹评估结果
-
-#### `RejoinPolicy`
-
-职责：
-
-- 判断是否偏离轨迹
-- 搜索最近轨迹时刻
-- 计算 rejoin 目标
-- 对回归速度限幅
-
-### 5.4 Adapters 层
-
-文件：
-
-- `src/adapters/ros_subscribers.cpp`
-- `src/adapters/ros_publishers.cpp`
-- `src/adapters/ros_services.cpp`
-
-职责：
-
-- 负责 ROS 消息与领域对象之间的适配
-- 屏蔽订阅、发布、服务调用细节
-- 将 `SetpointTarget` 转成 `mavros_msgs/PositionTarget`
-
-### 5.5 Infrastructure 层
-
-文件：
-
-- `src/infrastructure/config_loader.cpp`
-
-职责：
-
-- 从 ROS 参数服务器组装 `UseCaseConfig`
-- 从 YAML 文件加载 `trajectory_core::TrajectoryConfig`
-
-## 6. 关键设计思想
-
-### 6.1 “录制轨迹”与“返航轨迹”解耦
-
-系统没有直接把录制时间戳原样作为返航执行时间轴，而是在轨迹生成时按 `record_max_hz` 重建新时间轴。
-
-这意味着：
-
-- 录制阶段关注的是采样稳定和时间单调性
-- 执行阶段关注的是可控、规则、适合优化器处理的 waypoint 时序
-
-### 6.2 采用“逆序回退”而不是重新全局规划
-
-从 `TrajectorySession::generate()` 可以明确看出，返航 waypoints 来自录制点逆序。
-
-因此当前设计假设是：
-
-- 已飞路径本身是可回退参考
-- 优化重点在于把离散录制点变成平滑、受约束、可执行的返航轨迹
-
-### 6.3 控制循环与事件采集分离
-
-订阅回调只负责更新输入缓存，不直接控飞。
-
-真正的控制输出在 20Hz `tick()` 中统一生成，这样做的价值是：
-
-- 触发逻辑和状态迁移有统一时序
-- 模式切换和 setpoint 发布在一个控制周期内统一协调
-- 更容易维护暂停、恢复、降落等跨事件流程
-
-### 6.4 触发逻辑采用边沿事件与电平状态分离
-
-代码中对 RC 丢失做了显式区分：
-
-- `checkRCLossEvent()` 用于“一次性触发返航”
-- `isRCLost()` 用于“持续对外发布 RC 丢失状态”
-
-这是一个明确的工程化设计，避免控制触发和状态显示互相干扰。
-
-### 6.5 返航执行采用“固定点预发送 + OFFBOARD 切换”策略
-
-在进入轨迹执行前，系统先持续发送固定点 setpoint，再请求进入 `OFFBOARD`。
-
-从代码上看，这个策略的目的很明确：
-
-- 满足 PX4/MAVROS 对 OFFBOARD 前置 setpoint 的要求
-- 避免刚触发返航时直接切入动态轨迹控制
-
-### 6.6 偏离后不直接跳轨迹，而是进入受限 rejoin
-
-`RejoinPolicy` 不是简单把当前点投影到轨迹上，而是：
-
-1. 找最近时间点
-2. 加一个预瞄时间
-3. 取该轨迹状态作为目标
-4. 对速度限幅
-
-这体现的设计思想是：回归要尽量平滑，且速度受控，避免大偏差时产生激进追踪。
-
-### 6.7 约束与优化思想的代码可见边界
-
-关于“优化目标、约束类型”，本仓库能直接确认的是“传给 `trajectory_core` 的配置项”，包括：
-
-- 走廊偏差约束：`max_deviation_m`
-- 拐角处理参数：`corner_angle_threshold_deg`、`corner_blend_len_m`、`corner_blend_ratio`
-- 生成后运动轨迹的 yaw 平滑与速率限制：`enable_yaw_smooth`、`max_yaw_deviation_rad`、`yaw_rate_max`；不包括 `ReturnPreOffboard` 的原地起始对准
-- 末端收敛参数：`enable_end_converge`、`s_stop_m`、`r_stop_m`、`v_end_max`
-- 速度约束：`v_max`、`vz_max`
-- 加速度约束：`a_tan_max`、`a_lat_max`、`az_up_max`、`az_down_max`
-- 输出形式控制：`enable_output_acc`
-
-但需要明确：
-
-- 本仓库并不包含 `trajectory_core` 的优化器实现细节。
-- 因此，本文只能确认“系统向优化库声明了哪些约束和行为参数”，不能从本仓库单独推出其精确目标函数形式。
-
-## 7. 结论
-
-`px4_backtrack_optimised` 当前实现是一个以 `BacktrackUseCase` 为核心编排层、以 `BacktrackStateMachine` 为流程控制核心、以 `trajectory_core` 为轨迹生成核心的 ROS1 PX4 返航节点。
-
-其本质工作方式是：
-
-1. 录制飞行轨迹
-2. 在触发时逆序构造轨迹输入
-3. 调用 `trajectory_core` 生成平滑返航轨迹
-4. 通过 MAVROS 进入 `OFFBOARD` 并沿轨迹执行
-5. 在偏离、暂停、恢复、结束等情况下通过状态机维持完整控制流程
-
-如果后续需要继续扩展系统文档，建议下一步补充 `trajectory_core` 外部配置项与飞行行为的对应关系表。
-
-## 8. 状态机状态转移图
-
-以下状态图依据 `src/domain/state_machine.cpp` 与 `src/application/backtrack_usecase.cpp` 整理。
-
-### 8.1 主状态迁移
-
-```mermaid
-stateDiagram-v2
-    [*] --> IdleDisarmed
-
-    IdleDisarmed --> WaitRecordDelay: ARM 上升沿
-    WaitRecordDelay --> Recording: record_delay_s 到期 / startRecording()
-
-    Recording --> Ch18HoverWait: CH18 确认 && points >= record_min_points
-    Recording --> ReturnPreOffboard: CH7 长按 && points >= record_min_points
-    Recording --> ReturnPreOffboard: RC loss && points >= record_min_points
-    Recording --> LandingTransition: 触发返航但 points < record_min_points
-
-    Ch18HoverWait --> ReturnPreOffboard: ch18_hover_wait_s 到期
-    Ch18HoverWait --> Paused: CH7 按下事件 / triggerPause()
-
-    ReturnPreOffboard --> ReturnActive: mode == OFFBOARD && trajectory_ready
-    ReturnPreOffboard --> Paused: CH7 按下事件 / triggerPause()
-
-    ReturnActive --> ReturnRejoin: 偏离距离 > rejoin_trigger_dist_m
-    ReturnActive --> LandingHover: trajectory_finished
-    ReturnActive --> Paused: CH7 按下事件 / triggerPause()
-
-    ReturnRejoin --> ReturnActive: 偏离距离 < rejoin_success_dist_m
-    ReturnRejoin --> Paused: CH7 按下事件 / triggerPause()
-
-    Paused --> ReturnPreOffboard: CH7 长按 && points >= record_min_points
-    Paused --> ReturnPreOffboard: RC loss && points >= record_min_points
-    Paused --> LandingTransition: CH7 长按 && points < record_min_points
-    Paused --> LandingTransition: RC loss && points < record_min_points
-
-    LandingHover --> LandingTransition: landing_hover_s 到期
-
-    WaitRecordDelay --> IdleDisarmed: DISARM
-    Recording --> IdleDisarmed: DISARM
-    Ch18HoverWait --> IdleDisarmed: DISARM
-    ReturnPreOffboard --> IdleDisarmed: DISARM
-    ReturnActive --> IdleDisarmed: DISARM
-    ReturnRejoin --> IdleDisarmed: DISARM
-    Paused --> IdleDisarmed: DISARM
-    LandingHover --> IdleDisarmed: DISARM
-    LandingTransition --> IdleDisarmed: DISARM
-    AutoLandYield --> IdleDisarmed: DISARM
+| `/mavros/setpoint_raw/local` | `mavros_msgs/PositionTarget` | 任务中的保持点和路径目标 |
+| `/px4_backtrack/state` | `std_msgs/String` | 状态字符串（第 6.2 节） |
+| `/status_rc_loss` | `std_msgs/Bool` | 链路丢失：CH18 漏桶确认或 RC 消息超时，恢复后清除 |
+| `/px4_backtrack/low_battery` | `std_msgs/Bool` | 低电量，锁存到新的飞行周期 |
+| `/px4_backtrack/debug/waypoints`、`/px4_backtrack/debug/trajectory` | `MarkerArray`、`nav_msgs/Path` | 可选：录制点和返航轨迹（latched） |
+| `/mavros/set_mode` | `mavros_msgs/SetMode`（服务） | 请求 `OFFBOARD`、`POSCTL`、`AUTO.LAND`，在单独线程中异步调用 |
+
+告警（第 6.4 节）目前只出现在事件中：rosout 打印告警出现，调试日志记录出现和消失。JSON 状态话题 `/px4_backtrack/status` 在 R7 加入。
+
+### 2.3 坐标与 setpoint 约定
+
+- 里程计位置和 yaw 按 ENU 处理（x 东、y 北、z 上，yaw 绕 +Z 逆时针为正）。
+- `PositionTarget` 的 `coordinate_frame` 填 `FRAME_LOCAL_NED`，数值直接用 ENU，由 MAVROS 转换；本模块不做坐标变换。联调时出现方向或高度符号错误，先排查链路上是否重复转换。
+- 保持点：位置 + 零速度 + yaw，`yaw_rate` 为 0，忽略加速度（`type_mask = 0x01C0`）。
+- 路径目标：轨迹状态的位置、速度、yaw 和 `yaw_rate`；轨迹给出加速度时一并填写，否则忽略加速度。航点降级只给位置和 yaw。
+
+## 3. 分层与数据流
+
+```text
+订阅回调 ──> 条件层（链路、CH7、电量、在空中） ─┐
+里程计 ────> 执行层（录制、规划、跟随） ─────────┼─> Conditions 快照 ─> ReturnStateMachine::step()
+飞控状态 ──────────────────────────────────────┘                        │
+                                                                        ├─> 命令：新飞行周期、开始/取消规划
+                                                                        ├─> setpoint 策略 ─> 执行层计算目标 ─> 发布
+                                                                        ├─> 模式意图 ─> ModeCommander ─> 异步 set_mode
+                                                                        └─> 告警、事件 ─> rosout、调试日志
 ```
 
-### 8.2 全局覆盖规则
+### 3.1 每个控制周期的顺序
 
-`BacktrackStateMachine::tick()` 在正常状态逻辑之前，还会先处理两类“全局覆盖”条件。
+控制周期由 `publish_hz`（20 Hz）的定时器驱动，单线程 `ros::spin`。每拍：
 
-```mermaid
-flowchart TD
-    A[任意运行中状态] -->|检测到 DISARM| B[IdleDisarmed]
+1. 取回上一拍以来完成的模式请求结果，交给 `ModeCommander`。
+2. 条件层推进到当前时间（漏桶积分、RC 超时、低电量确认、落地状态过期）。
+3. 用最近一次的输入和执行结果组装 `Conditions`，调用 `ReturnStateMachine::step()`。
+4. 执行本拍命令：新飞行周期时清空录制和会话、复位电量锁存和按键；任务开始时同步规划；任务结束或进入交接时丢弃规划结果。
+5. 跟随阶段且持有控制权时，按实际位置推进路径进度，更新偏离和回归判定。
+6. 按 setpoint 策略计算目标；记录本拍是否发布（自身断流判定）。
+7. 把模式意图交给 `ModeCommander`，得到本拍要发出的请求。
+8. 发布状态、setpoint，异步发出模式请求；事件写 rosout 和调试日志。
 
-    C[Ch18HoverWait / ReturnPreOffboard / ReturnActive / ReturnRejoin / Paused / LandingHover / LandingTransition]
-    C -->|mode == AUTO.LAND 且 armed == true| D[AutoLandYield]
-    C -->|mode == AUTO.LAND 且 armed == false| B
-    D -->|DISARM| B
-```
+执行层的事实（偏离、到点等）因此比位置晚一拍（50 ms），对持续判定没有影响（R-71）。
 
-说明：
+### 3.2 模块
 
-- `AUTO.LAND` 的这条全局覆盖规则不会作用于 `IdleDisarmed` 和 `AutoLandYield`。
-- 一旦命中 `AUTO.LAND`，状态机会清空 setpoint 与 mode request，把控制权让渡给飞控。
+| 层 | 文件 | 职责 |
+| --- | --- | --- |
+| 入口 | `src/backtrack_node.cpp` | 加载参数、创建适配器和 UseCase、驱动控制周期、把事件写到 rosout 和调试日志 |
+| 应用 | `application/backtrack_usecase` | 组装条件、调用状态机、执行命令、计算 setpoint；不访问 ROS |
+| 应用 | `application/mode_commander` | 模式请求的发送、重发、观察生效和失败告警（第 7.4 节） |
+| 领域·条件层 | `domain/link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor` | 只做检测，输出电平和带编号的按键指令（第 5 节） |
+| 领域·决策 | `domain/return_conditions.hpp`、`return_state_machine` | 条件快照；三个并行区域的状态机（第 6 节） |
+| 领域·执行 | `domain/recording_buffer`、`trajectory_session`、`waypoint_fallback_session`、`rejoin_policy`、`path_yaw` | 录制、规划、路径跟随、航点降级、回归限速、切向 yaw（第 7 节） |
+| 适配 | `adapters/ros_subscribers`、`ros_publishers`、`ros_services`、`debug_publishers` | ROS 消息转换、异步 `set_mode`、可视化 |
+| 基础设施 | `infrastructure/config_loader`、`debug_log`、`debug_dumper` | 参数加载（全部必填）、调试日志、规划 CSV |
 
-### 8.3 `LandingTransition` 内部阶段
+## 4. 参数
 
-`LandingTransition` 虽然在状态图里是一个状态，但内部还包含 3 个阶段：
+运行参数全部在 [`config/backtrack_params.yaml`](../../config/backtrack_params.yaml)，代码中没有默认值，缺少任何一项时节点启动失败；`publish_hz` 由节点读取。`trajectory_core` 的参数在 [`config/trajectory_config.yaml`](../../config/trajectory_config.yaml)，说明见该库的参数配置指南。各参数的含义和建议值见方案第 10 节。
 
-```mermaid
-flowchart TD
-    S0[stage 0]
-    S1[stage 1]
-    S2[stage 2]
+## 5. 条件层
 
-    S0 -->|当前 mode != OFFBOARD\n直接请求 AUTO.LAND| S2
-    S0 -->|当前 mode == OFFBOARD\n请求 POSCTL| S1
-    S1 -->|等待 1 秒后请求 AUTO.LAND| S2
-    S2 -->|不再发送新请求| S2
-```
+条件层只做检测，每拍给出一份快照，不做任何状态转移（方案第 5 节）。
 
-说明：
+| 组件 | 输出 | 要点 |
+| --- | --- | --- |
+| `LinkMonitor` | 链路丢失（来源 CH18 或 RC 超时）、退化、CH18 异常值和不可用 | CH18 低于 900 时漏桶每秒加 1，正常时每秒减 0.2，达到 1.0 s 确认，上限 1.0 s；RC 消息间隔达到 0.25 s 确认；本模块自身卡顿的那一拍不判 RC 超时；连续正常 2 s 才恢复；最近 5 s 内出现过失控帧或 RC 超时即为退化 |
+| `PilotInput` | 长按（≥ 2 s，返航请求）、短按（0.3～2 s 松开，退出请求）、按键编号 | 失控帧或 RC 超时期间 CH7 不可信，作废进行中的按下；恢复后须先看到松开；指令带按下开始时间和链路标志，状态机按编号消费 |
+| `BatteryMonitor` | 低电量（锁存）、读数无效 | NaN、小于 0 或大于 1 为无效，不参与判定也不打断确认；持续 3 s 低于 15% 确认 |
+| `AirborneMonitor` | 在空中 | 飞控未报告落地，且比解锁高度高出 0.5 m；节点在已解锁时启动、或解锁时还没有里程计，只看落地状态 |
+| UseCase | 里程计延迟（0.25 s）、中断（2 s）；飞控状态中断（3 s） | 新鲜度按接收时间判定 |
 
-- 这部分不是状态机枚举层面的独立状态，而是 `LandingTransition` 内部的子阶段变量 `landing_transition_stage`。
-- 对应实现位于 `src/domain/state_machine.cpp` 的 `tickLandingTransition()`。
+## 6. 状态机
+
+### 6.1 三个并行区域
+
+| 区域 | 状态 | 回答的问题 |
+| --- | --- | --- |
+| A 任务阶段 | 未解锁、录制前、录制、任务（悬停 → 准备 → 跟随 → 到点 → 交接）、已退出、飞控降落 | 现在要做什么 |
+| B 控制权 | `none`、`acquiring`、`owned`、`fallback`、`reclaiming`、`handover`、`yielded`、`fcu_landing` | 现在能不能做 |
+| C 跟随方式 | 在路径上、回归路径 | 怎么跟踪路径（只在跟随阶段有效） |
+
+所有转移都在 `step()` 中完成，每拍按优先级判定（方案第 6.3 节）：未解锁 → 飞控 `AUTO.LAND` 让步并锁存到上锁 → 任务中落地 → 任务中的模式变化（回退、外部切出、确认前接管）→ 短按退出 →（超时升级，R6）→ 各阶段自身的规则。
+
+### 6.2 状态字符串
+
+`/px4_backtrack/state` 发布的字符串由区域 A、C 推导：
+
+| 字符串 | 含义 |
+| --- | --- |
+| `IdleDisarmed` | 未解锁 |
+| `WaitRecordDelay` | 解锁后的录制延时（15 s） |
+| `Recording` | 录制中；满足条件时启动任务 |
+| `Ch18HoverWait` | 失控任务先悬停 15 s，期间已申请 OFFBOARD |
+| `ReturnPreOffboard` | 准备：保持触发点，等规划就绪、进入 OFFBOARD、对准路径起始切向 |
+| `ReturnActive` / `ReturnRejoin` | 沿路径返航 / 偏离后沿路径低速回归 |
+| `LandingHover` | 到点悬停 5 s |
+| `LandingTransition` | 降落交接：链路正常时经 POSCTL 再请求 AUTO.LAND，否则直接请求 AUTO.LAND |
+| `Exited` | 飞手已退出：不控制，继续录制；失控时启动新任务 |
+| `AutoLandYield` | 飞控 AUTO.LAND 已接管，锁存到上锁 |
+
+### 6.3 主要行为
+
+- **启动任务（Recording 中）：** 失控、低电量或长按（链路未丢失）时启动，只要有失控就先悬停 15 s，否则直接准备。不在空中时不启动，告警 `TRIGGER_IGNORED_LANDED`；点数不足时最多等 3 s 补点，仍不足则原地降落。录制延时内的条件只告警。
+- **申请 OFFBOARD：** 预发 6 帧 setpoint（0.3 s）后申请。链路正常时还要等到预发结束后的下一条飞控状态，先看到飞手可能的切换（R-75），低电量和主动返航因此最多晚约 1 s；失控时不等待。
+- **任务中的模式变化（飞控状态新鲜时）：**
+  - 本模块刚断流（最近 3 s 内发布间隔 ≥ 0.5 s）引起的回退不算接管：继续发布，等飞控自动回到 OFFBOARD，3 s 未回到再按切出处理；
+  - 链路正常时被切出：进入 `Exited`；链路丢失或退化时：重新申请控制权（reclaim），跟随阶段回到 OFFBOARD 且对准、偏差 ≤ 1.0 m 才重新接入，偏差超过 0.5 m 时进入回归；
+  - OFFBOARD 确认前，链路正常时飞手切到其他模式：进入 `Exited`。
+- **退出：** 短按 CH7（按下全程链路正常、晚于任务开始），或链路正常时被切出。退出后保持当前位置并请求 POSCTL，直到飞控离开 OFFBOARD；链路丢失时只保持。退出后低电量和长按只告警，失控启动新任务。
+- **落地保护：** 悬停、准备阶段不在空中，或其他阶段飞控报告落地时，直接请求 AUTO.LAND。
+- **降落交接：** 链路正常时先请求 POSCTL，3 s 未生效改为直接请求 AUTO.LAND；链路丢失、落地时直接请求 AUTO.LAND。链路正常时飞手切到其他模式或短按退出，进入 `Exited`。
+- **飞控降落让步：** 飞控进入 AUTO.LAND 后锁存到上锁，不发 setpoint；链路丢失期间模式被切走时，按 1 s 间隔重新请求 AUTO.LAND（告警 `AUTOLAND_OVERRIDDEN`）。
+- **里程计延迟：** 冻结进度，保持在延迟开始时的位置。
+
+### 6.4 告警与事件
+
+告警是电平（方案第 9.1 节的告警码），每拍由状态机统一计算，出现和消失都作为事件记录。事件包括三个区域的转换（带规则编号和原因）、飞控模式和解锁变化、条件边沿、CH7 指令、任务开始与结束、规划结果、模式请求和自身断流。
+
+## 7. 执行层
+
+### 7.1 录制
+
+- 只在 `Recording` 和 `Exited` 中录制，任务期间不录制。
+- 录制频率上限 `record_max_hz`（15 Hz）；时间戳为相对首点的里程计消息时间，必须单调递增。
+- 新飞行周期开始时清空。退出后继续录制，新任务基于"任务前的录制 + 退出后的手动段"规划；退出时截断轨迹在 R5 实现，目前新任务会先飞回原触发点。
+
+### 7.2 规划
+
+任务开始时同步规划（R4 改为后台线程）：
+
+1. 校验 `trajectory_core` 配置；
+2. 空间抽稀：间距 `max(min_point_dist_m, ds_m × 0.5)`，距离不足的中间点直接丢弃，保留真实末点，用来压缩悬停形成的密集点；
+3. 逆序，按至少 0.20 m 的稳定弦长估计每点的返航切向 yaw；
+4. 时间戳镜像为 `t_end − t`，保持单调递增并保留原始采样间隔（只用于时间质量诊断，执行不按时间推进）；
+5. 调用 `trajectory_core` 生成轨迹。
+
+| 结果 | 规划状态 | 状态机的处理 |
+| --- | --- | --- |
+| 成功 | `Ready` | 准备阶段对准起始切向后开始跟随 |
+| 点过近（起终点重合） | `FailedTooClose` | 原地降落 |
+| 配置非法 | `FailedConfig` | 保持（R6 起由准备超时兜底，R7 起启动时校验） |
+| 其他失败 | `ReadyFallback` | 航点降级：逆序稀疏航点，逐点位置目标 |
+| 航点降级也构建失败 | `FailedFallback` | 原地降落 |
+
+失控任务在悬停期间就得到规划结果，悬停结束后才处理（D3）。
+
+### 7.3 路径跟随
+
+- 进度由实际位置驱动：在当前进度附近的局部窗口内把位置投影到路径，投影弧长只增不减，避免自交路径跳到另一分支；目标为投影点前方的预瞄点（按速度和 `rejoin_lookahead_time_s`，0.15～0.8 m）。不使用 wall time 推进，沿路径落后不算偏离。
+- 偏离：横向偏差超过 `rejoin_trigger_dist_m`（0.5 m）持续 0.25 s，或局部投影失败，进入回归；回归时扩大前向窗口、随偏差缩短预瞄，速度向 `rejoin_v_max_m_s` 平滑限制，位置和 yaw 仍取路径目标；横向偏差回到 0.4 m 内且实际速度、已发布目标速度都已收敛，持续 0.1 s 后回到路径跟随。
+- 完成：剩余弧长和到终点的距离都不超过 0.2 m，且水平速度不超过 0.2 m/s。终点精度与回归走廊互不影响。
+- 条件中的横向偏差每拍按当前位置投影，只查询、不推进进度，所以重新申请控制权期间也反映当前偏差（R-74）。
+- 拿不到目标时保持当前位置，绝不输出原点。
+
+### 7.4 模式请求
+
+状态机只输出模式意图，`ModeCommander` 决定何时发出（D24）：意图改变时立即发送，不变时每 1 s 重发，直到在 `/mavros/state` 中看到目标模式；从第一次发出算起 3 s 未生效，或 `mode_sent` 为假、服务不可用时告警 `MODE_REQUEST_FAILED`，继续重发。服务调用在单独线程中执行，不阻塞控制周期。
+
+### 7.5 自身断流
+
+UseCase 记录每拍是否发布 setpoint：只在连续发布期间计算间隔，某一拍不发布即结束这一段；卡顿结束后的第一拍，距上次发布的时间也算一次间隔。最近 3 s 内间隔 ≥ 0.5 s 时，被切出视为飞控回退（R-69）。
+
+## 8. 调试与观测
+
+- **rosout：** 区域转换、飞控模式变化、任务和规划事件打 INFO；告警出现、模式请求失败、断流打 WARN。
+- **调试日志（`debug_log_enable`）：** 每次启动建一个运行目录 `<debug_log_dir>/run_<时间>/`，事件一行一个写入 `events.jsonl`，第一行是生效参数和本模块的提交号。写盘在后台线程，写失败时停止写日志并告警 `DEBUG_LOG_FAILED`，返航不受影响。逐拍记录、保留策略和查看脚本在 R7 加入。
+- **规划导出（`debug_enable_csv_dump`、`debug_enable_rviz_publish`）：** 规划成功后把录制点和采样轨迹写入 `~/.ros/backtrack_debug/` 的 CSV（`scripts/plot_debug_csv.py` 绘图），并发布到可视化话题。
+
+## 9. 与方案的差距
+
+按方案第 13 节，以下内容尚未实现：
+
+| 阶段 | 内容 | 现在的表现 |
+| --- | --- | --- |
+| R4 | 后台规划 | 规划在任务开始时同步执行；30 分钟录制约阻塞 4.7 s（本机），失控任务进入 OFFBOARD 相应推迟 |
+| R5 | 退出后截断轨迹、续录时间平移 | 退出后的新任务先飞回原触发点，再沿原轨迹返航 |
+| R6 | 超时与升级（准备、重新申请、停滞、里程计中断、AUTO.LAND 未生效等） | 没有超时：一直保持并重试，只有补点等待（3 s）、回退等待（3 s）、交接 POSCTL（3 s）有上限 |
+| R7 | JSON 状态话题、调试日志的逐拍记录和保留策略、查看脚本、录包、启动时校验 `trajectory_core` 配置 | 告警只在事件中；日志目录不自动清理 |
+
+## 10. 真相来源
+
+判断行为时以源码和配置为准：`src/`、`include/` > `config/` > 本文。本文与代码不一致时，先修正本文。
