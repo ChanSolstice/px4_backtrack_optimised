@@ -22,7 +22,7 @@
 
 ## 仓库现状
 
-当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp)。`doc/archive/TECHNICAL_DOCUMENTATION.md` 与 [`doc/archive/backtrack_node.py`](doc/archive/backtrack_node.py) 描述的是旧版 Python 基线；阅读当前工程时，应优先以 C++ 源码和 [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md) 为准。
+当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。阅读当前工程时，应优先以 C++ 源码和 [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md) 为准。
 
 ## 架构概览
 
@@ -264,12 +264,7 @@ catkin_test_results
   当前单元测试范围、运行方式、结果判读和扩展建议
 - [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)
   当前 C++ 方案的设计说明，最接近本仓库目标结构
-- [`doc/design/实现任务清单.md`](doc/design/实现任务清单.md)
-  分阶段实现计划，适合回看模块拆分意图
-- [`doc/reference/API接口文档.md`](doc/reference/API接口文档.md)
-  `trajectory_core` 的接口说明
-- [`doc/archive/TECHNICAL_DOCUMENTATION.md`](doc/archive/TECHNICAL_DOCUMENTATION.md)
-  旧版 Python 节点行为文档，仅可作为历史对照
+- `trajectory_core` 的接口说明见该仓库的 `doc/reference/API接口文档.md`
 
 ## 已知注意点
 

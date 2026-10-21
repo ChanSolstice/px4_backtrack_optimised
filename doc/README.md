@@ -8,7 +8,7 @@
 | `design/` | 实施方案和任务计划，包含已完成方案的设计背景 |
 | `testing/` | 测试方法、清单和执行记录 |
 | `reviews/` | 架构审核及待处理问题 |
-| `archive/` | 历史问题、已修复 Bug 报告、旧 Python 基线 |
+| `archive/` | 已修复缺陷的分析报告 |
 
 ## 建议阅读顺序
 
@@ -22,14 +22,12 @@
 - [系统总览](reference/SYSTEM_OVERVIEW.md)
 - [前端对接开发文档](reference/前端对接开发文档.md)：地面站/Web 监控端数据对接、状态映射、告警弹窗及可视化接入指南。
 - [返航实现技术文档](reference/返航实现技术文档.md)
-- [trajectory_core API 接口参考](reference/API接口文档.md)：本仓库保留的集成参考；库接口以 [trajectory_core 文档导航](../../trajectory_core/doc/README.md) 和该库实际头文件为准。
+- trajectory_core 的接口见该仓库的[文档导航](../../trajectory_core/doc/README.md)，以该库实际头文件为准。
 
 ## 设计方案
 
 - [返航触发与状态机重构方案](design/返航触发与状态机重构方案.md)：已确认（2026-10-20），按 R1–R8 实施；涵盖组合触发问题审核、改动固件的前提与推论、单一返航任务、暂停改退出、失控重新申请控制权、退出后沿新轨迹返航、悬停优先的超时升级、后台规划，三个并行区域的状态机，以及调试日志。
-- [低电量返航触发功能规划实现文档](design/低电量返航触发功能规划实现文档.md)：已完成方案，涵盖低电量触发、确认防抖、不可逆锁存、状态广播及防竞态时序设计。
 - [弧长驱动返航路径跟随改造方案](design/弧长驱动返航路径跟随改造方案.md)：已完成方案，保留设计背景与完成态边界。
-- [C++ 实现任务清单](design/实现任务清单.md)：原始分阶段规划，不作为当前进度的唯一依据。
 
 ## 测试记录
 
@@ -46,11 +44,9 @@
 
 以下文档用于追溯，不代表当前版本仍有同名缺陷；修复状态和复测结论按各文档当时记录阅读。
 
-- [历史返航算法问题清单](archive/当前返航算法问题清单.md)
 - [Rejoin 最近点目标与冻结退出点不一致](archive/BUG_REPORT_ReturnRejoin最近点预瞄目标与冻结退出点不一致.md)
 - [低速录制抽稀导致路径截断](archive/BUG_REPORT_低速连续飞行抽稀锚点覆盖导致返航路径截断.md)
 - [单帧越阈值导致 Rejoin 反复切换](archive/BUG_REPORT_rejoin单帧越阈值导致状态反复切换.md)
 - [停顿点高密度录制导致返航抽动](archive/BUG_REPORT_停顿点高密度录制导致返航抽动.md)
 - [Rejoin 进度未冻结](archive/BUG_REPORT_rejoin进度未冻结导致轨迹跟踪失败.md)
 - [Setpoint 残留导致悬停](archive/BUG_REPORT_setpoint残留导致返航悬停.md)
-- [Python 技术文档](archive/TECHNICAL_DOCUMENTATION.md)、[Python 基线代码](archive/backtrack_node.py)

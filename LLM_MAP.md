@@ -13,7 +13,7 @@
 5. 返航轨迹由 `trajectory_core` 生成，配置来自 [`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)。
 6. 坐标语义按 ENU 处理，但 setpoint 通过 `mavros_msgs/PositionTarget` 发到 `/mavros/setpoint_raw/local`。
 7. 录制点保留相对时间戳；生成轨迹时会在逆序后把时间戳镜像成新的单调递增序列，以保留原始 dt 间隔用于 `trajectory_core` 的时间质量诊断。
-8. `doc/archive/TECHNICAL_DOCUMENTATION.md` 和 [`doc/archive/backtrack_node.py`](doc/archive/backtrack_node.py) 是旧版 Python 基线，不要把它们当成当前代码的直接事实来源。
+8. 旧版 Python 基线已从仓库删除（需要时查 git 历史），不要按它恢复旧行为。
 9. 需要判断“行为真相”时，优先级是：`src/*.cpp` + `include/*.hpp` > `config/*.yaml` > `launch/` > `doc/reference/返航实现技术文档.md` > 旧版 Python 文档。
 10. 当前代码有开发中痕迹，写说明或补丁前要先检查接口是否自洽。
 11. 仓库现在已经有基础 `gtest` 单元测试，优先先跑 `RecordingBuffer` / `TriggerEvaluator` / `StateMachine` / `RejoinPolicy` / `TrajectorySession`，不要再默认“完全没有测试”。
@@ -263,8 +263,6 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 3. [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml) 与 [`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)
 4. [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)
 5. [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)
-6. [`doc/design/实现任务清单.md`](doc/design/实现任务清单.md)
-7. [`doc/archive/TECHNICAL_DOCUMENTATION.md`](doc/archive/TECHNICAL_DOCUMENTATION.md) 与 [`doc/archive/backtrack_node.py`](doc/archive/backtrack_node.py)
 
 ## 当前容易踩坑的地方
 

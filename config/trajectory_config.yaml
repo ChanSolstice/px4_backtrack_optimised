@@ -1,5 +1,5 @@
 # trajectory_core 轨迹生成库配置文件
-# 基于: API接口文档.md
+# 参数说明: trajectory_core 仓库 doc/reference/参数配置指南.md
 # 版本: 0.1.0
 # 日期: 2026-01-30
 # 说明: 简易YAML格式，每行一个 key: value
