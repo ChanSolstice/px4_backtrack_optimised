@@ -73,6 +73,7 @@ set(DOMAIN_SOURCES
 ## Application层源文件
 set(APPLICATION_SOURCES
   src/application/backtrack_usecase.cpp
+  src/application/mode_commander.cpp
 )
 
 ## Adapters层源文件
@@ -206,6 +207,17 @@ if(CATKIN_ENABLE_TESTING)
   )
   if(TARGET test_pilot_input)
     target_link_libraries(test_pilot_input
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
+  catkin_add_gtest(test_mode_commander
+    tests/unit/test_main.cpp
+    tests/unit/test_mode_commander.cpp
+  )
+  if(TARGET test_mode_commander)
+    target_link_libraries(test_mode_commander
       ${PROJECT_NAME}_lib
       ${catkin_LIBRARIES}
     )

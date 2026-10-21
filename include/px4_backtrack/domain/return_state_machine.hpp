@@ -187,15 +187,19 @@ private:
   uint64_t bits_{0};
 };
 
-/// 事件类型（重构方案第 9.2 节；config、mode_request、planning、stream 由外层补充）
+/// 事件类型（重构方案第 9.2 节）
 enum class EventType {
-  State,      ///< 区域 A 转换（from/to 为上报字符串）
-  Control,    ///< 区域 B 转换
-  Follow,     ///< 区域 C 转换
-  Mission,    ///< 任务开始、任务中新出现的条件、任务结束
-  Condition,  ///< 条件边沿、CH7 指令
-  Alert,      ///< 告警出现或消失
-  Fcu         ///< 飞控模式或解锁状态变化
+  State,        ///< 区域 A 转换（from/to 为上报字符串）
+  Control,      ///< 区域 B 转换
+  Follow,       ///< 区域 C 转换
+  Mission,      ///< 任务开始、任务中新出现的条件、任务结束
+  Condition,    ///< 条件边沿、CH7 指令
+  Alert,        ///< 告警出现或消失
+  Fcu,          ///< 飞控模式或解锁状态变化
+  // 以下由状态机之外产生
+  ModeRequest,  ///< 模式意图变化、请求发出、生效、失败（ModeCommander）
+  Planning,     ///< 规划提交、完成、失败
+  Stream        ///< 本模块断流、控制周期超时
 };
 
 const char* eventTypeName(EventType type);

@@ -207,6 +207,9 @@ const char* eventTypeName(EventType type) {
     case EventType::Condition: return "condition";
     case EventType::Alert: return "alert";
     case EventType::Fcu: return "fcu";
+    case EventType::ModeRequest: return "mode_request";
+    case EventType::Planning: return "planning";
+    case EventType::Stream: return "stream";
   }
   return "unknown";
 }
