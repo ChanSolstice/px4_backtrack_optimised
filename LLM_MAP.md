@@ -1,10 +1,10 @@
 # LLM_MAP
 
-文档入口见 [doc/README.md](doc/README.md)。文档已分为 `reference/`、`design/`、`testing/`、`reviews/` 和 `archive/`；当前跨仓库审核见 [2026-09-07 审核记录](doc/reviews/双仓库架构与运行边界审核_2026-09-07.md)。`archive/` 内是历史基线，不能据其恢复旧的执行策略。
+文档入口见 [doc/README.md](doc/README.md)。文档分为 `reference/`、`design/`、`testing/`、`reviews/` 和 `archive/`。本分支正在实施[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)，它是重构目标行为的唯一依据；`archive/` 只有已修复缺陷的分析报告，不能据其恢复旧的执行策略。
 
 这份文档不是给最终用户看的，而是给后续阅读、解释或修改本仓库的 LLM/自动化代理看的。目标是让模型先建立正确的代码地图，再动手改动，减少把旧版 Python 文档误当成现状、或者只改一层没改全链路的风险。
 
-## 先记住这 12 条
+## 先记住这 13 条
 
 1. 这是 ROS1 `catkin` 工程，不是 ROS2。
 2. 当前主实现入口是 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。
@@ -14,10 +14,11 @@
 6. 坐标语义按 ENU 处理，但 setpoint 通过 `mavros_msgs/PositionTarget` 发到 `/mavros/setpoint_raw/local`。
 7. 录制点保留相对时间戳；生成轨迹时会在逆序后把时间戳镜像成新的单调递增序列，以保留原始 dt 间隔用于 `trajectory_core` 的时间质量诊断。
 8. 旧版 Python 基线已从仓库删除（需要时查 git 历史），不要按它恢复旧行为。
-9. 需要判断“行为真相”时，优先级是：`src/*.cpp` + `include/*.hpp` > `config/*.yaml` > `launch/` > `doc/reference/返航实现技术文档.md` > 旧版 Python 文档。
+9. 需要判断“行为真相”时，优先级是：`src/*.cpp` + `include/*.hpp` > `config/*.yaml` > `launch/` > `doc/reference/`（描述 dev 的实现）。重构要达到的行为以重构方案为准。
 10. 当前代码有开发中痕迹，写说明或补丁前要先检查接口是否自洽。
-11. 仓库现在已经有基础 `gtest` 单元测试，优先先跑 `RecordingBuffer` / `TriggerEvaluator` / `StateMachine` / `RejoinPolicy` / `TrajectorySession`，不要再默认“完全没有测试”。
-12. 触发方式现包括 `CH7` 长按、`CH18` 故障确认、RC 消息丢失和低电量触发；低电量采用边沿触发与持续锁存，Paused 状态不自动恢复返航，通过 `/px4_backtrack/low_battery` 广播状态。
+11. 仓库有 156 个 `gtest` 用例，用 `scripts/docker/run_tests.sh amd64` 在容器中全量编译运行；改了条件层或 `ReturnStateMachine` 还要跑 `scripts/analysis/run_mutation_check.sh amd64`，注入项要全部被发现。
+12. dev 的触发方式包括 `CH7` 长按、`CH18` 故障确认、RC 消息丢失和低电量触发；低电量采用边沿触发与持续锁存，Paused 状态不自动恢复返航，通过 `/px4_backtrack/low_battery` 广播状态。
+13. 本分支按重构方案第 13 节分阶段实施：R1 的条件层（`link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor`）和 R2 的 `return_conditions.hpp`、`return_state_machine` 已有单测，但还没有接入 UseCase（R3 接入）；当前运行的仍是 `state_machine` + `trigger_evaluator`。动手前先确认改动属于哪个阶段。
 
 ## 真正的入口与控制流
 
@@ -93,6 +94,26 @@
 - [`src/domain/rejoin_policy.cpp`](src/domain/rejoin_policy.cpp)
   负责三维路径偏离阈值、Rejoin 平滑限速和退出速度连续性判定。`ReturnRejoin` 与正常返航复用 `TrajectorySession` 的局部弧长投影目标，不存在全轨迹最近时间搜索或冻结点回拉接口。
 
+- [`include/px4_backtrack/domain/waypoint_fallback_session.hpp`](include/px4_backtrack/domain/waypoint_fallback_session.hpp)
+- [`src/domain/waypoint_fallback_session.cpp`](src/domain/waypoint_fallback_session.cpp)
+  轨迹生成可恢复地失败时的航点降级返航：逆序稀疏航点，逐点位置目标，每拍最多推进一个航点。
+
+- [`include/px4_backtrack/domain/path_yaw.hpp`](include/px4_backtrack/domain/path_yaw.hpp)
+- [`src/domain/path_yaw.cpp`](src/domain/path_yaw.cpp)
+  按至少 `0.20 m` 的稳定弦长估计返航路径切向 yaw，避免端点悬停漂移导致 yaw 翻转。
+
+- [`include/px4_backtrack/domain/types.hpp`](include/px4_backtrack/domain/types.hpp)
+  共用类型（`Vec3`）。
+
+重构新增、尚未接入流程的组件（R1、R2，方案第 5–7 节）：
+
+- [`link_monitor`](src/domain/link_monitor.cpp)：CH18 漏桶、RC 超时（含本模块卡顿保护）、恢复与退化窗口，输出链路丢失与来源。
+- [`pilot_input`](src/domain/pilot_input.cpp)：CH7 逐帧门控（失控帧、RC 超时作废按下），`press_id` 与锁存的长按/短按指令（带按下时间和 `link_ok`）。
+- [`battery_monitor`](src/domain/battery_monitor.cpp)：电量读数有效性、低电量确认与锁存。
+- [`airborne_monitor`](src/domain/airborne_monitor.cpp)：在空中判定（`landed_state` 与相对解锁高度），空中重启和解锁时没有里程计只按 `landed_state`。
+- [`return_conditions.hpp`](include/px4_backtrack/domain/return_conditions.hpp)：每拍的条件快照 `Conditions`。
+- [`return_state_machine`](src/domain/return_state_machine.cpp)：`step(Conditions)` 驱动的三区域状态机（任务阶段、控制权、跟随方式），输出 setpoint 策略、模式意图、命令、告警和事件。规则编号对应方案第 6.3 节。
+
 ### Adapters 层
 
 - [`include/px4_backtrack/adapters/ros_subscribers.hpp`](include/px4_backtrack/adapters/ros_subscribers.hpp)
@@ -136,6 +157,12 @@
 
 - [`scripts/plot_debug_csv.py`](scripts/plot_debug_csv.py)
   Python 可视化脚本，读取 `DebugDumper` 导出的 CSV，绘制 3D 路径对比、俯视图、高度剖面和偏航剖面。`python3 scripts/plot_debug_csv.py --latest` 自动选取最新文件。
+- [`scripts/docker/run_tests.sh`](scripts/docker/run_tests.sh)：在全新的 ROS Noetic 容器中编译并运行全部单测（本机没有 ROS）。
+- [`scripts/analysis/`](scripts/analysis/)：闭环危害场景（假飞控驱动真实 `BacktrackUseCase`）和错误注入检查，复用上面的容器。
+- [`scripts/bench/`](scripts/bench/)：轨迹生成耗时基准。
+- [`scripts/sitl/`](scripts/sitl/)：PX4 v1.15.4 SITL（SIH）中确认方案依赖的飞控行为。
+
+测试方法与执行记录见 [`doc/testing/`](doc/testing/)。
 
 ## 行为语义上的关键点
 
@@ -261,8 +288,9 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 1. [`src/backtrack_node.cpp`](src/backtrack_node.cpp) 和 `src/**`
 2. [`include/px4_backtrack/**`](include/px4_backtrack)
 3. [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 与 [`config/trajectory_config.yaml`](config/trajectory_config.yaml)
-4. [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)
-5. [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)
+4. [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)、[`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)：描述 dev 的实现，R3 时合并更新
+
+重构要达到的行为（还没有全部实现）以 [`doc/design/返航触发与状态机重构方案.md`](doc/design/返航触发与状态机重构方案.md) 为准。
 
 ## 当前容易踩坑的地方
 
@@ -272,30 +300,29 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 - `handleReturnTrigger()` 在点数不足时调用 `triggerLanding()`，这会跳过 `ReturnPreOffboard` 直接进 `LandingTransition`。如果你在 `LandingTransition` 之前加了新逻辑，要评估这条直达路径是否会绕过它。
 - 当前代码有四类“不可直接走平滑轨迹”的分支：一类是触发时点数不足，直接降落；一类是点数足够但几何路径退化为“点过近/起终点近乎重合”，轨迹生成失败后直接降落；一类是其它可恢复轨迹生成失败，会切到 waypoint 退化返航；最后一类是非法轨迹配置，这时不会走 fallback，而是停留在 `ReturnPreOffboard` 并停止重试。
 - [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](src/domain/trajectory_session.cpp) 为准。
-- 仓库已有 `tests/unit/`，但目前主要覆盖领域层和轻集成逻辑，还没有 ROS topic 级 mock/rostest。涉及 adapters、launch、参数装配时，仍然要做一次编译和联调。
+- `tests/unit/` 主要覆盖领域层和轻集成逻辑，没有 ROS topic 级 mock/rostest。涉及 adapters、launch、参数装配时，除单测外还要跑闭环场景；涉及与飞控的交互时做 SITL。
 
 ## 测试地图
 
-- [`tests/unit/test_recording_buffer.cpp`](tests/unit/test_recording_buffer.cpp)
-  覆盖录制节流、时间戳单调性和 `reset()`
-- [`tests/unit/test_trigger_evaluator.cpp`](tests/unit/test_trigger_evaluator.cpp)
-  覆盖 `CH7` / `CH18` / RC loss 触发语义
-- [`tests/unit/test_state_machine.cpp`](tests/unit/test_state_machine.cpp)
-  覆盖主状态迁移和 `AUTO.LAND` 高优先级
-- [`tests/unit/test_rejoin_policy.cpp`](tests/unit/test_rejoin_policy.cpp)
-  覆盖偏离/回归阈值、路径目标平滑限速、接近路径后的速度恢复与退出速度连续性
-- [`tests/unit/test_trajectory_session.cpp`](tests/unit/test_trajectory_session.cpp)
-  覆盖轨迹生成、逆序语义、局部投影、单调弧长进度、自交分支、高密度停顿点云团、末端抽稀和空间完成判定
-- [`tests/unit/test_waypoint_fallback_session.cpp`](tests/unit/test_waypoint_fallback_session.cpp)
-  覆盖退化 waypoint 路径的逆序稀疏化、单步推进与 restart 语义
-- [`tests/unit/test_backtrack_usecase.cpp`](tests/unit/test_backtrack_usecase.cpp)
-  轻集成覆盖轨迹失败分流、AUTO.LAND 让步、wall time 不推进空间轨迹、起始 yaw 对准、Rejoin 连续恢复、终点精度与 Rejoin 走廊解耦
+用例逐条说明见 [`doc/testing/单元测试文档.md`](doc/testing/单元测试文档.md)。
+
+- [`tests/unit/test_recording_buffer.cpp`](tests/unit/test_recording_buffer.cpp)：录制节流、时间戳单调性和 `reset()`
+- [`tests/unit/test_trigger_evaluator.cpp`](tests/unit/test_trigger_evaluator.cpp)：dev 的 `CH7` / `CH18` / RC loss / 低电量触发语义（R3 后删除）
+- [`tests/unit/test_state_machine.cpp`](tests/unit/test_state_machine.cpp)：dev 状态机的主状态迁移和 `AUTO.LAND` 高优先级（R3 后删除）
+- [`tests/unit/test_rejoin_policy.cpp`](tests/unit/test_rejoin_policy.cpp)：偏离/回归阈值、路径目标平滑限速、退出时的速度收敛
+- [`tests/unit/test_trajectory_session.cpp`](tests/unit/test_trajectory_session.cpp)：轨迹生成、逆序语义、局部投影、单调弧长进度、自交分支、停顿点云团、末端抽稀和空间完成判定
+- [`tests/unit/test_waypoint_fallback_session.cpp`](tests/unit/test_waypoint_fallback_session.cpp)：退化航点路径的逆序稀疏化、单步推进与 restart
+- [`tests/unit/test_path_yaw.cpp`](tests/unit/test_path_yaw.cpp)：返航切向 yaw 与端点漂移
+- [`tests/unit/test_ros_subscribers.cpp`](tests/unit/test_ros_subscribers.cpp)：里程计速度旋转到父 ENU
+- [`tests/unit/test_backtrack_usecase.cpp`](tests/unit/test_backtrack_usecase.cpp)：轻集成，覆盖轨迹失败分流、AUTO.LAND 让步、wall time 不推进空间轨迹、起始 yaw 对准、Rejoin 连续恢复、终点精度与 Rejoin 走廊解耦、低电量（R3 按新语义迁移）
+- [`tests/unit/test_link_monitor.cpp`](tests/unit/test_link_monitor.cpp)、[`test_pilot_input.cpp`](tests/unit/test_pilot_input.cpp)、[`test_battery_monitor.cpp`](tests/unit/test_battery_monitor.cpp)、[`test_airborne_monitor.cpp`](tests/unit/test_airborne_monitor.cpp)：R1 条件层
+- [`tests/unit/test_return_state_machine.cpp`](tests/unit/test_return_state_machine.cpp)：R2 状态机场景
+- [`tests/unit/test_return_state_machine_invariants.cpp`](tests/unit/test_return_state_machine_invariants.cpp)：随机游走和单步穷举，检查安全约束 SC1–SC7、SC9
 
 运行方式：
 
-- 在 catkin 工作空间根目录先执行 `catkin_make --pkg trajectory_core px4_backtrack_optimised`
-- 再执行 `catkin_make run_tests_px4_backtrack_optimised`
-- 最后执行 `catkin_test_results`
+- 本机：`DOCKER="sudo docker" scripts/docker/run_tests.sh amd64`
+- 已有 ROS 工作空间：`catkin_make --pkg trajectory_core px4_backtrack_optimised`，再 `catkin_make run_tests_px4_backtrack_optimised`，最后 `catkin_test_results`
 
 ## 给后续 LLM 的工作建议
 

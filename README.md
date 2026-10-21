@@ -2,7 +2,7 @@
 
 `px4_backtrack_optimised` 是一个基于 ROS1 `catkin` 的 PX4 返航节点，采用接近 DDD 的分层结构实现。节点在飞行中录制航迹，在满足触发条件后使用 `trajectory_core` 生成逆序返航轨迹，并通过 MAVROS 下发 `PositionTarget` 与模式切换请求。
 
-这份 README 面向开发者和集成人员，重点说明仓库现状、模块职责、ROS 接口、配置与启动方式。更细的设计背景见 [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)。
+这份 README 面向开发者和集成人员，重点说明仓库现状、模块职责、ROS 接口、配置与启动方式。全部文档见[文档导航](doc/README.md)。
 
 ## 核心能力
 
@@ -22,7 +22,9 @@
 
 ## 仓库现状
 
-当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。阅读当前工程时，应优先以 C++ 源码和 [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md) 为准。
+当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。
+
+本分支（`feat/return-state-policy`）正在按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）：R1 条件层、R2 状态机核心已完成并有单测，但还没有接入流程。所以节点的运行行为仍是 dev 的实现，本文其余各节描述的也是 dev 的行为，R3 接入新状态机时更新。
 
 ## 架构概览
 
@@ -200,51 +202,42 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 ├── config/
 │   ├── backtrack_params.yaml
 │   └── trajectory_config.yaml
-├── include/px4_backtrack/
-│   ├── adapters/
-│   ├── application/
-│   ├── domain/
-│   └── infrastructure/
-├── scripts/
-│   └── plot_debug_csv.py
+├── include/px4_backtrack/       # 头文件，分层同 src/
 ├── src/
-│   ├── adapters/
-│   ├── application/
-│   ├── domain/
-│   ├── infrastructure/
+│   ├── adapters/                # ROS 订阅、发布、服务
+│   ├── application/             # BacktrackUseCase
+│   ├── domain/                  # 状态机、录制、轨迹会话、Rejoin；重构新增的条件层与 ReturnStateMachine
+│   ├── infrastructure/          # 参数加载、调试导出
 │   └── backtrack_node.cpp
-├── tests/
-│   └── unit/
-│       ├── test_main.cpp
-│       ├── test_recording_buffer.cpp
-│       ├── test_trigger_evaluator.cpp
-│       ├── test_state_machine.cpp
-│       ├── test_rejoin_policy.cpp
-│       ├── test_trajectory_session.cpp
-│       ├── test_waypoint_fallback_session.cpp
-│       └── test_backtrack_usecase.cpp
+├── tests/unit/                  # gtest 单测（16 个文件，见单元测试文档）
+├── scripts/
+│   ├── docker/                  # ROS Noetic 容器编译与单测
+│   ├── analysis/                # 闭环危害场景、错误注入检查
+│   ├── bench/                   # 轨迹生成耗时基准
+│   ├── sitl/                    # PX4 SITL 飞控行为检查
+│   └── plot_debug_csv.py        # 调试 CSV 绘图
 └── doc/
-    ├── README.md        # 文档导航
-    ├── reference/       # 系统与接口说明
-    ├── design/          # 设计方案与任务计划
-    ├── testing/         # 测试方法和执行记录
-    ├── reviews/         # 架构审核与待处理问题
-    └── archive/         # 历史问题和 Python 基线
+    ├── README.md                # 文档导航
+    ├── reference/               # 系统说明、前端对接
+    ├── design/                  # 设计方案
+    ├── testing/                 # 测试方法、清单和执行记录
+    ├── reviews/                 # 审核与分析
+    └── archive/                 # 已修复缺陷的分析报告
 ```
 
 ## 测试
 
-当前仓库已包含一组基础 `gtest` 单元测试，重点覆盖领域层与 `trajectory_core` 接入层：
+| 层次 | 命令 | 说明 |
+| --- | --- | --- |
+| 单元测试 | `scripts/docker/run_tests.sh amd64` | 在全新的 ROS Noetic 容器中编译并运行全部单测（156 个）和 trajectory_core 的单测 |
+| 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误 |
+| 闭环危害场景 | `scripts/analysis/run_hazard_scenarios.sh amd64` | 假飞控驱动真实 `BacktrackUseCase`，场景 H01–H14 |
+| 规划耗时 | `scripts/bench/run_gen_bench.sh amd64 10 30` | 轨迹生成耗时随录制时长的增长 |
+| SITL | `scripts/sitl/run_sitl_checks.sh` | PX4 v1.15.4 SITL 中确认方案依赖的飞控行为（N1、N2） |
 
-- `RecordingBuffer`
-- `TriggerEvaluator`
-- `BacktrackStateMachine`
-- `RejoinPolicy`
-- `TrajectorySession`
-- `WaypointFallbackSession`
-- `BacktrackUseCase` 轻集成路径
+本机需要 sudo 运行 Docker 时设置 `DOCKER="sudo docker"`。后三类复用单元测试留下的容器，先跑一次单元测试。方法与执行记录见[单元测试文档](doc/testing/单元测试文档.md)和[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)。
 
-在 catkin 工作空间根目录执行：
+已有 ROS 工作空间时，也可以直接在工作空间根目录执行：
 
 ```bash
 catkin_make --pkg trajectory_core px4_backtrack_optimised
@@ -252,21 +245,16 @@ catkin_make run_tests_px4_backtrack_optimised
 catkin_test_results
 ```
 
-如果只想手动运行单个测试二进制，可在 `devel/lib/px4_backtrack_optimised/` 下执行对应测试程序。
-
 ## 相关文档
 
 - [文档导航](doc/README.md)：按用途分类的完整索引。
-- [双仓库架构与运行边界审核（2026-09-07）](doc/reviews/双仓库架构与运行边界审核_2026-09-07.md)：当前审核基线、问题证据、修复顺序和适用边界。
-- [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)
-  基于当前 C++ 代码整理的系统级总览，含状态机迁移图与主要处理流程
-- [`doc/testing/单元测试文档.md`](doc/testing/单元测试文档.md)
-  当前单元测试范围、运行方式、结果判读和扩展建议
-- [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)
-  当前 C++ 方案的设计说明，最接近本仓库目标结构
-- `trajectory_core` 的接口说明见该仓库的 `doc/reference/API接口文档.md`
+- [返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)：当前开发的依据。
+- [返航程序系统性分析（2026-10-20）](doc/reviews/返航程序系统性分析_2026-10-20.md)：危害分析、PX4 源码核对、闭环仿真和 SITL 确认。
+- [系统总览](doc/reference/SYSTEM_OVERVIEW.md)：dev 实现的模块划分、处理流程和状态机迁移图。
+- [单元测试文档](doc/testing/单元测试文档.md)、[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)：测试方法与执行记录。
+- `trajectory_core` 的接口说明见该仓库的 `doc/reference/API接口文档.md`。
 
 ## 已知注意点
 
-- `README` 与 `LLM_MAP` 以当前 C++ 代码为准，不以旧版 Python 文档为准。
-- 当前仓库已有基础单元测试，但尚未覆盖 ROS adapters 和 launch 级联调；修改状态机、触发器、轨迹接口或参数装配后，仍建议至少做一次编译和联调验证。
+- `README` 与 `LLM_MAP` 以当前 C++ 代码为准。
+- 单元测试只覆盖少量 ROS adapters，没有 launch 级测试；修改状态机、触发器、轨迹接口或参数装配后，除单测外还要跑闭环场景，涉及与飞控交互时再做 SITL。
