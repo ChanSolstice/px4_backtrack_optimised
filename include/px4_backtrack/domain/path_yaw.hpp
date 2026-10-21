@@ -1,6 +1,6 @@
 #pragma once
 
-#include "state_machine.hpp"
+#include "px4_backtrack/domain/types.hpp"
 
 #include <vector>
 

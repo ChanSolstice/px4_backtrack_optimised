@@ -1,6 +1,6 @@
 #pragma once
 
-#include "state_machine.hpp"
+#include "px4_backtrack/domain/types.hpp"
 #include <trajectory_core/trajectory_core.hpp>
 
 namespace px4_backtrack {

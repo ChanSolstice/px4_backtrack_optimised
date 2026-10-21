@@ -1,7 +1,7 @@
 #pragma once
 
 #include "recording_buffer.hpp"
-#include "state_machine.hpp"
+#include "px4_backtrack/domain/types.hpp"
 
 #include <vector>
 
