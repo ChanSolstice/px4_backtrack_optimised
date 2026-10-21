@@ -482,6 +482,27 @@ TEST(BacktrackUseCaseTest, LinkLossAndLowBatteryTogetherStartHoverMission) {
   EXPECT_NE(started->detail.find("battery_low"), std::string::npos);
 }
 
+TEST(BacktrackUseCaseTest, InsufficientPointsLandsAfterPendingWait) {
+  // 录制点不足时最多等 3 s 补点，仍不足则原地降落；不在 OFFBOARD，直接请求 AUTO.LAND
+  auto config = makeConfig();
+  config.record_min_points = 1000;
+  Sim s(config);
+  s.flyOutbound();
+  s.battery = 0.10;
+  ASSERT_TRUE(s.runUntil([&] { return s.alert(Alert::ReturnPending); }, 2.0));
+  const double pending_t = s.t;
+  EXPECT_TRUE(s.in("Recording"));
+  EXPECT_FALSE(s.out.setpoint);
+
+  ASSERT_TRUE(s.runUntilState("LandingTransition", 4.0));
+  EXPECT_NEAR(s.t - pending_t, 3.0, 1e-6);
+  EXPECT_TRUE(s.out.low_battery);
+  EXPECT_FALSE(s.out.setpoint);
+  ASSERT_TRUE(s.out.mode_request);
+  EXPECT_EQ(*s.out.mode_request, "AUTO.LAND");
+  EXPECT_EQ(s.requestsSince("OFFBOARD", 0.0), 0);
+}
+
 TEST(BacktrackUseCaseTest, TriggersIgnoredWhileOnGround) {
   // S13：在地面，或触地但飞控未报告落地（高度差 < 0.5 m）时不启动任务
   Sim s;
