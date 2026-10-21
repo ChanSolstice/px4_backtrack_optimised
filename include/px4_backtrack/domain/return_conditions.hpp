@@ -65,6 +65,7 @@ struct Conditions {
   double cross_track_m{0.0};              ///< 横向偏差 (m)（航点降级按 0）
   bool stream_gap_recent{false};          ///< 最近 fallback_window_s 内本模块发布间隔 ≥ fallback_gap_s
   bool mode_request_failed{false};        ///< 最近一次模式请求超时未生效、被拒或服务不可用
+  bool debug_log_failed{false};          ///< 调试日志写入失败，已停止写日志（R-72）
 };
 
 }  // namespace domain

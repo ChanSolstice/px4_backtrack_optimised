@@ -957,6 +957,7 @@ void ReturnStateMachine::computeAlerts(const Conditions& c, StepOutput& out) {
   }
   if (!c.fcu_state_fresh) alerts.set(Alert::FcuStateStale);
   if (c.mode_request_failed) alerts.set(Alert::ModeRequestFailed);
+  if (c.debug_log_failed) alerts.set(Alert::DebugLogFailed);
 
   if (pending_.active) alerts.set(Alert::ReturnPending);
   if (trigger_ignored_landed_) alerts.set(Alert::TriggerIgnoredLanded);
