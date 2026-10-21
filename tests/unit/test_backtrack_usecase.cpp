@@ -957,10 +957,11 @@ TEST(BacktrackUseCaseTest, DisconnectedFcuStateIsIgnored) {
   EXPECT_TRUE(s.in("Recording"));
 }
 
-TEST(BacktrackUseCaseTest, RecordingResumesAfterExit) {
-  // 退出后继续录制；之后失控的新任务基于新的录制规划
+TEST(BacktrackUseCaseTest, RecordingResumesAfterExitButNotDuringMission) {
+  // 退出后继续录制，任务期间不录制；之后失控的新任务基于新的录制规划
   Sim s;
   s.startLowBatteryReturn();
+  s.run(2.0);  // 任务期间飞机在移动，不应录制
   auto planned_points = [&]() {
     std::vector<int> counts;
     for (const auto& e : s.events) {
@@ -973,15 +974,34 @@ TEST(BacktrackUseCaseTest, RecordingResumesAfterExit) {
   s.mode = "ALTCTL";
   s.step();
   ASSERT_TRUE(s.in("Exited"));
+  int exited_ticks = 0;
   for (int i = 0; i < 20; ++i) {
     s.pos += Vec3(0.0, 0.1, 0.0);
     s.step();
+    ++exited_ticks;
   }
   s.link_ok = false;
   ASSERT_TRUE(s.runUntilState("Ch18HoverWait", 2.0));
+  exited_ticks += 21;  // 等待确认失控的这段时间仍在 Exited
   const auto counts = planned_points();
   ASSERT_EQ(counts.size(), 2u);
   EXPECT_GT(counts[1], counts[0]);
+  EXPECT_LE(counts[1] - counts[0], exited_ticks + 1);
+}
+
+TEST(BacktrackUseCaseTest, SwitchOutRightAfterNewMissionReclaimsWithoutFallback) {
+  // R-69：退出后不发布，新任务第一次发布不算断流；链路丢失时被切出直接重新申请，不当作回退
+  Sim s;
+  s.startLowBatteryReturn();
+  s.mode = "ALTCTL";
+  s.step();
+  ASSERT_TRUE(s.in("Exited"));
+  s.run(5.0);
+  s.link_ok = false;
+  ASSERT_TRUE(s.runUntil([&] { return s.out.control == ControlState::Owned; }, 4.0));
+  s.mode = "POSCTL";
+  s.step();
+  EXPECT_EQ(s.out.control, ControlState::Reclaiming);
 }
 
 }  // namespace

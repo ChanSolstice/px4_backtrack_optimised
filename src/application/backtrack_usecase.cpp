@@ -222,8 +222,6 @@ void BacktrackUseCase::executeCommands(const domain::StepOutput& step,
     resetPlan();
     pilot_input_.reset();
     battery_monitor_.reset();
-    publishing_ = false;
-    last_gap_end_t_.reset();
   }
   if (commands.cancel_planning) {
     resetPlan();
@@ -234,7 +232,7 @@ void BacktrackUseCase::executeCommands(const domain::StepOutput& step,
 }
 
 void BacktrackUseCase::plan(std::vector<domain::StepEvent>& events) {
-  resetPlan();
+  // 任务结束的所有路径（退出、交接、上锁、AUTO.LAND）都已取消规划，这里是空的
   const auto& points = recording_buffer_.getPoints();
   const std::string point_count = "points=" + std::to_string(points.size());
 
