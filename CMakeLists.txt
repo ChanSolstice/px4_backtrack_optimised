@@ -88,6 +88,7 @@ set(ADAPTERS_SOURCES
 set(INFRASTRUCTURE_SOURCES
   src/infrastructure/config_loader.cpp
   src/infrastructure/debug_dumper.cpp
+  src/infrastructure/debug_log.cpp
 )
 
 ## 所有库源文件
@@ -218,6 +219,17 @@ if(CATKIN_ENABLE_TESTING)
   )
   if(TARGET test_mode_commander)
     target_link_libraries(test_mode_commander
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
+  catkin_add_gtest(test_debug_log
+    tests/unit/test_main.cpp
+    tests/unit/test_debug_log.cpp
+  )
+  if(TARGET test_debug_log)
+    target_link_libraries(test_debug_log
       ${PROJECT_NAME}_lib
       ${catkin_LIBRARIES}
     )
