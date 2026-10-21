@@ -3,7 +3,8 @@
 
 在 scripts/docker/run_tests.sh 留下的容器中运行（由 run_mutation_check.sh 调用），只在 /tmp/mutation
 中操作源码副本，不改仓库。每个注入把一段原文替换掉，单独编译该组件和它的单测并运行，有用例失败
-即为"已发现"。原文必须恰好出现指定次数；代码改动后匹配不到时报告"原文不匹配"，需要同步更新下表。
+即为"已发现"。UseCase 与已编译的库一起链接，注入后的定义覆盖库中的同名定义。原文必须恰好出现
+指定次数；代码改动后匹配不到时报告"原文不匹配"，需要同步更新下表。
 用法：mutation_check.py [组件或注入名 ...]；全部发现且全部匹配时退出码为 0。
 """
 import os
@@ -16,15 +17,21 @@ SRC = "/ws/src/px4_backtrack_optimised"
 WORK = "/tmp/mutation"
 GTEST_INC = "/usr/src/googletest/googletest/include"
 GTEST_LIB = "/ws/build/gtest/lib"
+ROS_FLAGS = ["-I/ws/src/trajectory_core/include", "-I/opt/ros/noetic/include", "-L/ws/devel/lib",
+             "-L/opt/ros/noetic/lib", "-lpx4_backtrack_optimised_lib", "-ltrajectory_core", "-lroscpp",
+             "-lrosconsole", "-lrostime", "-Wl,-rpath,/ws/devel/lib:/opt/ros/noetic/lib"]
 
-# 组件：(参与编译的 src/domain 源文件, tests/unit 下的单测)
+# 组件：(参与编译的源文件，相对 src/；tests/unit 下的单测；是否链接 ROS 和已编译的库)
 COMPONENTS = {
-    "link_monitor": (["link_monitor.cpp"], ["test_link_monitor.cpp"]),
-    "pilot_input": (["pilot_input.cpp", "link_monitor.cpp"], ["test_pilot_input.cpp"]),
-    "battery_monitor": (["battery_monitor.cpp"], ["test_battery_monitor.cpp"]),
-    "airborne_monitor": (["airborne_monitor.cpp"], ["test_airborne_monitor.cpp"]),
-    "return_state_machine": (["return_state_machine.cpp"],
-                             ["test_return_state_machine.cpp", "test_return_state_machine_invariants.cpp"]),
+    "link_monitor": (["domain/link_monitor.cpp"], ["test_link_monitor.cpp"], False),
+    "pilot_input": (["domain/pilot_input.cpp", "domain/link_monitor.cpp"], ["test_pilot_input.cpp"], False),
+    "battery_monitor": (["domain/battery_monitor.cpp"], ["test_battery_monitor.cpp"], False),
+    "airborne_monitor": (["domain/airborne_monitor.cpp"], ["test_airborne_monitor.cpp"], False),
+    "return_state_machine": (["domain/return_state_machine.cpp"],
+                             ["test_return_state_machine.cpp", "test_return_state_machine_invariants.cpp"],
+                             False),
+    "backtrack_usecase": (["application/backtrack_usecase.cpp"],
+                          ["test_main.cpp", "test_backtrack_usecase.cpp"], True),
 }
 
 # (名称, 组件, 原文, 替换, 说明[, 原文出现次数，默认 1])
@@ -63,23 +70,50 @@ MUTATIONS = [
     ('battery_starts_from_exited', 'return_state_machine', '  const bool battery_low = !from_exited && c.battery.low;', '  const bool battery_low = c.battery.low;', '退出后低电量也启动返航（D1）'),
     ('hover_skipped', 'return_state_machine', '  if (pending_.link_lost) {\n    hover_start_t_ = c.now;', '  if (false) {\n    hover_start_t_ = c.now;', '失控不先悬停（D16）'),
     ('record_in_mission', 'return_state_machine', '  out.follow_active = phase_ == MissionPhase::Follow &&', '  out.record = true;\n  out.follow_active = phase_ == MissionPhase::Follow &&', '任务中继续录制'),
+    ('offboard_gate_removed', 'return_state_machine',
+     '      } else if (!linkClean(c) || !c.fcu_state_fresh ||\n                 c.fcu_state_t > pre_frames_done_t_) {',
+     '      } else {', '预发结束后不等飞控状态就申请 OFFBOARD（R-75）'),
+    ('odom_nonfinite_accepted', 'backtrack_usecase',
+     '  if (!position.allFinite() || !velocity.allFinite() || !std::isfinite(yaw)) {\n    return;\n  }\n',
+     '', '非有限的里程计也采信（R-73）'),
+    ('disconnected_state_used', 'backtrack_usecase', '  if (!connected) {\n    return;\n  }\n', '',
+     '未连上飞控时的状态也采信'),
+    ('fcu_stale_ignored', 'backtrack_usecase',
+     '  c.fcu_state_fresh = has_fcu_state_ &&\n                      now - fcu_state_t_ <= config_.fcu_state_stale_s;\n',
+     '  c.fcu_state_fresh = has_fcu_state_;\n', '飞控状态中断不判定'),
+    ('probe_stale_projection', 'backtrack_usecase',
+     '    c.projection_ok = trajectory_session_.probe(position_, c.cross_track_m);\n',
+     '    c.projection_ok = trajectory_session_.hasValidProjection();\n'
+     '    c.cross_track_m = trajectory_session_.getCrossTrackError();\n',
+     '重新接入的偏差沿用冻结时的投影（R-74）'),
+    ('publishing_not_ended', 'backtrack_usecase', '    // 不发布即结束这一段（R-69）\n    publishing_ = false;\n', '',
+     '不发布的拍不结束这一段，任务之间的空档算作断流（R-69）'),
+    ('record_during_mission', 'backtrack_usecase',
+     '  if (record_) {\n    recording_buffer_.addPoint(position, yaw, stamp);\n  }\n',
+     '  recording_buffer_.addPoint(position, yaw, stamp);\n', '任务期间也录制'),
 ]
 
 
 def build_and_run(component, src_dir):
     """编译组件和它的单测并运行，返回 (是否编译成功, 失败的用例, 违反的不变量)。"""
-    sources, tests = COMPONENTS[component]
+    sources, tests, with_ros = COMPONENTS[component]
     exe = os.path.join(WORK, "test_" + component)
+    main = [] if with_ros else [os.path.join(WORK, "gtest_main.cpp")]
     cmd = (["g++", "-std=c++17", "-O1", "-I" + os.path.join(WORK, "include"), "-I" + GTEST_INC,
             "-I/usr/include/eigen3"]
            + [os.path.join(src_dir, s) for s in sources]
-           + [os.path.join(SRC, "tests/unit", t) for t in tests]
-           + [os.path.join(WORK, "gtest_main.cpp"), "-L" + GTEST_LIB, "-lgtest", "-lpthread",
-              "-Wl,-rpath," + GTEST_LIB, "-o", exe])
+           + [os.path.join(SRC, "tests/unit", t) for t in tests] + main
+           + (ROS_FLAGS if with_ros else [])
+           + ["-L" + GTEST_LIB, "-lgtest", "-lpthread", "-Wl,-rpath," + GTEST_LIB, "-o", exe])
     build = subprocess.run(cmd, capture_output=True, text=True)
     if build.returncode != 0:
         return False, [line for line in build.stderr.splitlines() if "error" in line][:2], []
-    run = subprocess.run([exe], capture_output=True, text=True, timeout=900)
+    # ROS 库的间接依赖不随 RUNPATH 查找，运行时补上库路径
+    env = dict(os.environ, LD_LIBRARY_PATH="/ws/devel/lib:/opt/ros/noetic/lib")
+    run = subprocess.run([exe], capture_output=True, text=True, timeout=900, env=env)
+    # 没有 gtest 汇总行说明测试没有跑起来，不能当作通过
+    if "[==========]" not in run.stdout:
+        return False, ["运行失败：" + (run.stderr.strip().splitlines() or ["无输出"])[0]], []
     failed = sorted(set(re.findall(r"^\[  FAILED  \] \S+\.(\S+)", run.stdout, re.M)))
     invariants = sorted(set(re.findall(r"((?:SC\d+|STRUCT)[^:\n]*): \d+ 次", run.stdout)))
     return True, failed, invariants
@@ -96,14 +130,16 @@ def main():
                 " ::testing::InitGoogleTest(&argc, argv); return RUN_ALL_TESTS(); }\n")
 
     def reset_sources():
-        for name in os.listdir(os.path.join(SRC, "src/domain")):
-            shutil.copy(os.path.join(SRC, "src/domain", name), os.path.join(WORK, "src", name))
+        shutil.rmtree(os.path.join(WORK, "src"))
+        shutil.copytree(os.path.join(SRC, "src"), os.path.join(WORK, "src"))
 
     print("== 基线（未注入）", flush=True)
     reset_sources()
+    baseline_ok = True
     for component in sorted({m[1] for m in mutations}):
         ok, failed, _ = build_and_run(component, os.path.join(WORK, "src"))
         print(f"{component}: {'全部通过' if ok and not failed else '基线失败 ' + ' '.join(failed)}", flush=True)
+        baseline_ok = baseline_ok and ok and not failed
 
     print("== 注入错误", flush=True)
     caught = mismatched = 0
@@ -119,14 +155,14 @@ def main():
         open(path, "w", encoding="utf-8").write(text.replace(old, new))
         ok, failed, invariants = build_and_run(component, os.path.join(WORK, "src"))
         if not ok:
-            print(f"{name}（{desc}）: 编译失败 {' | '.join(failed)}", flush=True)
+            print(f"{name}（{desc}）: 编译或运行失败 {' | '.join(failed)}", flush=True)
             continue
         found = bool(failed)
         caught += found
         detail = " ".join(failed) + (" | 不变量：" + "；".join(invariants) if invariants else "")
         print(f"{name}（{desc}）: {'已发现' if found else '未发现'}；{detail}", flush=True)
     print(f"== 共 {len(mutations)} 个，发现 {caught} 个，原文不匹配 {mismatched} 个", flush=True)
-    return 0 if caught == len(mutations) else 1
+    return 0 if baseline_ok and caught == len(mutations) else 1
 
 
 if __name__ == "__main__":
