@@ -234,8 +234,8 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 
 | 层次 | 命令 | 说明 |
 | --- | --- | --- |
-| 单元测试 | `scripts/docker/run_tests.sh amd64` | 在全新的 ROS Noetic 容器中编译并运行全部单测（177 个）和 trajectory_core 的单测；参数换成 `arm64` 时在 QEMU 中按机载架构复核（本机编译加单测约 30 分钟） |
-| 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误（41 种） |
+| 单元测试 | `scripts/docker/run_tests.sh amd64` | 在全新的 ROS Noetic 容器中编译并运行全部单测（178 个）和 trajectory_core 的单测；参数换成 `arm64` 时在 QEMU 中按机载架构复核（本机编译加单测约 30 分钟） |
+| 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误（42 种） |
 | 闭环危害场景 | `scripts/analysis/run_hazard_scenarios.sh amd64` | 假飞控驱动真实 `BacktrackUseCase`，场景 H01–H14 |
 | 规划耗时 | `scripts/bench/run_gen_bench.sh amd64 10 30` | 轨迹生成耗时随录制时长的增长 |
 | SITL | `scripts/sitl/run_sitl_checks.sh` | PX4 v1.15.4 SITL 中确认方案依赖的飞控行为（N1、N2） |

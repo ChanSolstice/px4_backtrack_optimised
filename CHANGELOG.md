@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-10-21 — 返航重构 R3：新状态机接入运行
+
+节点改为运行新状态机（方案第 13 节 R3），dev 的暂停/恢复语义已删除。R4–R8 还没有实施，本分支尚未实飞。
+
+### 代码
+
+- **feat(application):** `BacktrackUseCase` 接入新状态机，每拍按"条件层 → `Conditions` 快照 → `ReturnStateMachine::step()` → 执行命令、推进路径、计算 setpoint"的顺序处理（R-71）；规划暂时仍同步执行
+- **feat(application):** 新增 `ModeCommander`：模式意图改变时立即发送，未生效时每 1 s 重发，3 s 未生效告警 `MODE_REQUEST_FAILED`（R-70）；`set_mode` 改为在单独线程中异步调用
+- **feat(infrastructure):** 新增调试日志 `DebugLog`：每次启动一个运行目录，事件写入 `events.jsonl`，第一行为生效参数和提交号；写失败时告警 `DEBUG_LOG_FAILED`（R-72）
+- **feat(domain):** 链路正常时，预发结束后等到下一条飞控状态才申请 OFFBOARD，避免覆盖飞手刚做的切换（R-75，闭环场景 H14 发现）
+- **feat(domain):** `TrajectorySession::probe()` 按当前位置查询横向偏差、不推进进度，重新接入时检查的是当前偏差（R-74）
+- **feat(node):** 订阅 `/mavros/extended_state`；只采信 `connected` 为真的 `/mavros/state`；忽略含非有限值的里程计（R-73）；自身断流只在连续发布期间计算（R-69）
+- **refactor(domain):** 删除 dev 的 `BacktrackStateMachine`、`TriggerEvaluator` 和航点降级的 `restart()`
+- **config:** 参数全部必填（含 `publish_hz`）；新增链路恢复与退化、输入新鲜度、在空中判定、任务与控制权、模式请求、调试日志等参数
+- **fix(scripts):** arm64 单测镜像改用单架构的 `arm64v8/ros`，此前构建出的 arm64 镜像实际是 amd64
+
+### 测试
+
+- 返航单测 178 个：新增 `ModeCommander` 9 个、`DebugLog` 5 个，状态机（R-75）和轨迹会话（R-74）各 1 个；UseCase 用例改为用简化假飞控覆盖方案第 11 节的场景（37 个，含迁移的 dev 用例）；删除旧状态机和触发器的 18 个
+- 闭环危害场景改为驱动新实现：26 项检查全部通过（dev 为 17 项失败）
+- 错误注入 42 项全部发现（新增 R-75 和 UseCase 接线 8 项）
+- amd64 和 arm64（QEMU）全量单测均通过
+
+### 文档
+
+- 方案补充审核记录 R-69–R-75，头部注明实施进度
+- 系统总览、README、LLM_MAP、前端对接文档改为 R3 的实现；返航实现技术文档并入系统总览后删除
+- 单元测试文档、闭环仿真与 SITL 测试文档补充 R3 的用例说明和执行记录
+- 修正指向已删除或已改写源码的链接
+
 ## 2026-10-21 — 返航重构 R1、R2，SITL 确认与文档整理
 
 返航重构按方案第 13 节实施到 R2。新组件都有单测，但还没有接入流程，节点的运行行为仍是 dev。
