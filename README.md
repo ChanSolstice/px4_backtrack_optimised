@@ -1,54 +1,53 @@
 # px4_backtrack_optimised
 
-`px4_backtrack_optimised` 是一个基于 ROS1 `catkin` 的 PX4 返航节点，采用接近 DDD 的分层结构实现。节点在飞行中录制航迹，在满足触发条件后使用 `trajectory_core` 生成逆序返航轨迹，并通过 MAVROS 下发 `PositionTarget` 与模式切换请求。
+`px4_backtrack_optimised` 是一个基于 ROS1 `catkin` 的 PX4 返航节点，采用接近 DDD 的分层结构实现。节点在飞行中录制航迹，在遥控链路丢失、低电量或飞手长按 CH7 时启动返航任务：用 `trajectory_core` 从录制点逆序生成平滑轨迹，通过 MAVROS 下发 `PositionTarget` 与模式切换请求，沿原路飞回录制起点后交给 PX4 的 `AUTO.LAND` 降落。
 
 这份 README 面向开发者和集成人员，重点说明仓库现状、模块职责、ROS 接口、配置与启动方式。全部文档见[文档导航](doc/README.md)。
 
 ## 核心能力
 
-- 飞行周期复位后延时开始录制航迹
-- 支持 4 类返航触发：`CH7` 长按、`CH18` 故障确认、RC 消息丢失、低电量触发
-- 使用 `trajectory_core` 从录制点逆序生成平滑返航轨迹
-- 按实际位置的局部路径投影推进弧长，不依赖 wall time 追赶参考点
-- 返航中支持与正常跟随共用路径目标的低速 rejoin
-- 轨迹生成前会对停顿/悬停形成的高密度录制点做空间抽稀，低于阈值的中间点直接忽略，减小停顿点附近抽动并避免低速段被截断
-- 返航中支持暂停，再次触发后恢复（暂停状态下低电量不自动恢复返航，通过话题广播）
-- rejoin 进入/退出支持持续判定，避免单帧误差导致状态来回切换
-- 触发时若录制点数不足，自动降级为原地降落
-- 轨迹生成失败时，可恢复的非几何退化场景自动切换为 waypoint 退化返航；点过近时原地降落；非法配置不会被 fallback 掩盖
-- 返航结束后先固定点悬停，再发起 `POSCTL -> AUTO.LAND` 过渡（非 OFFBOARD 时直接请求 `AUTO.LAND`）；飞控接管后进入 `AutoLandYield` 直到 DISARM
-- 发布内部状态与 RC 丢失、低电量持续状态，便于联调与前端弹窗
-- 可选 debug 模式：轨迹生成后自动导出录制航点与返航轨迹 CSV，并可在 rviz 中实时查看
+- 解锁 15 s 后开始录制航迹（不超过 15 Hz）；退出返航后继续录制。
+- 三类触发：遥控链路丢失（CH18 失控帧漏桶确认，或 RC 消息中断）、低电量（持续 3 s 低于 15%，锁存到下一次解锁）、CH7 长按 2 s。不在空中时不启动；录制点不足时最多等 3 s 补点，仍不足则原地降落。
+- 失控时先原地悬停 15 s，期间完成规划；低电量和长按直接进入准备。
+- 规划前对悬停形成的密集录制点做空间抽稀；生成失败时改为逆序航点降级返航，起终点过近时原地降落。
+- 按实际位置在路径上的局部投影推进进度，不依赖 wall time；偏离超过 0.5 m 时沿路径低速回归。
+- 控制权由状态机管理：预发 setpoint 后申请 OFFBOARD；本模块断流引起的飞控回退不算接管，等飞控自动回到 OFFBOARD；链路正常时飞手拨开关或短按 CH7 退出返航，链路丢失或不稳定时被切出则重新申请控制权。
+- 到点悬停 5 s 后降落交接：链路正常时经 POSCTL 请求 AUTO.LAND，链路丢失时直接请求；飞控进入 AUTO.LAND 后让步到上锁。
+- 模式请求在单独线程中异步调用，未生效时每 1 s 重发，3 s 未生效告警。
+- 发布状态字符串、链路丢失和低电量；事件写 rosout，可选写入调试日志（`events.jsonl`）。
+- 可选导出规划 CSV，并在 rviz 中查看录制点和返航轨迹。
 
 ## 仓库现状
 
 当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。
 
-本分支（`feat/return-state-policy`）正在按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）：R1 条件层、R2 状态机核心已完成并有单测，但还没有接入流程。所以节点的运行行为仍是 dev 的实现，本文其余各节描述的也是 dev 的行为，R3 接入新状态机时更新。
+本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线已完成，节点运行的是新状态机，dev 的暂停/恢复语义已删除。R4 后台规划、R5 退出后截断轨迹、R6 超时与升级、R7 上报与调试日志完善、R8 文档与部署还没有实施，现在与方案的差距见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+
+本分支还没有实飞。按方案，R6 完成后做完整 SITL，R7 完成并通过台架检查后再上实飞。
 
 ## 架构概览
 
 仓库按“入口 + Application + Domain + Adapters + Infrastructure”组织：
 
 - `src/backtrack_node.cpp`
-  负责组装配置、订阅器、发布器、服务客户端和 `BacktrackUseCase`
+  加载参数，创建订阅、发布、服务客户端和 `BacktrackUseCase`，按 `publish_hz` 驱动控制周期，把事件写到 rosout 和调试日志
 - `include/px4_backtrack/application` / `src/application`
-  用例层，负责把订阅数据、状态机、轨迹会话和触发器串成完整控制流程
+  `BacktrackUseCase` 组装条件、调用状态机、执行命令、计算 setpoint，不访问 ROS；`ModeCommander` 负责模式请求的发送、重发和失败告警
 - `include/px4_backtrack/domain` / `src/domain`
-  领域层，包含状态机、录制缓存、触发判定、轨迹会话、rejoin 策略
+  条件层（链路、CH7、电量、在空中）、`ReturnStateMachine`（任务阶段、控制权、跟随方式三个区域），以及录制、轨迹会话、航点降级、回归限速、切向 yaw 等执行组件
 - `include/px4_backtrack/adapters` / `src/adapters`
-  ROS 适配层，封装 MAVROS 订阅、发布与 `set_mode` 服务调用
+  ROS 消息转换、异步 `set_mode`、可视化发布
 - `include/px4_backtrack/infrastructure` / `src/infrastructure`
-  配置加载，负责把 ROS 参数和 `trajectory_core` YAML 转成 `UseCaseConfig`
+  参数加载（全部必填）、调试日志、规划 CSV 导出
+
+各模块的职责和每个控制周期的处理顺序见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 3 节。
 
 ## 主要执行流程
 
-1. 启动节点后，`ConfigLoader` 从参数服务器读取返航参数，再加载 `trajectory_config.yaml`。
-2. `BacktrackNode` 建立 `/mavros/state`、`/Odometry_px4`、`/mavros/rc/in`、`/mavros/battery` 订阅，以及 setpoint、状态发布器和 `/mavros/set_mode` 客户端。
-3. 订阅回调把状态、里程计、RC 和电池数据送入 `BacktrackUseCase`。
-4. 20Hz 定时器调用 `BacktrackUseCase::tick()`，由它依次处理飞行周期复位、录制延时、触发检测、轨迹生成、实际位置局部投影、rejoin 与状态机推进。
-5. `BacktrackStateMachine` 决定当前是否应该发布 setpoint、是否请求切换 `OFFBOARD` / `POSCTL` / `AUTO.LAND`。
-6. Adapters 层把领域层的 `SetpointTarget` 转成 `mavros_msgs/PositionTarget` 并发布。
+1. 启动时 `ConfigLoader` 从参数服务器读取返航参数（缺少任何一项即启动失败），再加载 `trajectory_config.yaml`；打开调试日志时，先写入生效参数。
+2. 订阅回调把飞控状态、落地状态、里程计、RC 和电池数据连同接收时间送入 `BacktrackUseCase`。
+3. 每个控制周期（20 Hz）：条件层推进到当前时间 → 组装 `Conditions` 快照 → `ReturnStateMachine::step()` 给出命令、setpoint 策略和模式意图 → UseCase 执行命令（新飞行周期复位、同步规划）、推进路径进度、计算 setpoint → `ModeCommander` 决定本拍要发出的模式请求。
+4. 节点发布状态和 setpoint，在单独线程中调用 `/mavros/set_mode`，并把事件写到 rosout 和调试日志。
 
 ## ROS 接口
 
@@ -56,19 +55,20 @@
 
 | 接口 | 类型 | 作用 |
 | --- | --- | --- |
-| `/mavros/state` | `mavros_msgs/State` | 获取 `armed` 与当前飞控模式 |
-| `/Odometry_px4` | `nav_msgs/Odometry` | 提供当前位置、线速度、航向和录制时间戳 |
-| `/mavros/rc/in` | `mavros_msgs/RCIn` | 提供 `CH7`、`CH18` 和 RC 消息时序 |
-| `/mavros/battery` | `sensor_msgs/BatteryState` | 提供电池电量百分比（`percentage`，0.0~1.0） |
+| `/mavros/state` | `mavros_msgs/State` | 解锁状态和飞控模式；只用 `connected` 为真的消息 |
+| `/mavros/extended_state` | `mavros_msgs/ExtendedState` | 飞控落地状态，用于在空中判定 |
+| `/Odometry_px4` | `nav_msgs/Odometry` | 当前位置、线速度、航向和录制时间戳；含非有限值的消息被忽略 |
+| `/mavros/rc/in` | `mavros_msgs/RCIn` | `CH7`（按钮）、`CH18`（失控标志）和 RC 消息时序 |
+| `/mavros/battery` | `sensor_msgs/BatteryState` | 电池电量百分比（`percentage`，0.0~1.0） |
 
 ### 输出
 
 | 接口 | 类型 | 作用 |
 | --- | --- | --- |
-| `/mavros/setpoint_raw/local` | `mavros_msgs/PositionTarget` | 发布悬停、返航和 rejoin setpoint |
-| `/px4_backtrack/state` | `std_msgs/String` | 发布内部状态机状态 |
-| `/status_rc_loss` | `std_msgs/Bool` | RC 丢失持续状态（`isRCLost()` 电平语义，丢失期间持续为 `true`） |
-| `/px4_backtrack/low_battery` | `std_msgs/Bool` | 低电量持续状态（`isLowBattery()` 电平语义，供前端弹窗提示） |
+| `/mavros/setpoint_raw/local` | `mavros_msgs/PositionTarget` | 任务中的保持点、路径目标和回归目标 |
+| `/px4_backtrack/state` | `std_msgs/String` | 状态字符串，含义见[前端对接文档](doc/reference/前端对接开发文档.md)第 3 节 |
+| `/status_rc_loss` | `std_msgs/Bool` | 链路丢失：CH18 失控帧累计 1 s 或 RC 消息中断 0.25 s 时为 `true`，持续正常 2 s 后回到 `false` |
+| `/px4_backtrack/low_battery` | `std_msgs/Bool` | 低电量，确认后锁存到下一次解锁 |
 | `/px4_backtrack/debug/waypoints` | `visualization_msgs/MarkerArray` | 录制航点可视化（latched，需启用 `debug_enable_rviz_publish`） |
 | `/px4_backtrack/debug/trajectory` | `nav_msgs/Path` | 返航轨迹可视化（latched，需启用 `debug_enable_rviz_publish`） |
 
@@ -76,14 +76,13 @@
 
 | 接口 | 类型 | 作用 |
 | --- | --- | --- |
-| `/mavros/set_mode` | `mavros_msgs/SetMode` | 请求切换 `OFFBOARD`、`POSCTL`、`AUTO.LAND` |
+| `/mavros/set_mode` | `mavros_msgs/SetMode` | 请求切换 `OFFBOARD`、`POSCTL`、`AUTO.LAND`；在单独线程中调用，不阻塞控制周期 |
 
 说明：
 
 - 坐标约定使用 ENU；`SetpointPublisher` 将 ENU 值直接填入 `FRAME_LOCAL_NED` 的 `PositionTarget`，依赖 MAVROS 完成坐标转换。
-- `/Odometry_px4` 的 pose 位于父 ENU，twist 按 `nav_msgs/Odometry` 语义位于 `child_frame_id`；订阅适配器会先将线速度旋转到父 ENU，再交给终点和 Rejoin 判定。
-- `/status_rc_loss` 是电平语义：RC 丢失期间持续为 `true`，RC 恢复后自动回到 `false`。
-- `/px4_backtrack/low_battery` 是电平语义：低电量确认后持续锁存为 `true`，不随电压回弹而取消。
+- `/Odometry_px4` 的 pose 位于父 ENU，twist 按 `nav_msgs/Odometry` 语义位于 `child_frame_id`；订阅适配器会先将线速度旋转到父 ENU，再交给终点和回归判定。
+- 告警码目前只出现在事件中（rosout 和调试日志）；JSON 状态话题 `/px4_backtrack/status` 在 R7 加入。
 
 ## 配置
 
@@ -91,29 +90,26 @@
 
 文件：[`config/backtrack_params.yaml`](config/backtrack_params.yaml)
 
-说明：
+参数全部必填，代码中没有默认值；launch 没有加载其中任何一项时，节点启动时报错退出。各参数的含义和建议值见方案第 10 节。主要分组：
 
-- `CH7` / `CH18` / `RC loss` / `Low battery` 触发参数现在以 `backtrack_params.yaml` 为唯一运行时来源
-- `ConfigLoader` 会从 ROS 参数服务器强制读取这些触发参数；如果 launch 没有把它们加载进来，节点会在启动时报错退出
-- `TriggerConfig` 头文件不再提供业务默认值，避免“头文件默认值”和 YAML 配置并存导致行为不一致
-- 正常返航按飞机实际位置在路径上的局部投影推进弧长，`rejoin_lookahead_time_s` 同时用于正常预瞄和 Rejoin 缩短预瞄，不再由 wall time 推进参考点
-- rejoin 进入/退出使用当前位置到三维局部投影点的距离和持续时间阈值；退出还要求实际速度、已发布目标速度都接近恢复后的路径速度
-- `ReturnRejoin` 与正常返航复用同一个弧长跟随器，只扩大局部前向搜索窗口并平滑限制速度；位置和 yaw 始终来自路径预瞄点
-- 生产配置以 `0.5 m` 触发 Rejoin、以 `0.4 m` 回到安全走廊；最终到点精度独立固定为 `0.2 m`，二者不能再共用阈值
-- 轨迹生成成功后，`ReturnPreOffboard` 保持触发位置并先对准返航起始切向 yaw；误差大于 15° 时不会开始水平返航
-- 起始对准会一次设置目标 yaw，当前节点不生成原地转向的 yaw 斜坡；`trajectory_config.yaml` 的 `yaw_rate_max` 只约束运动轨迹，原地转速由 PX4（如 `MC_YAWRATE_MAX`）限制
-
-主要分组：
-
-- 基础录制参数：`publish_hz`、`record_delay_s`、`record_min_points`、`record_max_hz`
-- `CH7` 参数：`enable_trigger_ch7`、`ch7_pressed_threshold`、`ch7_hold_s`
-- `CH18` 参数：`enable_trigger_ch18`、`ch18_failsafe_threshold`、`ch18_confirm_s`、`ch18_hover_wait_s`
-- RC 丢失参数：`enable_trigger_rc_loss`、`rc_loss_timeout_s`、`rc_loss_debounce_s`
-- OFFBOARD 参数：`pre_offboard_setpoint_count`
-- Rejoin 参数：`rejoin_trigger_dist_m`、`rejoin_success_dist_m`、`rejoin_v_max_m_s`、`rejoin_lookahead_time_s`、`rejoin_trigger_hold_s`、`rejoin_success_hold_s`
-- 降落参数：`landing_hover_s`
+- 基础：`publish_hz`、`record_delay_s`、`record_min_points`、`record_max_hz`
+- `CH7`：`enable_trigger_ch7`、`ch7_pressed_threshold`、`ch7_hold_s`、`ch7_exit_min_s`
+- `CH18`：`enable_trigger_ch18`、`ch18_failsafe_threshold`、`ch18_confirm_s`、`link_loss_leak_rate`、`ch18_hover_wait_s`
+- RC 消息丢失：`enable_trigger_rc_loss`、`rc_loss_timeout_s`、`rc_loss_debounce_s`
+- 链路恢复与退化：`link_recover_s`、`link_degraded_window_s`
+- 低电量：`enable_trigger_low_battery`、`low_battery_threshold`、`low_battery_confirm_s`
+- 输入新鲜度与在空中判定：`odom_stale_s`、`odom_timeout_s`、`fcu_state_stale_s`、`airborne_min_height_m`
+- 任务与控制权：`return_pending_max_s`、`pre_offboard_setpoint_count`、`fallback_gap_s`、`fallback_window_s`、`fallback_timeout_s`、`reclaim_max_offset_m`、`handover_posctl_timeout_s`、`mode_request_interval_s`、`mode_request_timeout_s`
+- 回归：`rejoin_trigger_dist_m`、`rejoin_success_dist_m`、`rejoin_v_max_m_s`、`rejoin_lookahead_time_s`、`rejoin_trigger_hold_s`、`rejoin_success_hold_s`
+- 降落：`landing_hover_s`
 - 轨迹配置路径：`trajectory_config_path`
-- Debug 参数：`debug_enable_csv_dump`、`debug_csv_output_dir`、`debug_trajectory_sample_dt`、`debug_enable_rviz_publish`
+- 调试：`debug_enable_csv_dump`、`debug_csv_output_dir`、`debug_trajectory_sample_dt`、`debug_enable_rviz_publish`、`debug_log_enable`、`debug_log_dir`
+
+几点约定：
+
+- 回归以 `0.5 m` 触发、以 `0.4 m` 回到安全走廊；终点精度独立固定为 `0.2 m`，二者互不影响。
+- `rejoin_lookahead_time_s` 同时用于正常预瞄和回归时缩短预瞄。
+- 准备阶段先对准返航起始切向 yaw，误差大于 15° 时不开始水平返航。目标 yaw 一次设置，原地转速由 PX4（如 `MC_YAWRATE_MAX`）限制；`trajectory_config.yaml` 的 `yaw_rate_max` 只约束运动轨迹。
 
 ### `trajectory_core` 参数
 
@@ -156,12 +152,21 @@ source devel/setup.bash
 roslaunch px4_backtrack_optimised backtrack.launch
 ```
 
-`launch/backtrack.launch` 会加载 [`config/backtrack_params.yaml`](config/backtrack_params.yaml)。
-如果你调整触发阈值，应直接修改该 YAML，而不是依赖代码侧默认构造值。
+`launch/backtrack.launch` 会加载 [`config/backtrack_params.yaml`](config/backtrack_params.yaml)。参数没有代码默认值，调整时直接修改该 YAML。
 
-## Debug 可视化
+## 调试与可视化
 
-节点支持两种可选的 debug 输出，均通过 `backtrack_params.yaml` 开关控制，默认关闭。
+三类调试输出都由 `backtrack_params.yaml` 开关控制。当前配置打开了 CSV 导出和 rviz 发布，关闭了调试日志。
+
+### 调试日志
+
+设置 `debug_log_enable: true` 后，节点每次启动在 `debug_log_dir`（留空为 `~/.ros/backtrack_logs`，非空时必须是绝对路径）下建一个运行目录 `run_YYYYMMDD_HHMMSS/`，把事件一行一个写入 `events.jsonl`：
+
+- 第一行是生效参数和本模块的提交号；
+- 之后是状态转换（带规则编号和原因）、飞控模式和解锁变化、条件边沿、CH7 指令、任务开始与结束、规划结果、模式请求、自身断流，以及告警的出现和消失；
+- 写盘在后台线程；写失败时停止写日志并告警 `DEBUG_LOG_FAILED`，返航不受影响。
+
+试飞期间建议打开。逐拍记录、保留策略和查看脚本在 R7 加入，目前日志目录不会自动清理。
 
 ### CSV 文件导出
 
@@ -169,7 +174,7 @@ roslaunch px4_backtrack_optimised backtrack.launch
 
 - 输出目录默认为 `~/.ros/backtrack_debug/`，可通过 `debug_csv_output_dir` 指定
 - 文件名带时间戳：`waypoints_YYYYMMDD_HHMMSS.csv`、`trajectory_YYYYMMDD_HHMMSS.csv`
-- 采样步长由 `debug_trajectory_sample_dt` 控制（默认 0.05s）
+- 采样步长由 `debug_trajectory_sample_dt` 控制（当前 0.1 s）
 
 使用 Python 脚本查看：
 
@@ -204,10 +209,10 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 │   └── trajectory_config.yaml
 ├── include/px4_backtrack/       # 头文件，分层同 src/
 ├── src/
-│   ├── adapters/                # ROS 订阅、发布、服务
-│   ├── application/             # BacktrackUseCase
-│   ├── domain/                  # 状态机、录制、轨迹会话、Rejoin；重构新增的条件层与 ReturnStateMachine
-│   ├── infrastructure/          # 参数加载、调试导出
+│   ├── adapters/                # ROS 订阅、发布、异步 set_mode、可视化
+│   ├── application/             # BacktrackUseCase、ModeCommander
+│   ├── domain/                  # 条件层、ReturnStateMachine、录制、轨迹会话、航点降级、回归
+│   ├── infrastructure/          # 参数加载、调试日志、规划 CSV 导出
 │   └── backtrack_node.cpp
 ├── tests/unit/                  # gtest 单测（16 个文件，见单元测试文档）
 ├── scripts/
@@ -229,8 +234,8 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 
 | 层次 | 命令 | 说明 |
 | --- | --- | --- |
-| 单元测试 | `scripts/docker/run_tests.sh amd64` | 在全新的 ROS Noetic 容器中编译并运行全部单测（156 个）和 trajectory_core 的单测 |
-| 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误 |
+| 单元测试 | `scripts/docker/run_tests.sh amd64` | 在全新的 ROS Noetic 容器中编译并运行全部单测（177 个）和 trajectory_core 的单测；参数换成 `arm64` 时在 QEMU 中按机载架构复核（本机编译加单测约 30 分钟） |
+| 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误（41 种） |
 | 闭环危害场景 | `scripts/analysis/run_hazard_scenarios.sh amd64` | 假飞控驱动真实 `BacktrackUseCase`，场景 H01–H14 |
 | 规划耗时 | `scripts/bench/run_gen_bench.sh amd64 10 30` | 轨迹生成耗时随录制时长的增长 |
 | SITL | `scripts/sitl/run_sitl_checks.sh` | PX4 v1.15.4 SITL 中确认方案依赖的飞控行为（N1、N2） |
@@ -249,12 +254,14 @@ catkin_test_results
 
 - [文档导航](doc/README.md)：按用途分类的完整索引。
 - [返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)：当前开发的依据。
+- [系统总览](doc/reference/SYSTEM_OVERVIEW.md)：实施到 R3 的接口、模块划分、处理顺序、状态机和执行层，以及与方案的差距。
+- [前端对接开发文档](doc/reference/前端对接开发文档.md)：状态字符串、话题语义和 UI 建议。
 - [返航程序系统性分析（2026-10-20）](doc/reviews/返航程序系统性分析_2026-10-20.md)：危害分析、PX4 源码核对、闭环仿真和 SITL 确认。
-- [系统总览](doc/reference/SYSTEM_OVERVIEW.md)：dev 实现的模块划分、处理流程和状态机迁移图。
 - [单元测试文档](doc/testing/单元测试文档.md)、[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)：测试方法与执行记录。
 - `trajectory_core` 的接口说明见该仓库的 `doc/reference/API接口文档.md`。
 
 ## 已知注意点
 
 - `README` 与 `LLM_MAP` 以当前 C++ 代码为准。
-- 单元测试只覆盖少量 ROS adapters，没有 launch 级测试；修改状态机、触发器、轨迹接口或参数装配后，除单测外还要跑闭环场景，涉及与飞控交互时再做 SITL。
+- 规划仍在任务开始时同步执行（R4 改为后台）：30 分钟录制约阻塞控制周期 4.7 s（本机），失控任务进入 OFFBOARD 相应推迟。
+- 单元测试只覆盖少量 ROS adapters，没有 launch 级测试；修改状态机、条件层、轨迹接口或参数装配后，除单测外还要跑闭环场景，涉及与飞控交互时再做 SITL。
