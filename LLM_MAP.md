@@ -7,10 +7,10 @@
 ## 先记住这 12 条
 
 1. 这是 ROS1 `catkin` 工程，不是 ROS2。
-2. 当前主实现入口是 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp)。
+2. 当前主实现入口是 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。
 3. 控制主循环在 `BacktrackNode` 的 20Hz `timerCallback()`，不是在订阅回调里直接控飞。
-4. 真正的编排核心在 [`src/application/backtrack_usecase.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/application/backtrack_usecase.cpp)。
-5. 返航轨迹由 `trajectory_core` 生成，配置来自 [`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)。
+4. 真正的编排核心在 [`src/application/backtrack_usecase.cpp`](src/application/backtrack_usecase.cpp)。
+5. 返航轨迹由 `trajectory_core` 生成，配置来自 [`config/trajectory_config.yaml`](config/trajectory_config.yaml)。
 6. 坐标语义按 ENU 处理，但 setpoint 通过 `mavros_msgs/PositionTarget` 发到 `/mavros/setpoint_raw/local`。
 7. 录制点保留相对时间戳；生成轨迹时会在逆序后把时间戳镜像成新的单调递增序列，以保留原始 dt 间隔用于 `trajectory_core` 的时间质量诊断。
 8. 旧版 Python 基线已从仓库删除（需要时查 git 历史），不要按它恢复旧行为。
@@ -21,7 +21,7 @@
 
 ## 真正的入口与控制流
 
-控制流从 [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp) 开始：
+控制流从 [`src/backtrack_node.cpp`](src/backtrack_node.cpp) 开始：
 
 1. `ConfigLoader::loadFromROS()` 读取 ROS 参数和 `trajectory_core` 配置。
    其中 `CH7` / `CH18` / `RC loss` / `Low battery` 触发参数是必填参数，缺失会直接抛异常，不会回退到 `TriggerConfig` 头文件默认值。
@@ -50,13 +50,13 @@
 
 ### 入口层
 
-- [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp)
+- [`src/backtrack_node.cpp`](src/backtrack_node.cpp)
   组装对象、绑定回调、驱动 20Hz tick。改这里通常意味着你在改进程级 wiring 或主循环频率。
 
 ### Application 层
 
-- [`include/px4_backtrack/application/backtrack_usecase.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/application/backtrack_usecase.hpp)
-- [`src/application/backtrack_usecase.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/application/backtrack_usecase.cpp)
+- [`include/px4_backtrack/application/backtrack_usecase.hpp`](include/px4_backtrack/application/backtrack_usecase.hpp)
+- [`src/application/backtrack_usecase.cpp`](src/application/backtrack_usecase.cpp)
 
 这里是最重要的编排层，职责包括：
 
@@ -73,58 +73,58 @@
 
 ### Domain 层
 
-- [`include/px4_backtrack/domain/state_machine.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/state_machine.hpp)
-- [`src/domain/state_machine.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/state_machine.cpp)
+- [`include/px4_backtrack/domain/state_machine.hpp`](include/px4_backtrack/domain/state_machine.hpp)
+- [`src/domain/state_machine.cpp`](src/domain/state_machine.cpp)
   纯状态迁移与每态输出。它不直接读 ROS，也不直接调 `trajectory_core`。
 
-- [`include/px4_backtrack/domain/recording_buffer.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/recording_buffer.hpp)
-- [`src/domain/recording_buffer.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/recording_buffer.cpp)
+- [`include/px4_backtrack/domain/recording_buffer.hpp`](include/px4_backtrack/domain/recording_buffer.hpp)
+- [`src/domain/recording_buffer.cpp`](src/domain/recording_buffer.cpp)
   用 `record_max_hz` 节流录制 `/Odometry_px4`，存相对时间戳。
 
-- [`include/px4_backtrack/domain/trigger_evaluator.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/trigger_evaluator.hpp)
-- [`src/domain/trigger_evaluator.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trigger_evaluator.cpp)
+- [`include/px4_backtrack/domain/trigger_evaluator.hpp`](include/px4_backtrack/domain/trigger_evaluator.hpp)
+- [`src/domain/trigger_evaluator.cpp`](src/domain/trigger_evaluator.cpp)
   处理 `CH7`、`CH18` 和 RC 消息丢失。`TriggerConfig` 现在只是承载值的 struct，运行时参数来源是 `ConfigLoader + backtrack_params.yaml`，不是头文件默认构造。
 
-- [`include/px4_backtrack/domain/trajectory_session.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/trajectory_session.hpp)
-- [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp)
+- [`include/px4_backtrack/domain/trajectory_session.hpp`](include/px4_backtrack/domain/trajectory_session.hpp)
+- [`src/domain/trajectory_session.cpp`](src/domain/trajectory_session.cpp)
   封装 `trajectory_core::TrajectoryGenerator`、轨迹对象、局部路径投影、单调弧长进度和预瞄目标。执行进度只由实际位置推进，不再维护 wall-time 秒表或冻结/恢复接口。
 
-- [`include/px4_backtrack/domain/rejoin_policy.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/domain/rejoin_policy.hpp)
-- [`src/domain/rejoin_policy.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/rejoin_policy.cpp)
+- [`include/px4_backtrack/domain/rejoin_policy.hpp`](include/px4_backtrack/domain/rejoin_policy.hpp)
+- [`src/domain/rejoin_policy.cpp`](src/domain/rejoin_policy.cpp)
   负责三维路径偏离阈值、Rejoin 平滑限速和退出速度连续性判定。`ReturnRejoin` 与正常返航复用 `TrajectorySession` 的局部弧长投影目标，不存在全轨迹最近时间搜索或冻结点回拉接口。
 
 ### Adapters 层
 
-- [`include/px4_backtrack/adapters/ros_subscribers.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/adapters/ros_subscribers.hpp)
-- [`src/adapters/ros_subscribers.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/adapters/ros_subscribers.cpp)
+- [`include/px4_backtrack/adapters/ros_subscribers.hpp`](include/px4_backtrack/adapters/ros_subscribers.hpp)
+- [`src/adapters/ros_subscribers.cpp`](src/adapters/ros_subscribers.cpp)
   封装 4 个订阅器，默认话题分别是 `/mavros/state`、`/Odometry_px4`、`/mavros/rc/in`、`/mavros/battery`。
 
-- [`include/px4_backtrack/adapters/ros_publishers.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/adapters/ros_publishers.hpp)
-- [`src/adapters/ros_publishers.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/adapters/ros_publishers.cpp)
+- [`include/px4_backtrack/adapters/ros_publishers.hpp`](include/px4_backtrack/adapters/ros_publishers.hpp)
+- [`src/adapters/ros_publishers.cpp`](src/adapters/ros_publishers.cpp)
   封装 `/mavros/setpoint_raw/local`、`/px4_backtrack/state`、`/status_rc_loss`、`/px4_backtrack/low_battery`。
 
-- [`include/px4_backtrack/adapters/ros_services.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/adapters/ros_services.hpp)
-- [`src/adapters/ros_services.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/adapters/ros_services.cpp)
+- [`include/px4_backtrack/adapters/ros_services.hpp`](include/px4_backtrack/adapters/ros_services.hpp)
+- [`src/adapters/ros_services.cpp`](src/adapters/ros_services.cpp)
   封装 `/mavros/set_mode`，带 1s 节流。
 
-- [`include/px4_backtrack/adapters/debug_publishers.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/adapters/debug_publishers.hpp)
-- [`src/adapters/debug_publishers.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/adapters/debug_publishers.cpp)
+- [`include/px4_backtrack/adapters/debug_publishers.hpp`](include/px4_backtrack/adapters/debug_publishers.hpp)
+- [`src/adapters/debug_publishers.cpp`](src/adapters/debug_publishers.cpp)
   可选的 debug 可视化发布器，发布录制航点 `MarkerArray` 和返航轨迹 `nav_msgs/Path` 到 latched 话题，由 config 开关控制。
 
 ### Infrastructure 层
 
-- [`include/px4_backtrack/infrastructure/config_loader.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/infrastructure/config_loader.hpp)
-- [`src/infrastructure/config_loader.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/infrastructure/config_loader.cpp)
+- [`include/px4_backtrack/infrastructure/config_loader.hpp`](include/px4_backtrack/infrastructure/config_loader.hpp)
+- [`src/infrastructure/config_loader.cpp`](src/infrastructure/config_loader.cpp)
 
-- [`include/px4_backtrack/infrastructure/debug_dumper.hpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack/infrastructure/debug_dumper.hpp)
-- [`src/infrastructure/debug_dumper.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/infrastructure/debug_dumper.cpp)
+- [`include/px4_backtrack/infrastructure/debug_dumper.hpp`](include/px4_backtrack/infrastructure/debug_dumper.hpp)
+- [`src/infrastructure/debug_dumper.cpp`](src/infrastructure/debug_dumper.cpp)
   可选的 CSV debug 导出器，将录制航点和采样轨迹写入带时间戳的 CSV 文件，由 config 开关控制。
 
 修改参数字段时，通常必须同时改：
 
 - `UseCaseConfig` / 相关 domain config
 - `ConfigLoader`
-- [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml)
+- [`config/backtrack_params.yaml`](config/backtrack_params.yaml)
 - `README.md`
 
 如果改的是触发参数，额外注意：
@@ -134,7 +134,7 @@
 
 ### Scripts
 
-- [`scripts/plot_debug_csv.py`](/home/channing/Drone/Projects/px4_backtrack_optimised/scripts/plot_debug_csv.py)
+- [`scripts/plot_debug_csv.py`](scripts/plot_debug_csv.py)
   Python 可视化脚本，读取 `DebugDumper` 导出的 CSV，绘制 3D 路径对比、俯视图、高度剖面和偏航剖面。`python3 scripts/plot_debug_csv.py --latest` 自动选取最新文件。
 
 ## 行为语义上的关键点
@@ -247,20 +247,20 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 
 ## 配置文件地图
 
-- [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml)
+- [`config/backtrack_params.yaml`](config/backtrack_params.yaml)
   返航节点参数，按录制、触发、OFFBOARD、rejoin、降落、debug 分组
-- [`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)
+- [`config/trajectory_config.yaml`](config/trajectory_config.yaml)
   直接传给 `trajectory_core::TrajectoryConfig::loadFromYaml()`
-- [`launch/backtrack.launch`](/home/channing/Drone/Projects/px4_backtrack_optimised/launch/backtrack.launch)
+- [`launch/backtrack.launch`](launch/backtrack.launch)
   默认只启动 `backtrack_node` 并加载 `backtrack_params.yaml`
 
 ## 文档可信度排序
 
 按“接近当前代码”的程度排序：
 
-1. [`src/backtrack_node.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/backtrack_node.cpp) 和 `src/**`
-2. [`include/px4_backtrack/**`](/home/channing/Drone/Projects/px4_backtrack_optimised/include/px4_backtrack)
-3. [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml) 与 [`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)
+1. [`src/backtrack_node.cpp`](src/backtrack_node.cpp) 和 `src/**`
+2. [`include/px4_backtrack/**`](include/px4_backtrack)
+3. [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 与 [`config/trajectory_config.yaml`](config/trajectory_config.yaml)
 4. [`doc/reference/返航实现技术文档.md`](doc/reference/返航实现技术文档.md)
 5. [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)
 
@@ -271,24 +271,24 @@ Paused 状态下 RC loss 或 CH7 恢复同理：点数不足时直接降落而�
 - `nav_msgs/Odometry.twist` 按消息语义位于 `child_frame_id`。`OdomSubscriber` 会用姿态四元数将其旋转到父 ENU；不要再次把这份速度当作机体系速度，也不要跳过旋转直接用于 Rejoin 速度判据。
 - `handleReturnTrigger()` 在点数不足时调用 `triggerLanding()`，这会跳过 `ReturnPreOffboard` 直接进 `LandingTransition`。如果你在 `LandingTransition` 之前加了新逻辑，要评估这条直达路径是否会绕过它。
 - 当前代码有四类“不可直接走平滑轨迹”的分支：一类是触发时点数不足，直接降落；一类是点数足够但几何路径退化为“点过近/起终点近乎重合”，轨迹生成失败后直接降落；一类是其它可恢复轨迹生成失败，会切到 waypoint 退化返航；最后一类是非法轨迹配置，这时不会走 fallback，而是停留在 `ReturnPreOffboard` 并停止重试。
-- [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/src/domain/trajectory_session.cpp) 为准。
+- [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md) 是高层概览，不是行为规范；尤其涉及 `trajectory_core` 输入时间轴时，必须以 [`src/domain/trajectory_session.cpp`](src/domain/trajectory_session.cpp) 为准。
 - 仓库已有 `tests/unit/`，但目前主要覆盖领域层和轻集成逻辑，还没有 ROS topic 级 mock/rostest。涉及 adapters、launch、参数装配时，仍然要做一次编译和联调。
 
 ## 测试地图
 
-- [`tests/unit/test_recording_buffer.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_recording_buffer.cpp)
+- [`tests/unit/test_recording_buffer.cpp`](tests/unit/test_recording_buffer.cpp)
   覆盖录制节流、时间戳单调性和 `reset()`
-- [`tests/unit/test_trigger_evaluator.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_trigger_evaluator.cpp)
+- [`tests/unit/test_trigger_evaluator.cpp`](tests/unit/test_trigger_evaluator.cpp)
   覆盖 `CH7` / `CH18` / RC loss 触发语义
-- [`tests/unit/test_state_machine.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_state_machine.cpp)
+- [`tests/unit/test_state_machine.cpp`](tests/unit/test_state_machine.cpp)
   覆盖主状态迁移和 `AUTO.LAND` 高优先级
-- [`tests/unit/test_rejoin_policy.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_rejoin_policy.cpp)
+- [`tests/unit/test_rejoin_policy.cpp`](tests/unit/test_rejoin_policy.cpp)
   覆盖偏离/回归阈值、路径目标平滑限速、接近路径后的速度恢复与退出速度连续性
-- [`tests/unit/test_trajectory_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_trajectory_session.cpp)
+- [`tests/unit/test_trajectory_session.cpp`](tests/unit/test_trajectory_session.cpp)
   覆盖轨迹生成、逆序语义、局部投影、单调弧长进度、自交分支、高密度停顿点云团、末端抽稀和空间完成判定
-- [`tests/unit/test_waypoint_fallback_session.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_waypoint_fallback_session.cpp)
+- [`tests/unit/test_waypoint_fallback_session.cpp`](tests/unit/test_waypoint_fallback_session.cpp)
   覆盖退化 waypoint 路径的逆序稀疏化、单步推进与 restart 语义
-- [`tests/unit/test_backtrack_usecase.cpp`](/home/channing/Drone/Projects/px4_backtrack_optimised/tests/unit/test_backtrack_usecase.cpp)
+- [`tests/unit/test_backtrack_usecase.cpp`](tests/unit/test_backtrack_usecase.cpp)
   轻集成覆盖轨迹失败分流、AUTO.LAND 让步、wall time 不推进空间轨迹、起始 yaw 对准、Rejoin 连续恢复、终点精度与 Rejoin 走廊解耦
 
 运行方式：

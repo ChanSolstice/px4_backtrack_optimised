@@ -87,7 +87,7 @@
 
 ### 返航参数
 
-文件：[`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml)
+文件：[`config/backtrack_params.yaml`](config/backtrack_params.yaml)
 
 说明：
 
@@ -115,7 +115,7 @@
 
 ### `trajectory_core` 参数
 
-文件：[`config/trajectory_config.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/trajectory_config.yaml)
+文件：[`config/trajectory_config.yaml`](config/trajectory_config.yaml)
 
 该文件控制平滑轨迹生成的采样、走廊约束、拐角处理、yaw 平滑、末端收敛以及速度加速度限制。
 
@@ -154,7 +154,7 @@ source devel/setup.bash
 roslaunch px4_backtrack_optimised backtrack.launch
 ```
 
-`launch/backtrack.launch` 会加载 [`config/backtrack_params.yaml`](/home/channing/Drone/Projects/px4_backtrack_optimised/config/backtrack_params.yaml)。
+`launch/backtrack.launch` 会加载 [`config/backtrack_params.yaml`](config/backtrack_params.yaml)。
 如果你调整触发阈值，应直接修改该 YAML，而不是依赖代码侧默认构造值。
 
 ## Debug 可视化
