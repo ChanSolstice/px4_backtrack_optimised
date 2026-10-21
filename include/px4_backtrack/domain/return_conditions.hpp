@@ -38,6 +38,7 @@ struct Conditions {
 
   // 飞控状态（/mavros/state，只用 connected 为真的消息）
   bool fcu_state_fresh{false};  ///< 距最近一次飞控状态未超过 fcu_state_stale_s
+  double fcu_state_t{0.0};      ///< 最近一次飞控状态的接收时间 (s)（R-75）
   bool armed{false};            ///< 是否解锁（飞控状态中断时为最后一次的值）
   std::string mode;             ///< 飞控模式（MAVROS 字符串，如 "OFFBOARD"、"AUTO.LAND"）
 

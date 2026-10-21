@@ -648,6 +648,7 @@ void ReturnStateMachine::startMission(const Conditions& c, bool enter_phase,
   trigger_position_ = c.position;
   trigger_yaw_ = c.yaw;
   pre_frames_ = 0;
+  pre_frames_done_t_ = c.now;
   out.commands.start_planning = true;
 
   std::string conditions;
@@ -921,10 +922,13 @@ void ReturnStateMachine::computeMissionOutputs(const Conditions& c,
 
   switch (control_) {
     case ControlState::Acquiring:
-      // 先预发 pre_offboard_setpoint_count 帧，再申请 OFFBOARD（D27）
+      // 先预发 pre_offboard_setpoint_count 帧，再申请 OFFBOARD（D27）。链路正常时还要
+      // 等到预发结束后的下一条飞控状态，先看到飞手可能的切换（规则 4c，R-75）
       if (pre_frames_ < config_.pre_offboard_setpoint_count) {
         ++pre_frames_;
-      } else {
+        pre_frames_done_t_ = c.now;
+      } else if (!linkClean(c) || !c.fcu_state_fresh ||
+                 c.fcu_state_t > pre_frames_done_t_) {
         out.mode_intent = ModeIntent::Offboard;
       }
       break;

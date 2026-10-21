@@ -48,6 +48,9 @@ struct Harness {
 
   const StepOutput& step() {
     c.now = now();
+    if (c.fcu_state_fresh && state_every_tick) {
+      c.fcu_state_t = c.now;  // 飞控状态新鲜时每拍都收到
+    }
     ++k;
     out = sm.step(c);
     history.insert(history.end(), out.events.begin(), out.events.end());
@@ -179,6 +182,7 @@ struct Harness {
   std::vector<StepEvent> history;
   int k{0};
   int press_id{0};
+  bool state_every_tick{true};  ///< 为假时不再收到新的飞控状态（接收时间不变）
 };
 
 // ============================================================================
@@ -539,6 +543,37 @@ TEST(ReturnStateMachineTest, TakeoverBeforeOffboardConfirmedExits) {
   EXPECT_EQ(d.out.phase, MissionPhase::Prepare);
   EXPECT_EQ(d.out.control, ControlState::Acquiring);
   EXPECT_EQ(d.out.mode_intent, ModeIntent::Offboard);
+}
+
+TEST(ReturnStateMachineTest, OffboardRequestWaitsForFcuStateAfterPreFrames) {
+  // R-75：链路正常时，预发结束后须等到下一条飞控状态，才申请 OFFBOARD
+  Harness h;
+  h.startLowBatteryMission();
+  h.state_every_tick = false;
+  h.run(0.1);
+  h.c.fcu_state_t = h.now() - kDt;  // 预发期间收到的状态不算
+  h.run(1.0);
+  EXPECT_EQ(h.out.control, ControlState::Acquiring);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::None);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+  h.state_every_tick = true;
+  h.step();
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::Offboard);
+
+  // 飞控状态中断时不等待（规则 4 暂停，不判接管）
+  Harness stale;
+  stale.startLowBatteryMission();
+  stale.state_every_tick = false;
+  stale.c.fcu_state_fresh = false;
+  stale.run(0.5);
+  EXPECT_EQ(stale.out.mode_intent, ModeIntent::Offboard);
+
+  // 链路丢失时不判接管，也不等待：失控接管时延不变（D27）
+  Harness lost;
+  lost.startLinkLossMission();
+  lost.state_every_tick = false;
+  lost.run(0.5);
+  EXPECT_EQ(lost.out.mode_intent, ModeIntent::Offboard);
 }
 
 TEST(ReturnStateMachineTest, OwnStreamGapIsFallbackNotTakeover) {

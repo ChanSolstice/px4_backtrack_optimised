@@ -381,6 +381,7 @@ private:
 
   // 任务中
   int pre_frames_{0};                ///< 已预发的 setpoint 帧数
+  double pre_frames_done_t_{0.0};    ///< 预发结束的时间（R-75）
   bool reclaim_offset_{false};       ///< 重新接入时偏差超限或投影失败
   bool exit_rejected_{false};        ///< 链路异常时收到短按
   bool trigger_ignored_landed_{false};  ///< 本拍有触发但不在空中

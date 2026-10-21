@@ -269,6 +269,9 @@ public:
       c_.armed = false;
     }
     c_.fcu_state_fresh = !chance(0.03);
+    if (c_.fcu_state_fresh) {
+      c_.fcu_state_t = now_;  // 新鲜时本拍收到了飞控状态
+    }
 
     // 飞控大多接受模式请求；偶尔被飞手或其他节点切换
     if (last.mode_intent != ModeIntent::None && chance(0.6)) {
@@ -450,6 +453,9 @@ TEST(ReturnStateMachineInvariantTest, ExhaustiveSingleStepFromReachableStates) {
       c.position = positionFor(++index);
       c.armed = armed == 1;
       c.fcu_state_fresh = fresh == 1;
+      if (c.fcu_state_fresh) {
+        c.fcu_state_t = c.now;
+      }
       c.mode = mode;
       c.link = LinkStatus{};
       c.link.degraded = link >= 1;

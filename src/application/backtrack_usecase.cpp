@@ -170,6 +170,7 @@ domain::Conditions BacktrackUseCase::assembleConditions(double now) const {
 
   c.fcu_state_fresh = has_fcu_state_ &&
                       now - fcu_state_t_ <= config_.fcu_state_stale_s;
+  c.fcu_state_t = fcu_state_t_;
   c.armed = armed_;
   c.mode = mode_;
 
