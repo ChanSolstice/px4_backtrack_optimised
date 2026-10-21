@@ -1,6 +1,6 @@
 #pragma once
 
-#include "px4_backtrack/domain/state_machine.hpp"
+#include "px4_backtrack/domain/types.hpp"
 #include <ros/ros.h>
 #include <mavros_msgs/PositionTarget.h>
 #include <std_msgs/String.h>
@@ -45,8 +45,8 @@ public:
   explicit StatusPublisher(ros::NodeHandle& nh);
 
   /// 发布当前状态
-  /// @param state 状态枚举
-  void publishState(domain::State state);
+  /// @param state 状态字符串（重构方案第 6.1 节）
+  void publishState(const std::string& state);
 
   /// 发布RC丢失状态
   /// @param lost 是否丢失

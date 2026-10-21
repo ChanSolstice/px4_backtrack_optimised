@@ -130,6 +130,18 @@ target_link_libraries(backtrack_node
   ${catkin_LIBRARIES}
 )
 
+# 调试日志的 config 事件记录本模块的提交号（取不到时为 unknown）
+execute_process(
+  COMMAND git rev-parse --short HEAD
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  OUTPUT_VARIABLE BACKTRACK_GIT_REV
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET
+)
+if(BACKTRACK_GIT_REV)
+  target_compile_definitions(backtrack_node PRIVATE BACKTRACK_GIT_REV="${BACKTRACK_GIT_REV}")
+endif()
+
 #############
 ## Install ##
 #############

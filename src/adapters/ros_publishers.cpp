@@ -75,9 +75,9 @@ StatusPublisher::StatusPublisher(ros::NodeHandle& nh) {
   ROS_INFO("[StatusPublisher] Initialized");
 }
 
-void StatusPublisher::publishState(domain::State state) {
+void StatusPublisher::publishState(const std::string& state) {
   std_msgs::String msg;
-  msg.data = domain::stateToString(state);
+  msg.data = state;
   state_pub_.publish(msg);
 }
 

@@ -1,5 +1,4 @@
 #include "px4_backtrack/infrastructure/config_loader.hpp"
-#include <ros/package.h>
 #include <stdexcept>
 
 namespace px4_backtrack {
@@ -20,153 +19,100 @@ void requireParam(ros::NodeHandle& nh, const char* name, T& value) {
 }  // namespace
 
 application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
-  application::UseCaseConfig config;
+  application::UseCaseConfig c;
 
-  ROS_INFO("[ConfigLoader] Loading configuration from ROS parameter server");
+  // 录制
+  requireParam(nh, "record_max_hz", c.record_max_hz);
+  requireParam(nh, "record_min_points", c.record_min_points);
 
-  // 加载各模块参数
-  loadRecordingParams(nh, config);
-  loadCh7Params(nh, config);
-  loadCh18Params(nh, config);
-  loadRCLossParams(nh, config);
-  loadLowBatteryParams(nh, config);
-  loadOffboardParams(nh, config);
-  loadRejoinParams(nh, config);
-  loadLandingParams(nh, config);
-  loadDebugParams(nh, config);
+  // 链路：CH18 与 RC 消息超时（第 5.1 节）
+  auto& link = c.link_config;
+  requireParam(nh, "enable_trigger_ch18", link.enable_ch18);
+  requireParam(nh, "ch18_failsafe_threshold", link.ch18_failsafe_threshold);
+  requireParam(nh, "ch18_confirm_s", link.ch18_confirm_s);
+  requireParam(nh, "link_loss_leak_rate", link.link_loss_leak_rate);
+  requireParam(nh, "enable_trigger_rc_loss", link.enable_rc_loss);
+  requireParam(nh, "rc_loss_timeout_s", link.rc_loss_timeout_s);
+  requireParam(nh, "rc_loss_debounce_s", link.rc_loss_debounce_s);
+  requireParam(nh, "link_recover_s", link.link_recover_s);
+  requireParam(nh, "link_degraded_window_s", link.link_degraded_window_s);
 
-  // 加载trajectory_core配置路径
+  // CH7（第 5.2 节）
+  auto& pilot = c.pilot_config;
+  requireParam(nh, "enable_trigger_ch7", pilot.enable_ch7);
+  requireParam(nh, "ch7_pressed_threshold", pilot.ch7_pressed_threshold);
+  requireParam(nh, "ch7_hold_s", pilot.ch7_hold_s);
+  requireParam(nh, "ch7_exit_min_s", pilot.ch7_exit_min_s);
+  pilot.rc_loss_timeout_s = link.rc_loss_timeout_s;
+
+  // 电量（第 5.3 节）
+  auto& battery = c.battery_config;
+  requireParam(nh, "enable_trigger_low_battery", battery.enable_low_battery);
+  requireParam(nh, "low_battery_threshold", battery.low_battery_threshold);
+  requireParam(nh, "low_battery_confirm_s", battery.low_battery_confirm_s);
+
+  // 输入新鲜度与在空中判定（第 5.4、5.5 节）
+  requireParam(nh, "odom_stale_s", c.odom_stale_s);
+  requireParam(nh, "odom_timeout_s", c.odom_timeout_s);
+  requireParam(nh, "fcu_state_stale_s", c.fcu_state_stale_s);
+  requireParam(nh, "airborne_min_height_m", c.airborne_config.airborne_min_height_m);
+  c.airborne_config.fcu_state_stale_s = c.fcu_state_stale_s;
+
+  // 状态机（第 6、7 节）
+  auto& sm = c.state_machine_config;
+  requireParam(nh, "record_delay_s", sm.record_delay_s);
+  requireParam(nh, "ch18_hover_wait_s", sm.ch18_hover_wait_s);
+  requireParam(nh, "landing_hover_s", sm.landing_hover_s);
+  requireParam(nh, "pre_offboard_setpoint_count", sm.pre_offboard_setpoint_count);
+  requireParam(nh, "return_pending_max_s", sm.return_pending_max_s);
+  requireParam(nh, "fallback_timeout_s", sm.fallback_timeout_s);
+  requireParam(nh, "handover_posctl_timeout_s", sm.handover_posctl_timeout_s);
+  requireParam(nh, "reclaim_max_offset_m", sm.reclaim_max_offset_m);
+
+  // 回退判定与模式请求（D22、D24）
+  requireParam(nh, "fallback_gap_s", c.fallback_gap_s);
+  requireParam(nh, "fallback_window_s", c.fallback_window_s);
+  requireParam(nh, "mode_request_interval_s", c.mode_commander_config.request_interval_s);
+  requireParam(nh, "mode_request_timeout_s", c.mode_commander_config.request_timeout_s);
+
+  // 回归
+  auto& rejoin = c.rejoin_config;
+  requireParam(nh, "rejoin_trigger_dist_m", rejoin.trigger_dist_m);
+  requireParam(nh, "rejoin_success_dist_m", rejoin.success_dist_m);
+  requireParam(nh, "rejoin_v_max_m_s", rejoin.v_max_m_s);
+  requireParam(nh, "rejoin_lookahead_time_s", rejoin.lookahead_time_s);
+  requireParam(nh, "rejoin_trigger_hold_s", rejoin.trigger_hold_s);
+  requireParam(nh, "rejoin_success_hold_s", rejoin.success_hold_s);
+  sm.rejoin_trigger_dist_m = rejoin.trigger_dist_m;
+
+  // Debug/可视化
+  requireParam(nh, "debug_enable_csv_dump", c.debug_enable_csv_dump);
+  requireParam(nh, "debug_csv_output_dir", c.debug_csv_output_dir);
+  requireParam(nh, "debug_trajectory_sample_dt", c.debug_trajectory_sample_dt);
+  requireParam(nh, "debug_enable_rviz_publish", c.debug_enable_rviz_publish);
+
+  // trajectory_core
   std::string trajectory_config_path;
-  nh.param<std::string>("trajectory_config_path", trajectory_config_path, "");
+  requireParam(nh, "trajectory_config_path", trajectory_config_path);
+  c.trajectory_config = loadTrajectoryConfig(trajectory_config_path);
 
-  if (trajectory_config_path.empty()) {
-    ROS_ERROR("[ConfigLoader] trajectory_config_path is not set!");
-    throw std::runtime_error("trajectory_config_path parameter is required");
+  ROS_INFO("[ConfigLoader] Configuration loaded");
+  return c;
+}
+
+DebugLogConfig ConfigLoader::loadDebugLog(ros::NodeHandle& nh) {
+  DebugLogConfig c;
+  requireParam(nh, "debug_log_enable", c.enable);
+  requireParam(nh, "debug_log_dir", c.dir);
+  if (!c.dir.empty() && c.dir.front() != '/') {
+    throw std::runtime_error("debug_log_dir must be an absolute path: " + c.dir);
   }
-
-  // 加载trajectory_core配置
-  config.trajectory_config = loadTrajectoryConfig(trajectory_config_path);
-
-  ROS_INFO("[ConfigLoader] Configuration loaded successfully");
-
-  return config;
+  return c;
 }
 
 trajectory_core::TrajectoryConfig ConfigLoader::loadTrajectoryConfig(const std::string& path) {
   ROS_INFO("[ConfigLoader] Loading trajectory_core config from: %s", path.c_str());
-
-  try {
-    auto config = trajectory_core::TrajectoryConfig::loadFromYaml(path);
-    ROS_INFO("[ConfigLoader] Trajectory config loaded successfully");
-    return config;
-  } catch (const std::exception& e) {
-    ROS_ERROR("[ConfigLoader] Failed to load trajectory config: %s", e.what());
-    throw;
-  }
-}
-
-void ConfigLoader::loadRecordingParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  nh.param("record_delay_s", config.record_delay_s, 15.0);
-  nh.param("record_min_points", config.record_min_points, 100);
-  nh.param("record_max_hz", config.record_max_hz, 10.0);
-
-  ROS_INFO("[ConfigLoader] Recording params:");
-  ROS_INFO("  record_delay_s: %.1f", config.record_delay_s);
-  ROS_INFO("  record_min_points: %d", config.record_min_points);
-  ROS_INFO("  record_max_hz: %.1f", config.record_max_hz);
-}
-
-void ConfigLoader::loadCh7Params(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  requireParam(nh, "enable_trigger_ch7", config.trigger_config.enable_ch7);
-  requireParam(nh, "ch7_pressed_threshold", config.trigger_config.ch7_pressed_threshold);
-  requireParam(nh, "ch7_hold_s", config.trigger_config.ch7_hold_s);
-
-  ROS_INFO("[ConfigLoader] Ch7 params:");
-  ROS_INFO("  enable_trigger_ch7: %s", config.trigger_config.enable_ch7 ? "true" : "false");
-  ROS_INFO("  ch7_pressed_threshold: %d", config.trigger_config.ch7_pressed_threshold);
-  ROS_INFO("  ch7_hold_s: %.1f", config.trigger_config.ch7_hold_s);
-}
-
-void ConfigLoader::loadCh18Params(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  requireParam(nh, "enable_trigger_ch18", config.trigger_config.enable_ch18);
-  requireParam(nh, "ch18_failsafe_threshold", config.trigger_config.ch18_failsafe_threshold);
-  requireParam(nh, "ch18_confirm_s", config.trigger_config.ch18_confirm_s);
-  nh.param("ch18_hover_wait_s", config.state_machine_config.ch18_hover_wait_s, 15.0);
-
-  ROS_INFO("[ConfigLoader] Ch18 params:");
-  ROS_INFO("  enable_trigger_ch18: %s", config.trigger_config.enable_ch18 ? "true" : "false");
-  ROS_INFO("  ch18_failsafe_threshold: %d", config.trigger_config.ch18_failsafe_threshold);
-  ROS_INFO("  ch18_confirm_s: %.1f", config.trigger_config.ch18_confirm_s);
-  ROS_INFO("  ch18_hover_wait_s: %.1f", config.state_machine_config.ch18_hover_wait_s);
-}
-
-void ConfigLoader::loadRCLossParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  requireParam(nh, "enable_trigger_rc_loss", config.trigger_config.enable_rc_loss);
-  requireParam(nh, "rc_loss_timeout_s", config.trigger_config.rc_loss_timeout_s);
-  requireParam(nh, "rc_loss_debounce_s", config.trigger_config.rc_loss_debounce_s);
-
-  ROS_INFO("[ConfigLoader] RC loss params:");
-  ROS_INFO("  enable_trigger_rc_loss: %s", config.trigger_config.enable_rc_loss ? "true" : "false");
-  ROS_INFO("  rc_loss_timeout_s: %.2f", config.trigger_config.rc_loss_timeout_s);
-  ROS_INFO("  rc_loss_debounce_s: %.2f", config.trigger_config.rc_loss_debounce_s);
-}
-
-void ConfigLoader::loadLowBatteryParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  requireParam(nh, "enable_trigger_low_battery", config.trigger_config.enable_low_battery);
-  requireParam(nh, "low_battery_threshold", config.trigger_config.low_battery_threshold);
-  requireParam(nh, "low_battery_confirm_s", config.trigger_config.low_battery_confirm_s);
-
-  ROS_INFO("[ConfigLoader] Low battery params:");
-  ROS_INFO("  enable_trigger_low_battery: %s", config.trigger_config.enable_low_battery ? "true" : "false");
-  ROS_INFO("  low_battery_threshold: %.2f", config.trigger_config.low_battery_threshold);
-  ROS_INFO("  low_battery_confirm_s: %.1f", config.trigger_config.low_battery_confirm_s);
-}
-
-void ConfigLoader::loadOffboardParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  nh.param("pre_offboard_setpoint_count",
-           config.state_machine_config.pre_offboard_setpoint_count, 20);
-
-  ROS_INFO("[ConfigLoader] OFFBOARD params:");
-  ROS_INFO("  pre_offboard_setpoint_count: %d",
-           config.state_machine_config.pre_offboard_setpoint_count);
-}
-
-void ConfigLoader::loadRejoinParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  nh.param("rejoin_trigger_dist_m", config.rejoin_config.trigger_dist_m, 0.5);
-  nh.param("rejoin_success_dist_m", config.rejoin_config.success_dist_m, 0.4);
-  nh.param("rejoin_v_max_m_s", config.rejoin_config.v_max_m_s, 0.3);
-  nh.param("rejoin_lookahead_time_s", config.rejoin_config.lookahead_time_s, 0.5);
-  nh.param("rejoin_trigger_hold_s", config.rejoin_config.trigger_hold_s, 0.25);
-  nh.param("rejoin_success_hold_s", config.rejoin_config.success_hold_s, 0.10);
-
-  ROS_INFO("[ConfigLoader] Rejoin params:");
-  ROS_INFO("  rejoin_trigger_dist_m: %.2f", config.rejoin_config.trigger_dist_m);
-  ROS_INFO("  rejoin_success_dist_m: %.2f", config.rejoin_config.success_dist_m);
-  ROS_INFO("  rejoin_v_max_m_s: %.2f", config.rejoin_config.v_max_m_s);
-  ROS_INFO("  rejoin_lookahead_time_s: %.2f", config.rejoin_config.lookahead_time_s);
-  ROS_INFO("  rejoin_trigger_hold_s: %.2f", config.rejoin_config.trigger_hold_s);
-  ROS_INFO("  rejoin_success_hold_s: %.2f", config.rejoin_config.success_hold_s);
-}
-
-void ConfigLoader::loadLandingParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  nh.param("landing_hover_s", config.state_machine_config.landing_hover_s, 5.0);
-
-  ROS_INFO("[ConfigLoader] Landing params:");
-  ROS_INFO("  landing_hover_s: %.1f", config.state_machine_config.landing_hover_s);
-}
-
-void ConfigLoader::loadDebugParams(ros::NodeHandle& nh, application::UseCaseConfig& config) {
-  nh.param("debug_enable_csv_dump", config.debug_enable_csv_dump, false);
-  nh.param<std::string>("debug_csv_output_dir", config.debug_csv_output_dir, std::string(""));
-  nh.param("debug_trajectory_sample_dt", config.debug_trajectory_sample_dt, 0.05);
-  nh.param("debug_enable_rviz_publish", config.debug_enable_rviz_publish, false);
-
-  ROS_INFO("[ConfigLoader] Debug params:");
-  ROS_INFO("  debug_enable_csv_dump: %s", config.debug_enable_csv_dump ? "true" : "false");
-  ROS_INFO("  debug_csv_output_dir: %s",
-           config.debug_csv_output_dir.empty() ? "(default: ~/.ros/backtrack_debug/)" : config.debug_csv_output_dir.c_str());
-  ROS_INFO("  debug_trajectory_sample_dt: %.3f", config.debug_trajectory_sample_dt);
-  ROS_INFO("  debug_enable_rviz_publish: %s", config.debug_enable_rviz_publish ? "true" : "false");
+  return trajectory_core::TrajectoryConfig::loadFromYaml(path);
 }
 
 }  // namespace infrastructure

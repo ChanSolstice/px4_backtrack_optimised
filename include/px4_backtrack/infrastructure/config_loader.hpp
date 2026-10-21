@@ -1,6 +1,7 @@
 #pragma once
 
 #include "px4_backtrack/application/backtrack_usecase.hpp"
+#include "px4_backtrack/infrastructure/debug_log.hpp"
 #include <ros/ros.h>
 #include <string>
 
@@ -11,46 +12,20 @@ namespace infrastructure {
 // ConfigLoader类
 // ============================================================================
 
-/// 配置加载器
+/// 配置加载器：参数全部必填，缺失或非法时抛异常（重构方案第 10 节）
 class ConfigLoader {
 public:
   /// 从ROS参数服务器加载返航配置
-  /// @param nh ROS节点句柄
-  /// @return 返航配置
+  /// @param nh 节点私有句柄
   static application::UseCaseConfig loadFromROS(ros::NodeHandle& nh);
+
+  /// 从ROS参数服务器加载调试日志配置
+  /// @param nh 节点私有句柄
+  static DebugLogConfig loadDebugLog(ros::NodeHandle& nh);
 
   /// 从YAML文件加载trajectory_core配置
   /// @param path YAML文件路径
-  /// @return trajectory_core配置
   static trajectory_core::TrajectoryConfig loadTrajectoryConfig(const std::string& path);
-
-private:
-  /// 加载录制参数
-  static void loadRecordingParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
-
-  /// 加载通道7参数
-  static void loadCh7Params(ros::NodeHandle& nh, application::UseCaseConfig& config);
-
-  /// 加载通道18参数
-  static void loadCh18Params(ros::NodeHandle& nh, application::UseCaseConfig& config);
-
-  /// 加载RC丢失参数
-  static void loadRCLossParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
-
-  /// 加载低电量参数
-  static void loadLowBatteryParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
-
-  /// 加载OFFBOARD参数
-  static void loadOffboardParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
-
-  /// 加载回归参数
-  static void loadRejoinParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
-
-  /// 加载降落参数
-  static void loadLandingParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
-
-  /// 加载Debug/可视化参数
-  static void loadDebugParams(ros::NodeHandle& nh, application::UseCaseConfig& config);
 };
 
 }  // namespace infrastructure

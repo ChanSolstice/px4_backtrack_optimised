@@ -27,46 +27,51 @@ domain::Vec3 velocityInParentFrame(const nav_msgs::Odometry& msg) {
 // ============================================================================
 
 StateSubscriber::StateSubscriber(ros::NodeHandle& nh, const std::string& topic)
-  : armed_(false),
+  : connected_(false),
+    armed_(false),
     has_data_(false)
 {
   sub_ = nh.subscribe(topic, 10, &StateSubscriber::stateCallback, this);
   ROS_INFO("[StateSubscriber] Subscribed to: %s", topic.c_str());
 }
 
-bool StateSubscriber::getLatest(bool& armed, std::string& mode) const {
+bool StateSubscriber::getLatest(bool& connected, bool& armed, std::string& mode) const {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!has_data_) {
     return false;
   }
+  connected = connected_;
   armed = armed_;
   mode = mode_;
   return true;
 }
 
-void StateSubscriber::setCallback(std::function<void(bool, const std::string&)> callback) {
+void StateSubscriber::setCallback(std::function<void(bool, bool, const std::string&)> callback) {
   std::lock_guard<std::mutex> lock(mutex_);
   external_callback_ = callback;
 }
 
 void StateSubscriber::stateCallback(const mavros_msgs::State::ConstPtr& msg) {
-  std::function<void(bool, const std::string&)> cb;
+  std::function<void(bool, bool, const std::string&)> cb;
+  bool connected;
   bool armed;
   std::string mode;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    connected_ = msg->connected;
     armed_ = msg->armed;
     mode_ = msg->mode;
     has_data_ = true;
 
+    connected = connected_;
     armed = armed_;
     mode = mode_;
     cb = external_callback_;
   }
 
   if (cb) {
-    cb(armed, mode);
+    cb(connected, armed, mode);
   }
 }
 
@@ -237,6 +242,27 @@ void BatterySubscriber::batteryCallback(const sensor_msgs::BatteryState::ConstPt
 
   if (cb) {
     cb(percentage);
+  }
+}
+
+// ============================================================================
+// ExtendedStateSubscriber实现
+// ============================================================================
+
+ExtendedStateSubscriber::ExtendedStateSubscriber(ros::NodeHandle& nh,
+                                                 const std::string& topic) {
+  sub_ = nh.subscribe(topic, 10, &ExtendedStateSubscriber::extendedStateCallback, this);
+  ROS_INFO("[ExtendedStateSubscriber] Subscribed to: %s", topic.c_str());
+}
+
+void ExtendedStateSubscriber::setCallback(std::function<void(uint8_t)> callback) {
+  callback_ = std::move(callback);
+}
+
+void ExtendedStateSubscriber::extendedStateCallback(
+    const mavros_msgs::ExtendedState::ConstPtr& msg) {
+  if (callback_) {
+    callback_(msg->landed_state);
   }
 }
 

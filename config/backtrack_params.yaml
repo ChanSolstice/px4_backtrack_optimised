@@ -1,7 +1,5 @@
 # 返航节点参数配置文件
-# 基于: 返航实现技术文档 v1.0
-# 版本: 0.1.0
-# 日期: 2026-01-30
+# 依据：doc/design/返航触发与状态机重构方案.md 第 10 节。参数全部必填，代码中没有默认值。
 
 # ============================
 # 基础参数
@@ -20,17 +18,20 @@ record_min_points: 30
 record_max_hz: 15.0
 
 # ============================
-# 通道7触发参数（启动/暂停）
+# 通道7参数（长按返航 / 短按退出）
 # ============================
 
-# 是否启用通道7触发
+# 是否启用通道7
 enable_trigger_ch7: true
 
-# 通道7按下阈值（< 此值视为按下）
+# 通道7按下阈值（< 此值视为按下）；CH7 是两档按钮，1500 是中点
 ch7_pressed_threshold: 1500
 
-# 长按持续时间 (s) - 超过此时间触发返航/恢复
+# 长按持续时间 (s) - 达到时请求返航
 ch7_hold_s: 2.0
+
+# 退出短按的最短按下时间 (s) - 按下 ≥ 此值且在 ch7_hold_s 前松开，松开时请求退出
+ch7_exit_min_s: 0.3
 
 # ============================
 # 通道18触发参数（故障触发）
@@ -42,8 +43,11 @@ enable_trigger_ch18: true
 # 通道18故障阈值（< 此值视为失控）
 ch18_failsafe_threshold: 900
 
-# 故障确认时间 (s) - 持续低于阈值超过此时间才确认
+# 漏桶确认阈值 (s) - 失控帧累计达到此值确认链路丢失，同时是漏桶上限
 ch18_confirm_s: 1.0
+
+# 漏桶每秒泄漏量 - 通道18正常时漏桶按此速率下降
+link_loss_leak_rate: 0.2
 
 # 固定点悬停等待时间 (s)
 ch18_hover_wait_s: 15.0
@@ -62,6 +66,16 @@ rc_loss_timeout_s: 0.15
 rc_loss_debounce_s: 0.1
 
 # ============================
+# 链路恢复与退化
+# ============================
+
+# 链路恢复所需的连续正常时间 (s)
+link_recover_s: 2.0
+
+# 退化判定窗口 (s) - 窗口内出现过失控帧或RC超时即为退化，此时不接受退出和外部切出
+link_degraded_window_s: 5.0
+
+# ============================
 # 低电量触发参数
 # ============================
 
@@ -75,11 +89,51 @@ low_battery_threshold: 0.15
 low_battery_confirm_s: 3.0
 
 # ============================
-# OFFBOARD模式参数
+# 输入新鲜度与在空中判定
 # ============================
 
-# 切换OFFBOARD前的setpoint预发送次数
-pre_offboard_setpoint_count: 20
+# 里程计延迟 (s) - 超过此时间未收到里程计时冻结并保持
+odom_stale_s: 0.25
+
+# 里程计中断 (s)
+odom_timeout_s: 2.0
+
+# 飞控状态中断 (s) - /mavros/state 心跳为 1 Hz
+fcu_state_stale_s: 3.0
+
+# 在空中判定：当前高度比解锁高度至少高出的距离 (m)
+airborne_min_height_m: 0.5
+
+# ============================
+# 返航任务与控制权
+# ============================
+
+# 点数不足时最长等待补点 (s)，仍不足则原地降落
+return_pending_max_s: 3.0
+
+# 申请OFFBOARD前预发的setpoint帧数（6 帧 = 0.3 s）
+pre_offboard_setpoint_count: 6
+
+# 自身断流阈值 (s) - 回看窗口内相邻两次发布间隔 ≥ 此值时，被切出视为飞控回退
+fallback_gap_s: 0.5
+
+# 断流回看窗口 (s)
+fallback_window_s: 3.0
+
+# 飞控回退后等待自动回到OFFBOARD的上限 (s)
+fallback_timeout_s: 3.0
+
+# 重新接入允许的最大横向偏差 (m)
+reclaim_max_offset_m: 1.0
+
+# 降落交接中POSCTL未生效时改为直接请求AUTO.LAND (s)
+handover_posctl_timeout_s: 3.0
+
+# 模式请求的重发间隔 (s)
+mode_request_interval_s: 1.0
+
+# 模式请求的生效超时 (s) - 超时告警 MODE_REQUEST_FAILED
+mode_request_timeout_s: 3.0
 
 # ============================
 # 轨迹回归参数
@@ -132,3 +186,9 @@ debug_trajectory_sample_dt: 0.1
 
 # 是否启用ROS可视化话题发布（录制航迹点+返航轨迹）
 debug_enable_rviz_publish: true
+
+# 是否写调试日志（每次启动一个运行目录，events.jsonl）；试飞期间建议打开
+debug_log_enable: false
+
+# 调试日志根目录；留空为 ~/.ros/backtrack_logs，非空必须是绝对路径
+debug_log_dir: ""
