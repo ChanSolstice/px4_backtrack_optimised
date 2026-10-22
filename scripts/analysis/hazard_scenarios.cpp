@@ -26,6 +26,7 @@ namespace {
 using px4_backtrack::application::BacktrackUseCase;
 using px4_backtrack::application::TickOutput;
 using px4_backtrack::application::UseCaseConfig;
+using px4_backtrack::domain::Alert;
 using px4_backtrack::domain::EventType;
 using px4_backtrack::domain::LandedState;
 using px4_backtrack::domain::SetpointTarget;
@@ -273,6 +274,8 @@ struct World {
   double prepare_seen_t = -1.0;              // 首次进入 ReturnPreOffboard 的时间
   double stall_at = -1.0;                    // 注入一次控制循环卡顿（例如 CPU 被抢占）
   double stall_s = 0.0;
+  bool mode_service_down = false;            // MAVROS set_mode 服务不可用：请求不送达飞控
+  bool pushed_away = false;                  // 飞手已切出并推杆（H15）
 };
 
 struct Metrics {
@@ -294,6 +297,11 @@ struct Metrics {
   double max_sp_gap_in_offboard = 0.0;
   double mission_last_sp_t = -1.0;
   double max_sp_gap_in_mission = 0.0;   // 任务中相邻两次 setpoint 的最大间隔
+  bool left_offboard = false;           // 飞手推开飞机：飞控已离开 OFFBOARD（H15）
+  double regain_t = -1.0;               // 之后飞控重新进入 OFFBOARD 的时刻
+  Vec3 regain_pos = Vec3::Zero();
+  double max_move_after_regain = 0.0;   // 之后飞机离该位置的最大距离
+  bool path_offset_seen = false;        // 出现过 PATH_OFFSET 告警
   double max_tick_ms = 0.0;
 };
 
@@ -629,6 +637,29 @@ std::vector<Scenario> buildScenarios() {
                                             fmt("接管后模块又发出 %.0f 次 OFFBOARD/AUTO.LAND 请求", m.fight_requests) +
                                                 "，最终模式 " + w.fcu.nav}};
                }});
+  s.push_back({"H15", "返航中链路时断时续，飞手切出并把飞机推开，模式服务暂时不可用（D30）", 110.0,
+               [](double t, World& w) {
+                 outbound(t, w);
+                 if (t >= 60.0) w.battery = 0.10;
+                 // 70 s 起每秒掉线 0.3 s：链路退化，被切出时重新申请，不接受退出
+                 w.link_ok = !(t >= 70.0 && std::fmod(t - 70.0, 1.0) >= 0.7);
+                 // 71～81 s 模式服务不可用，模块拿不回 OFFBOARD；飞手拨开关到 ALTCTL，向北推杆 5 s
+                 w.mode_service_down = t >= 71.0 && t < 81.0;
+                 if (t >= 71.0 && !w.pushed_away) {
+                   w.pilot.mode_switch = "ALTCTL";
+                   w.pushed_away = true;
+                 }
+                 if (t >= 71.0 && t < 76.0) w.pilot.vel_cmd = Vec3(0.0, 2.0, 0.0);
+               },
+               [](const World&, const Metrics& m) {
+                 return std::vector<Check>{
+                     {"拿回 OFFBOARD 后原地保持，不直线飞回", m.regain_t > 0.0 && m.max_move_after_regain < 1.0,
+                      m.regain_t > 0.0 ? fmt("%.1f s 拿回 OFFBOARD", m.regain_t) +
+                                             fmt("，之后离该位置最远 %.2f m", m.max_move_after_regain)
+                                       : std::string("没有拿回 OFFBOARD")},
+                     {"离路径超过安全距离时告警", m.path_offset_seen,
+                      m.path_offset_seen ? "出现 PATH_OFFSET" : "没有 PATH_OFFSET"}};
+               }});
   return s;
 }
 
@@ -683,6 +714,16 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
   };
 
   auto updateMetrics = [&](double t) {
+    // 飞手推开飞机后重新进入 OFFBOARD：之后不应直线飞回（D30）
+    if (w.pushed_away && w.fcu.nav != "OFFBOARD") {
+      m.left_offboard = true;
+    } else if (m.left_offboard) {
+      if (m.regain_t < 0.0) {
+        m.regain_t = t;
+        m.regain_pos = w.fcu.pos;
+      }
+      m.max_move_after_regain = std::max(m.max_move_after_regain, (w.fcu.pos - m.regain_pos).norm());
+    }
     // 飞控意图为 OFFBOARD 期间的 setpoint 间隔
     if (w.fcu.intention == "OFFBOARD" && m.last_sp_t > 0.0) {
       m.max_sp_gap_in_offboard = std::max(m.max_sp_gap_in_offboard, t - m.last_sp_t);
@@ -781,13 +822,14 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
         w.fcu.onSetpoint(t_after, *out.setpoint);
         m.last_sp_t = t_after;
       }
+      m.path_offset_seen = m.path_offset_seen || out.alerts.has(Alert::PathOffset);
       if (out.mode_request) {
         // ModeCommander 决定何时发出；服务调用异步，mode_sent 为真（MAVROS 已发出 SET_MODE）
         const std::string& mode = *out.mode_request;
         ++m.mode_requests_sent;
         if (w.pilot_took_over && w.link_ok && mode != "POSCTL") ++m.fight_requests;
-        w.fcu.onModeRequest(t_after, mode);
-        uc.onModeRequestResult(kTimeOffset + t_after, mode, true);
+        if (!w.mode_service_down) w.fcu.onModeRequest(t_after, mode);
+        uc.onModeRequestResult(kTimeOffset + t_after, mode, !w.mode_service_down);
       }
       if (t_after > t) {
         t = t_after;
