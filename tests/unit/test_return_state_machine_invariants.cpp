@@ -15,13 +15,15 @@
 
 // 穷举不变量检查（重构方案第 13 节 R2、系统性分析第 4 节）：
 // 1. 随机游走收集可达的状态机快照，游走本身也逐拍检查；
-// 2. 对每个快照，遍历关键条件的全部组合各走一拍，检查 SC1–SC7、SC9 和结构一致性。
+// 2. 对每个快照，遍历关键条件的全部组合各走一拍，检查 SC1–SC7、SC9–SC11 和结构一致性。
 
 namespace px4_backtrack::domain {
 namespace {
 
 constexpr double kDt = 0.05;
 const char* const kModes[] = {"OFFBOARD", "POSCTL", "AUTO.LAND", "ALTCTL"};
+
+constexpr double kSafeDistanceM = 1.0;
 
 ReturnStateMachineConfig makeConfig() {
   ReturnStateMachineConfig config{};
@@ -33,7 +35,7 @@ ReturnStateMachineConfig makeConfig() {
   config.fallback_timeout_s = 3.0;
   config.handover_posctl_timeout_s = 3.0;
   config.rejoin_trigger_dist_m = 0.5;
-  config.safe_distance_m = 1.0;
+  config.safe_distance_m = kSafeDistanceM;
   return config;
 }
 
@@ -200,6 +202,21 @@ public:
               "SC7 hold target", before, c, out);
     }
 
+    // SC10：跟随阶段离路径超过安全距离或投影失败时，不输出路径目标（D30）
+    if (out.phase == MissionPhase::Follow &&
+        (!c.projection_ok || c.cross_track_m > kSafeDistanceM)) {
+      require(out.setpoint == SetpointKind::Hold && !out.follow_active,
+              "SC10 path target beyond safe distance", before, c, out);
+    }
+
+    // SC11：轨迹在断点处截断时，不因到点、点过近或航点降级失败降落（D30）
+    if (c.trail_gap && out.phase == MissionPhase::Handover && from != MissionPhase::Handover) {
+      const HandoverReason reason = after.handoverReason();
+      require(reason != HandoverReason::Arrived && reason != HandoverReason::PlanTooClose &&
+                  reason != HandoverReason::FallbackFailed,
+              "SC11 landing at trail gap", before, c, out);
+    }
+
     // SC9：只在返航完成、已落地、起点附近或飞控已在降落时请求 AUTO.LAND
     if (out.mode_intent == ModeIntent::AutoLand) {
       require((out.phase == MissionPhase::Handover &&
@@ -305,6 +322,7 @@ public:
     c_.finished = chance(0.01);
     c_.projection_ok = !chance(0.1);
     c_.cross_track_m = uniform() * 2.0;
+    c_.trail_gap = chance(0.05);
     c_.stream_gap_recent = chance(0.05);
     c_.odom_stale = chance(0.02);
     c_.odom_lost = c_.odom_stale && chance(0.3);
@@ -483,6 +501,7 @@ TEST(ReturnStateMachineInvariantTest, ExhaustiveSingleStepFromReachableStates) {
       c.finished = chance(0.2);
       c.projection_ok = chance(0.8);
       c.cross_track_m = chance(0.5) ? 0.2 : 1.5;
+      c.trail_gap = chance(0.3);
       c.odom_stale = chance(0.1);
       c.battery.low = chance(0.3);
 
