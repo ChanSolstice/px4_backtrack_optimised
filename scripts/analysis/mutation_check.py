@@ -32,6 +32,8 @@ COMPONENTS = {
                              False),
     "backtrack_usecase": (["application/backtrack_usecase.cpp"],
                           ["test_main.cpp", "test_backtrack_usecase.cpp"], True),
+    "planning_worker": (["application/planning_worker.cpp"],
+                        ["test_main.cpp", "test_planning_worker.cpp"], True),
 }
 
 # (名称, 组件, 原文, 替换, 说明[, 原文出现次数，默认 1])
@@ -70,6 +72,10 @@ MUTATIONS = [
     ('battery_starts_from_exited', 'return_state_machine', '  const bool battery_low = !from_exited && c.battery.low;', '  const bool battery_low = c.battery.low;', '退出后低电量也启动返航（D1）'),
     ('hover_skipped', 'return_state_machine', '  if (pending_.link_lost) {\n    hover_start_t_ = c.now;', '  if (false) {\n    hover_start_t_ = c.now;', '失控不先悬停（D16）'),
     ('record_in_mission', 'return_state_machine', '  out.follow_active = phase_ == MissionPhase::Follow &&', '  out.record = true;\n  out.follow_active = phase_ == MissionPhase::Follow &&', '任务中继续录制'),
+    ('hover_ends_on_plan_ready', 'return_state_machine',
+     '      if (c.now - hover_start_t_ + kTimeEpsS >= config_.ch18_hover_wait_s) {',
+     '      if (planReady(c) || c.now - hover_start_t_ + kTimeEpsS >= config_.ch18_hover_wait_s) {',
+     '规划就绪就提前结束失控悬停（D3、R-17）'),
     ('offboard_gate_removed', 'return_state_machine',
      '      } else if (!linkClean(c) || !c.fcu_state_fresh ||\n                 c.fcu_state_t > pre_frames_done_t_) {',
      '      } else {', '预发结束后不等飞控状态就申请 OFFBOARD（R-75）'),
@@ -94,6 +100,18 @@ MUTATIONS = [
     ('record_during_mission', 'backtrack_usecase',
      '  if (record_) {\n    recording_buffer_.addPoint(position, yaw, stamp);\n  }\n',
      '  recording_buffer_.addPoint(position, yaw, stamp);\n', '任务期间也录制'),
+    ('planning_timeout_ignored', 'backtrack_usecase',
+     '  if (elapsed + kTimeEpsS >= config_.planning_timeout_s) {', '  if (false) {',
+     '规划超时不改为航点降级（S16）'),
+    ('planning_slow_not_cleared', 'backtrack_usecase',
+     '  c.planning_slow = plan_status_ == domain::PlanStatus::Pending &&\n'
+     '                    now - plan_submit_t_ + kTimeEpsS >= config_.planning_warn_s;\n',
+     '  c.planning_slow = now - plan_submit_t_ + kTimeEpsS >= config_.planning_warn_s;\n',
+     '规划完成后规划慢的告警不清除'),
+    ('cancel_keeps_running_result', 'planning_worker',
+     'void PlanningWorker::cancel() {\n  std::lock_guard<std::mutex> lock(mutex_);\n  ++generation_;\n',
+     'void PlanningWorker::cancel() {\n  std::lock_guard<std::mutex> lock(mutex_);\n',
+     '取消后正在运行的求解仍交出结果'),
 ]
 
 

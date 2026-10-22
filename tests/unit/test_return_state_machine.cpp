@@ -728,7 +728,20 @@ TEST(ReturnStateMachineTest, ReclaimDuringHoverKeepsHoverTimer) {
 }
 
 TEST(ReturnStateMachineTest, HoverKeepsPlanningResultsUntilPrepare) {
-  // D3：悬停期间的规划结果在悬停结束后才处理
+  // D3、R-17：悬停期间的规划结果在悬停结束后才处理，悬停不提前结束
+  Harness r;
+  r.startLinkLossMission();
+  r.acquire();
+  r.c.plan_status = PlanStatus::Ready;
+  r.c.path_start_yaw = r.c.yaw;
+  const int hover_ticks = r.runUntil([](const StepOutput& o) {
+    return o.phase != MissionPhase::Hover;
+  });
+  EXPECT_NEAR(r.c.now - r.sm.mission().start_t, 15.0, 1e-6);
+  EXPECT_GT(hover_ticks, 0);
+  EXPECT_EQ(r.out.phase, MissionPhase::Prepare);
+
+  // 需要降落的失败结果同样等到悬停结束
   Harness h;
   h.startLinkLossMission();
   h.acquire();

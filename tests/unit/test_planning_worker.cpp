@@ -69,8 +69,9 @@ PlanningWorker::Planner gated(Gate& gate) {
   return [&gate](const PlanningInput& input) { return gate.plan(input); };
 }
 
-std::unique_ptr<PlanningResult> waitResult(PlanningWorker& worker) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+std::unique_ptr<PlanningResult> waitResult(
+    PlanningWorker& worker, std::chrono::milliseconds timeout = std::chrono::seconds(2)) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
     if (auto result = worker.takeResult()) {
       return result;
@@ -104,10 +105,11 @@ TEST(PlanningWorkerTest, CancelDiscardsResultOfRunningSolve) {
   worker.request(inputWithPoints(1));
   ASSERT_TRUE(gate.waitStarted(1));
   worker.cancel();
-  worker.request(inputWithPoints(2));
   gate.release();
+  // 被取消的求解结束后不交出结果
+  EXPECT_FALSE(waitResult(worker, std::chrono::milliseconds(100)));
 
-  // 单线程按顺序执行：拿到第二个请求的结果时，第一个已经结束并被丢弃
+  worker.request(inputWithPoints(2));
   const auto result = waitResult(worker);
   ASSERT_TRUE(result);
   EXPECT_EQ(result->point_count, 2u);
