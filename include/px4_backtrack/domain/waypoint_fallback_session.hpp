@@ -36,7 +36,7 @@ public:
   /// 是否已执行完成
   bool isFinished() const;
 
-  /// 获取当前目标 setpoint
+  /// 获取当前目标 setpoint；只在会话有效时调用
   SetpointTarget currentTarget() const;
 
   /// 获取稀疏 waypoint 数量

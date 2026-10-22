@@ -100,10 +100,6 @@ void WaypointFallbackSession::updateProgress(const Vec3& current_position) {
     return;
   }
 
-  if (current_index_ >= waypoints_.size()) {
-    return;
-  }
-
   double dist = (current_position - waypoints_[current_index_].position).norm();
   if (dist > reach_radius_m_) {
     return;
@@ -127,12 +123,7 @@ bool WaypointFallbackSession::isFinished() const {
 
 SetpointTarget WaypointFallbackSession::currentTarget() const {
   SetpointTarget target;
-  if (!isValid()) {
-    return target;
-  }
-
-  const size_t clamped_index = std::min(current_index_, waypoints_.size() - 1);
-  const auto& waypoint = waypoints_[clamped_index];
+  const auto& waypoint = waypoints_[current_index_];
   target.position = waypoint.position;
   target.velocity = Vec3::Zero();
   target.yaw = waypoint.yaw;

@@ -226,11 +226,7 @@ bool TrajectorySession::updateProgressImpl(
     double lookahead_time_s,
     double forward_window_scale,
     double lookahead_scale_distance_m) {
-  if (!traj_ || !traj_->isValid() || !current_position.allFinite() ||
-      !std::isfinite(lookahead_time_s) ||
-      !std::isfinite(forward_window_scale) ||
-      !std::isfinite(lookahead_scale_distance_m) ||
-      forward_window_scale <= 0.0) {
+  if (!isValid()) {
     projection_valid_ = false;
     return false;
   }
@@ -254,8 +250,7 @@ bool TrajectorySession::updateProgressImpl(
         1.0 - cross_track_error_ / lookahead_scale_distance_m, 0.0, 1.0);
   }
   const double lookahead_m = std::clamp(
-      projected_state.velocity.norm() * std::max(0.0, lookahead_time_s) *
-          lookahead_scale,
+      projected_state.velocity.norm() * lookahead_time_s * lookahead_scale,
       kLookaheadMinM,
       kLookaheadMaxM);
   const double candidate_target_s =
@@ -279,7 +274,7 @@ trajectory_core::ProjectionResult TrajectorySession::projectLocal(
 }
 
 bool TrajectorySession::probe(const Vec3& position, double& cross_track_m) const {
-  if (!traj_ || !traj_->isValid() || !position.allFinite()) {
+  if (!isValid()) {
     return false;
   }
   const auto projection = projectLocal(position, 1.0);
@@ -296,9 +291,7 @@ const trajectory_core::TrajectoryState& TrajectorySession::getTargetState() cons
 bool TrajectorySession::isFinished(const Vec3& current_position,
                                    const Vec3& current_velocity,
                                    double position_tolerance_m) const {
-  if (!traj_ || !traj_->isValid() || !projection_valid_ ||
-      position_tolerance_m < 0.0 || !current_position.allFinite() ||
-      !current_velocity.allFinite()) {
+  if (!isValid() || !projection_valid_) {
     return false;
   }
 

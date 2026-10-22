@@ -52,17 +52,8 @@ bool RecordingBuffer::addPoint(const Vec3& position, double yaw, double odom_sta
     return false;  // 被节流过滤
   }
 
-  // 计算相对时间戳（从第一个点开始）
-  double relative_timestamp = odom_stamp - time_origin_;
-
-  // 单调性检查（防御性编程）
-  if (!points_.empty() && relative_timestamp <= points_.back().timestamp) {
-    // 时间戳未增加或回退，跳过此点
-    return false;
-  }
-
-  // 添加录制点
-  points_.emplace_back(position, yaw, relative_timestamp);
+  // 相对时间戳：节流已保证比上一个点至少晚 min_dt_，单调递增
+  points_.emplace_back(position, yaw, odom_stamp - time_origin_);
   last_record_stamp_ = odom_stamp;
 
   return true;
