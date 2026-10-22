@@ -226,6 +226,7 @@ ReturnStateMachine::ReturnStateMachine(const ReturnStateMachineConfig& config)
 StepOutput ReturnStateMachine::step(const Conditions& c) {
   StepOutput out;
   trigger_ignored_landed_ = false;
+  path_offset_ = false;
   emitInputEvents(c, out);
 
   if (!c.armed) {
@@ -434,6 +435,11 @@ void ReturnStateMachine::stepPrepare(const Conditions& c, StepOutput& out) {
   if (control_ != ControlState::Owned || c.odom_stale) {
     return;
   }
+  // 开始跟随前检查偏差：离路径超过安全距离时原地保持（D30）
+  if (!offsetOk(c)) {
+    path_offset_ = true;
+    return;
+  }
   if (c.path_start_yaw && !yawAligned(c.yaw, *c.path_start_yaw)) {
     return;
   }
@@ -441,6 +447,11 @@ void ReturnStateMachine::stepPrepare(const Conditions& c, StepOutput& out) {
 }
 
 void ReturnStateMachine::stepFollow(const Conditions& c, StepOutput& out) {
+  // 离路径超过安全距离（含投影失败）：原地保持、冻结进度，不回归（D30）
+  if (!offsetOk(c)) {
+    path_offset_ = true;
+    return;
+  }
   // 不持有控制权或里程计延迟时冻结进度（R-18）
   if (control_ != ControlState::Owned || c.odom_stale) {
     return;
@@ -581,7 +592,6 @@ bool ReturnStateMachine::switchedOut(const Conditions& c, const char* rule,
   // 链路丢失或退化：重新申请控制权（D2）
   reclaim_position_ = c.position;
   reclaim_yaw_ = c.yaw;
-  path_offset_ = false;
   setControl(ControlState::Reclaiming, rule, "LINK_ABNORMAL", out);
   return false;
 }
@@ -597,8 +607,7 @@ void ReturnStateMachine::tryReclaim(const Conditions& c, StepOutput& out) {
 
   // 跟随阶段：对准路径目标切向，且局部投影有效、偏差不超限，才重新接入（第 7.3 节）
   const bool yaw_ok = !c.path_target_yaw || yawAligned(c.yaw, *c.path_target_yaw);
-  const bool offset_ok =
-      c.projection_ok && c.cross_track_m <= config_.safe_distance_m;
+  const bool offset_ok = offsetOk(c);
   path_offset_ = !offset_ok;
   if (!yaw_ok || !offset_ok) {
     return;
@@ -872,8 +881,20 @@ void ReturnStateMachine::computeMissionOutputs(const Conditions& c,
       }
       break;
     case MissionPhase::Follow:
-      kind = follow_ == FollowMode::OnPath ? SetpointKind::PathTarget
-                                           : SetpointKind::PathTargetRejoin;
+      if (path_offset_) {
+        // 离路径超过安全距离：原地保持（D30）
+        if (!offset_hold_active_) {
+          offset_hold_active_ = true;
+          offset_hold_position_ = c.position;
+          offset_hold_yaw_ = c.yaw;
+        }
+        position = offset_hold_position_;
+        yaw = offset_hold_yaw_;
+      } else {
+        offset_hold_active_ = false;
+        kind = follow_ == FollowMode::OnPath ? SetpointKind::PathTarget
+                                             : SetpointKind::PathTargetRejoin;
+      }
       break;
     case MissionPhase::Arrival:
       position = arrival_position_;
@@ -915,7 +936,7 @@ void ReturnStateMachine::computeMissionOutputs(const Conditions& c,
     out.hold_yaw = yaw;
   }
   out.follow_active = phase_ == MissionPhase::Follow &&
-                      control_ == ControlState::Owned && !c.odom_stale;
+                      control_ == ControlState::Owned && !c.odom_stale && !path_offset_;
 
   switch (control_) {
     case ControlState::Acquiring:
@@ -986,10 +1007,8 @@ void ReturnStateMachine::computeAlerts(const Conditions& c, StepOutput& out) {
   }
   if (ignored_return_press_id_ != 0) alerts.set(Alert::ReturnRequestIgnored);
 
-  if (control_ == ControlState::Reclaiming) {
-    alerts.set(Alert::Reclaiming);
-    if (path_offset_) alerts.set(Alert::PathOffset);
-  }
+  if (control_ == ControlState::Reclaiming) alerts.set(Alert::Reclaiming);
+  if (path_offset_) alerts.set(Alert::PathOffset);
   if (control_ == ControlState::Fallback) alerts.set(Alert::OffboardFallback);
   if (phase_ == MissionPhase::FcuLanding && c.link.lost &&
       knownMode() != kModeAutoLand) {
@@ -1049,6 +1068,10 @@ void ReturnStateMachine::emitInputEvents(const Conditions& c, StepOutput& out) {
 
 bool ReturnStateMachine::linkClean(const Conditions& c) const {
   return !c.link.lost && !c.link.degraded;
+}
+
+bool ReturnStateMachine::offsetOk(const Conditions& c) const {
+  return c.projection_ok && c.cross_track_m <= config_.safe_distance_m;
 }
 
 bool ReturnStateMachine::planReady(const Conditions& c) const {

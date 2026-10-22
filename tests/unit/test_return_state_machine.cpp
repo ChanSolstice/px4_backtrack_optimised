@@ -823,6 +823,64 @@ TEST(ReturnStateMachineTest, PrepareNeedsOwnedReadyAndAligned) {
   EXPECT_EQ(f.out.phase, MissionPhase::Follow);
 }
 
+TEST(ReturnStateMachineTest, PrepareWaitsUntilWithinSafeDistance) {
+  // D30：开始跟随前，离路径超过安全距离（或投影失败）时原地保持并告警
+  Harness h;
+  h.startLowBatteryMission();
+  h.acquire();
+  h.c.plan_status = PlanStatus::Ready;
+  h.c.path_start_yaw = h.c.yaw;
+  h.c.cross_track_m = 1.5;
+  h.run(1.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+  EXPECT_TRUE(h.out.alerts.has(Alert::PathOffset));
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+
+  h.c.cross_track_m = 0.3;
+  h.c.projection_ok = false;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+  EXPECT_TRUE(h.out.alerts.has(Alert::PathOffset));
+
+  h.c.projection_ok = true;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_FALSE(h.out.alerts.has(Alert::PathOffset));
+}
+
+TEST(ReturnStateMachineTest, FollowHoldsWhenOffsetExceedsSafeDistance) {
+  // D30：跟随中离路径超过安全距离或投影失败：原地保持、冻结进度，不回归；回到安全距离内后继续
+  Harness h;
+  h.toFollow();
+  h.c.position = Vec3(4.0, 5.0, 6.0);
+  h.c.cross_track_m = 1.5;
+  h.c.deviation_confirmed = true;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_EQ(h.out.follow, FollowMode::OnPath);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(4.0, 5.0, 6.0)));
+  EXPECT_FALSE(h.out.follow_active);
+  EXPECT_TRUE(h.out.alerts.has(Alert::PathOffset));
+
+  // 保持点不随之后的位置变化
+  h.c.position = Vec3(4.2, 5.0, 6.0);
+  h.c.cross_track_m = 0.3;
+  h.c.projection_ok = false;
+  h.step();
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(4.0, 5.0, 6.0)));
+
+  // 回到安全距离内：偏差超过回归阈值时进入回归
+  h.c.projection_ok = true;
+  h.c.cross_track_m = 0.7;
+  h.step();
+  EXPECT_EQ(h.out.follow, FollowMode::Rejoin);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::PathTargetRejoin);
+  EXPECT_TRUE(h.out.follow_active);
+  EXPECT_FALSE(h.out.alerts.has(Alert::PathOffset));
+}
+
 TEST(ReturnStateMachineTest, PlanFailuresLandOrHold) {
   Harness t;
   t.startLowBatteryMission();

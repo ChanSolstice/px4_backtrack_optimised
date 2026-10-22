@@ -207,9 +207,9 @@ domain::Conditions BacktrackUseCase::assembleConditions(double now) const {
     c.finished = trajectory_session_->isFinished(position_, velocity_,
                                                  kReturnEndPositionToleranceM);
   } else if (plan_status_ == domain::PlanStatus::ReadyFallback) {
-    // 航点降级没有切向和投影：不要求对准，按投影有效、偏差 0 提供（第 5.6 节）
+    // 航点降级没有切向和投影：不要求对准；偏差取到当前目标航点的距离（D30）
     c.projection_ok = true;
-    c.cross_track_m = 0.0;
+    c.cross_track_m = (position_ - waypoint_fallback_session_.currentTarget().position).norm();
     c.finished = waypoint_fallback_session_.isFinished();
   }
   c.deviation_confirmed = deviation_confirmed_;

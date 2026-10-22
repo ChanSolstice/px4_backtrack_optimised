@@ -203,13 +203,14 @@ public:
     step();
   }
 
-  /// 解锁、起飞到 2 m，向东飞 3 m 录制
-  void flyOutbound() {
+  /// 解锁、起飞到 2 m，向东飞 length_m 录制
+  void flyOutbound(double length_m = 3.0) {
     arm();
     landed = LandedState::InAir;
     pos = Vec3(0.0, 0.0, 2.0);
     ASSERT_TRUE(runUntilState("Recording", 5.0));
-    for (int i = 0; i <= 30; ++i) {
+    const int n = static_cast<int>(std::lround(length_m * 10.0));
+    for (int i = 0; i <= n; ++i) {
       pos = Vec3(0.1 * i, 0.0, 2.0);
       step();
     }
@@ -708,6 +709,71 @@ TEST(BacktrackUseCaseTest, NewFlightFirstPublishIsNotAStreamGap) {
   s.mode = "ALTCTL";
   s.step();
   EXPECT_TRUE(s.in("Exited"));
+}
+
+/// S32：返航中链路丢失，飞手切出并把飞机飞开 5 m，之后模块重新拿到 OFFBOARD
+void checkReclaimAfterPilotMovedAircraft(Sim& s) {
+  ASSERT_TRUE(s.in("ReturnActive"));
+  s.link_ok = false;
+  ASSERT_TRUE(s.runUntil([&] { return s.out.link_lost; }, 2.0));
+  s.reject_offboard = true;  // 飞手的模式先保持一会儿
+  s.mode = "POSCTL";
+  s.track = false;
+  const Vec3 switch_out = s.pos;
+  for (int i = 0; i < 20; ++i) {
+    s.pos += Vec3(0.0, 0.25, 0.0);
+    s.step();
+  }
+  ASSERT_TRUE(s.alert(Alert::Reclaiming));
+  s.reject_offboard = false;
+  s.track = true;
+  ASSERT_TRUE(s.runUntil([&] { return s.mode == "OFFBOARD"; }, 2.0));
+  const Vec3 regained = s.pos;
+  s.run(3.0);
+  // 原地保持并告警，不飞回切出时的位置，也不直线飞回路径
+  EXPECT_LT((s.pos - regained).norm(), 0.1);
+  EXPECT_GT((s.pos - switch_out).norm(), 4.5);
+  EXPECT_TRUE(s.alert(Alert::PathOffset));
+  ASSERT_TRUE(s.out.setpoint);
+  EXPECT_LT((s.out.setpoint->position - s.pos).norm(), 0.1);
+}
+
+TEST(BacktrackUseCaseTest, PilotMovedAircraftDuringReclaimHoldsInPlace) {
+  Sim s;
+  s.flyOutbound(10.0);
+  s.battery = 0.10;
+  ASSERT_TRUE(s.runUntilState("ReturnActive", 5.0));
+  s.run(0.5);
+  checkReclaimAfterPilotMovedAircraft(s);
+  EXPECT_TRUE(s.in("ReturnActive"));
+}
+
+TEST(BacktrackUseCaseTest, PilotMovedAircraftDuringReclaimHoldsInPlaceWithWaypoints) {
+  // 航点降级：偏差取到当前目标航点的距离，同样原地保持（D30）
+  Sim s;
+  s.flyOutbound(10.0);
+  s.hold_planning = true;
+  s.battery = 0.10;
+  ASSERT_TRUE(s.runUntil([&] { return s.alert(Alert::PlanningTimeoutFallback); }, 32.0));
+  s.hold_planning = false;
+  ASSERT_TRUE(s.runUntilState("ReturnActive", 2.0));
+  s.run(0.5);
+  checkReclaimAfterPilotMovedAircraft(s);
+  EXPECT_TRUE(s.in("ReturnActive"));
+}
+
+TEST(BacktrackUseCaseTest, PositionJumpDuringReturnHoldsInPlace) {
+  // D30：返航中定位突跳 3 m（飞机实际没动）：原地保持，不朝路径直线飞
+  Sim s;
+  s.startLowBatteryReturn();
+  s.run(0.5);
+  s.track = false;
+  s.pos += Vec3(0.0, 3.0, 0.0);
+  s.run(0.5);
+  EXPECT_TRUE(s.in("ReturnActive"));
+  EXPECT_TRUE(s.alert(Alert::PathOffset));
+  ASSERT_TRUE(s.out.setpoint);
+  EXPECT_LT((s.out.setpoint->position - s.pos).norm(), 0.1);
 }
 
 // ============================================================================

@@ -332,6 +332,8 @@ private:
   const std::string& knownMode() const { return last_mode_; }
   bool linkClean(const Conditions& c) const;
   bool planReady(const Conditions& c) const;
+  /// 局部投影有效，且横向偏差不超过安全距离（D30）
+  bool offsetOk(const Conditions& c) const;
 
   /// 配置参数
   ReturnStateMachineConfig config_;
@@ -362,7 +364,7 @@ private:
   double trigger_yaw_{0.0};
   Vec3 arrival_position_ = Vec3::Zero();   ///< 到点
   double arrival_yaw_{0.0};
-  Vec3 reclaim_position_ = Vec3::Zero();   ///< 进入重新申请时
+  Vec3 reclaim_position_ = Vec3::Zero();   ///< 重新申请：拿回 OFFBOARD 之前跟着飞机（D30）
   double reclaim_yaw_{0.0};
   Vec3 handover_position_ = Vec3::Zero();  ///< 进入交接时
   double handover_yaw_{0.0};
@@ -371,11 +373,14 @@ private:
   bool odom_hold_active_{false};           ///< 里程计延迟时的保持点
   Vec3 odom_hold_position_ = Vec3::Zero();
   double odom_hold_yaw_{0.0};
+  bool offset_hold_active_{false};         ///< 跟随中离路径超过安全距离时的保持点（D30）
+  Vec3 offset_hold_position_ = Vec3::Zero();
+  double offset_hold_yaw_{0.0};
 
   // 任务中
   int pre_frames_{0};                ///< 已预发的 setpoint 帧数
   double pre_frames_done_t_{0.0};    ///< 预发结束的时间（R-75）
-  bool path_offset_{false};          ///< 离路径超过安全距离，原地保持（D30）
+  bool path_offset_{false};          ///< 本拍离路径超过安全距离，原地保持（D30）
   bool exit_rejected_{false};        ///< 链路异常时收到短按
   bool trigger_ignored_landed_{false};  ///< 本拍有触发但不在空中
   int ignored_return_press_id_{0};   ///< 退出后被忽略的长按
