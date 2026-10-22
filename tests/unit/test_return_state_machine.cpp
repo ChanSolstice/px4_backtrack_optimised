@@ -689,6 +689,33 @@ TEST(ReturnStateMachineTest, ReclaimChecksYawAndOffset) {
   EXPECT_EQ(h.out.setpoint, SetpointKind::PathTargetRejoin);
 }
 
+TEST(ReturnStateMachineTest, ReclaimHoldsWhereOffboardIsRegained) {
+  // S32、D30：飞手在链路异常时把飞机移开，拿回 OFFBOARD 时原地保持，不飞回切出时的位置
+  Harness h;
+  h.toFollow();
+  h.linkLost();
+  h.c.path_target_yaw = h.c.yaw;
+  h.c.mode = "POSCTL";
+  h.step();
+  ASSERT_EQ(h.out.control, ControlState::Reclaiming);
+  for (int i = 1; i <= 20; ++i) {
+    h.c.position += Vec3(1.0, 0.0, 0.0);
+    h.step();
+    EXPECT_TRUE(h.out.hold_position.isApprox(h.c.position)) << i;
+  }
+  const Vec3 regained = h.c.position;
+  h.c.mode = "OFFBOARD";
+  h.c.cross_track_m = 20.0;
+  h.c.position += Vec3(0.3, 0.0, 0.0);
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Reclaiming);
+  EXPECT_TRUE(h.out.alerts.has(Alert::PathOffset));
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+  EXPECT_TRUE(h.out.hold_position.isApprox(regained));
+  h.run(2.0);
+  EXPECT_TRUE(h.out.hold_position.isApprox(regained));
+}
+
 TEST(ReturnStateMachineTest, ReclaimExitsWhenLinkRecoversInPilotMode) {
   // R-63：重新申请期间链路恢复，模式仍不是 OFFBOARD
   Harness h;
@@ -706,19 +733,25 @@ TEST(ReturnStateMachineTest, ReclaimExitsWhenLinkRecoversInPilotMode) {
 }
 
 TEST(ReturnStateMachineTest, ReclaimDuringHoverKeepsHoverTimer) {
+  // 悬停阶段重新接入后保持在重新接入时的位置，不飞回触发点（D30）
   Harness h;
   h.startLinkLossMission();
-  const Vec3 trigger = h.c.position;
   h.acquire();
   h.c.mode = "POSCTL";
   h.c.position = Vec3(0.5, 0.5, 3.0);
   h.step();
   ASSERT_EQ(h.out.control, ControlState::Reclaiming);
   EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(0.5, 0.5, 3.0)));
+  h.c.position = Vec3(6.0, 0.5, 3.0);  // 飞手把飞机移开
+  h.step();
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(6.0, 0.5, 3.0)));
   h.c.mode = "OFFBOARD";
   h.step();
   EXPECT_EQ(h.out.control, ControlState::Owned);
-  EXPECT_TRUE(h.out.hold_position.isApprox(trigger));
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(6.0, 0.5, 3.0)));
+  h.c.position = Vec3(6.2, 0.5, 3.0);
+  h.step();
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(6.0, 0.5, 3.0)));
   // 悬停计时从任务开始算，不因重新申请重置
   const int ticks = h.runUntil([](const StepOutput& o) {
     return o.phase == MissionPhase::Prepare;

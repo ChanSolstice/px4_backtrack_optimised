@@ -588,6 +588,9 @@ bool ReturnStateMachine::switchedOut(const Conditions& c, const char* rule,
 
 void ReturnStateMachine::tryReclaim(const Conditions& c, StepOutput& out) {
   if (phase_ != MissionPhase::Follow) {
+    // 悬停、准备、到点阶段：保持点改为重新接入时的位置，不飞回原来的位置（D30）
+    trigger_position_ = reclaim_position_;
+    arrival_position_ = reclaim_position_;
     setControl(ControlState::Owned, "4", "RECLAIMED", out);
     return;
   }
@@ -880,8 +883,13 @@ void ReturnStateMachine::computeMissionOutputs(const Conditions& c,
       break;
   }
 
-  // 重新申请：保持进入时的位置；跟随阶段 yaw 对准路径目标切向
+  // 重新申请：拿回 OFFBOARD 之前保持点跟着飞机，拿回后固定，即原地保持（D30）；
+  // 跟随阶段 yaw 对准路径目标切向
   if (control_ == ControlState::Reclaiming) {
+    if (knownMode() != kModeOffboard) {
+      reclaim_position_ = c.position;
+      reclaim_yaw_ = c.yaw;
+    }
     if (phase_ == MissionPhase::Follow) {
       yaw = c.path_target_yaw ? *c.path_target_yaw : reclaim_yaw_;
     }
