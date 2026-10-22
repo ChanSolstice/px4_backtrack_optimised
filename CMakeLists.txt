@@ -72,6 +72,7 @@ set(DOMAIN_SOURCES
 set(APPLICATION_SOURCES
   src/application/backtrack_usecase.cpp
   src/application/mode_commander.cpp
+  src/application/planning_worker.cpp
 )
 
 ## Adapters层源文件
@@ -218,6 +219,17 @@ if(CATKIN_ENABLE_TESTING)
   )
   if(TARGET test_mode_commander)
     target_link_libraries(test_mode_commander
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+  endif()
+
+  catkin_add_gtest(test_planning_worker
+    tests/unit/test_main.cpp
+    tests/unit/test_planning_worker.cpp
+  )
+  if(TARGET test_planning_worker)
+    target_link_libraries(test_planning_worker
       ${PROJECT_NAME}_lib
       ${catkin_LIBRARIES}
     )
