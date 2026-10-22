@@ -1158,10 +1158,14 @@ TEST(ReturnStateMachineTest, ConditionAlertsArePassedThrough) {
   h.c.link.ch18_unexpected = true;
   h.c.link.ch18_value = 998;
   h.c.battery.invalid = true;
+  h.c.planning_slow = true;
+  h.c.planning_timed_out = true;
   h.step();
   EXPECT_TRUE(h.out.alerts.has(Alert::ModeRequestFailed));
   EXPECT_TRUE(h.out.alerts.has(Alert::Ch18Unexpected));
   EXPECT_TRUE(h.out.alerts.has(Alert::BatteryInvalid));
+  EXPECT_TRUE(h.out.alerts.has(Alert::PlanningSlow));
+  EXPECT_TRUE(h.out.alerts.has(Alert::PlanningTimeoutFallback));
   EXPECT_TRUE(h.sawNamed(EventType::Condition, "ch18_unexpected", "value=998"));
   EXPECT_TRUE(h.sawNamed(EventType::Alert, "CH18_UNEXPECTED"));
   EXPECT_EQ(h.out.phase, MissionPhase::Recording);

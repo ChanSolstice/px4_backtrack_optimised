@@ -24,8 +24,7 @@ enum class PlanStatus {
   ReadyFallback,   ///< 航点降级就绪
   FailedTooClose,  ///< 点过近：原地降落
   FailedConfig,    ///< 配置非法：保持并告警
-  FailedFallback,  ///< 航点降级也构建失败：原地降落
-  Timeout          ///< 规划超时，正在改为航点降级
+  FailedFallback   ///< 航点降级也构建失败：原地降落
 };
 
 // ============================================================================
@@ -57,6 +56,8 @@ struct Conditions {
   // 执行事实（第 5.6 节）
   bool has_min_points{false};             ///< 录制点数 ≥ record_min_points
   PlanStatus plan_status{PlanStatus::None};
+  bool planning_slow{false};              ///< 规划中且已超过 planning_warn_s（R-76）
+  bool planning_timed_out{false};         ///< 本任务的航点降级来自规划超时，持续到任务结束（R-76）
   std::optional<double> path_start_yaw;   ///< 轨迹就绪后的路径起始切向；航点降级没有，不要求对准
   std::optional<double> path_target_yaw;  ///< 跟随阶段当前路径目标的切向（重新接入时对准）
   bool deviation_confirmed{false};        ///< 偏离已持续确认，或局部投影失败

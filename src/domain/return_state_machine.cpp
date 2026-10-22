@@ -427,7 +427,7 @@ void ReturnStateMachine::stepPrepare(const Conditions& c, StepOutput& out) {
     case PlanStatus::ReadyFallback:
       break;
     default:
-      // 规划中、超时正在降级或配置非法：保持（配置非法由准备超时兜底，R6）
+      // 规划中或配置非法：保持（配置非法由准备超时兜底，R6）
       return;
   }
 
@@ -962,6 +962,8 @@ void ReturnStateMachine::computeAlerts(const Conditions& c, StepOutput& out) {
   if (!c.fcu_state_fresh) alerts.set(Alert::FcuStateStale);
   if (c.mode_request_failed) alerts.set(Alert::ModeRequestFailed);
   if (c.debug_log_failed) alerts.set(Alert::DebugLogFailed);
+  if (c.planning_slow) alerts.set(Alert::PlanningSlow);
+  if (c.planning_timed_out) alerts.set(Alert::PlanningTimeoutFallback);
 
   if (pending_.active) alerts.set(Alert::ReturnPending);
   if (trigger_ignored_landed_) alerts.set(Alert::TriggerIgnoredLanded);

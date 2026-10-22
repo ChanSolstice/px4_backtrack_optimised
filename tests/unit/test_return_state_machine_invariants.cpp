@@ -295,7 +295,7 @@ public:
     c_.has_min_points = !chance(0.2);
 
     if (chance(0.05)) {
-      c_.plan_status = static_cast<PlanStatus>(rng_() % 8);
+      c_.plan_status = static_cast<PlanStatus>(rng_() % 7);
     }
     c_.path_start_yaw = chance(0.7) ? std::optional<double>(c_.yaw + (chance(0.8) ? 0.0 : 1.0))
                                     : std::nullopt;
@@ -475,7 +475,7 @@ TEST(ReturnStateMachineInvariantTest, ExhaustiveSingleStepFromReachableStates) {
             ++press_id, snapshot.sm.mission().start_t - 1.0, c.now, clean};
       }
       // 其余事实随机取值
-      c.plan_status = static_cast<PlanStatus>(rng() % 8);
+      c.plan_status = static_cast<PlanStatus>(rng() % 7);
       c.path_start_yaw = chance(0.5) ? std::optional<double>(c.yaw) : std::nullopt;
       c.path_target_yaw = chance(0.5) ? std::optional<double>(c.yaw) : std::nullopt;
       c.deviation_confirmed = chance(0.3);
