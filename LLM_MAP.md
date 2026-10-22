@@ -10,7 +10,7 @@
 4. 所有状态转移都在 [`return_state_machine.cpp`](src/domain/return_state_machine.cpp) 的 `step()` 中完成，规则编号对应方案第 6.3 节。不要在 UseCase 里改状态或加分支。
 5. 条件层（`link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor`）只做检测，输出电平和带编号的按键指令，是否响应由状态机决定。
 6. 设计变化先改方案文档，并在第 15 节记一条审核记录（R-xx），再改代码；用户已确认的决策是 D1–D29。
-7. 本分支实施到 R5。超时升级（R6）、JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+7. 本分支实施到 R5b（D30 安全距离）。超时升级（R6）、JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
 8. 参数全部在 [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 中必填，代码中没有默认值；新增参数要同时改 config 结构体、[`config_loader.cpp`](src/infrastructure/config_loader.cpp) 和 YAML。
 9. 用户要求整体简洁、避免过度防御：不加初值已保证的标志、不重复复位、不为小概率场景堆保护；不了解下方环境时，悬停优先于降落。
 
@@ -118,6 +118,10 @@
 ### 9. 起始对准
 
 准备阶段保持触发位置，yaw 设为路径起始切向，误差 ≤ 15° 且已持有控制权才开始跟随；没有 yaw 斜坡，原地转速由 PX4（`MC_YAWRATE_MAX`）限制。航点降级没有切向，不要求对准。
+
+### 10. 安全距离（D30）
+
+只沿录制轨迹飞行，不在录制轨迹上的直线移动不超过 `safe_distance_m`（1.0 m），超过就原地保持并告警：保持点都取飞机所在的位置（重新申请期间跟着飞机，拿回 OFFBOARD 后固定）；开始和恢复跟随前检查偏差；跟随中投影失败或偏差超限时不回归；录制轨迹中相邻两点超过安全距离即为断点，规划不跨越，返航停在断点处悬停、不降落。用户明确要求杜绝直线飞向起点（2026-10-22），改这些逻辑前先读方案第 7.8 节。
 
 ## 常见改动应该改哪里
 

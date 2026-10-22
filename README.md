@@ -13,6 +13,7 @@
 - 规划前对悬停形成的密集录制点做空间抽稀；生成失败时改为逆序航点降级返航，起终点过近时原地降落。
 - 按实际位置在路径上的局部投影推进进度，不依赖 wall time；偏离超过 0.5 m 时沿路径低速回归。
 - 控制权由状态机管理：预发 setpoint 后申请 OFFBOARD；本模块断流引起的飞控回退不算接管，等飞控自动回到 OFFBOARD；链路正常时飞手拨开关或短按 CH7 退出返航，链路丢失或不稳定时被切出则重新申请控制权。
+- 只沿录制轨迹飞行（D30）：离路径超过安全距离（1.0 m）、重新拿到控制权时飞机已被移开、或录制轨迹中有超过安全距离的跳变时，原地悬停并告警，不直线飞过去。
 - 到点悬停 5 s 后降落交接：链路正常时经 POSCTL 请求 AUTO.LAND，链路丢失时直接请求；飞控进入 AUTO.LAND 后让步到上锁。
 - 模式请求在单独线程中异步调用，未生效时每 1 s 重发，3 s 未生效告警。
 - 发布状态字符串、链路丢失和低电量；事件写 rosout，可选写入调试日志（`events.jsonl`）。
@@ -22,7 +23,7 @@
 
 当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。
 
-本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线、R4 后台规划、R5 退出后截断轨迹已完成，节点运行的是新状态机，dev 的暂停/恢复语义已删除。R6 超时与升级、R7 上报与调试日志完善、R8 文档与部署还没有实施，现在与方案的差距见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线、R4 后台规划、R5 退出后截断轨迹、R5b 安全距离（D30）已完成，节点运行的是新状态机，dev 的暂停/恢复语义已删除。R6 超时与升级、R7 上报与调试日志完善、R8 文档与部署还没有实施，现在与方案的差距见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
 
 本分支还没有实飞。按方案，R6 完成后做完整 SITL，R7 完成并通过台架检查后再上实飞。
 
@@ -237,8 +238,8 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 
 | 层次 | 命令 | 说明 |
 | --- | --- | --- |
-| 单元测试 | `scripts/docker/run_tests.sh amd64` | 在全新的 ROS Noetic 容器中编译并运行全部单测（195 个）和 trajectory_core 的单测；参数换成 `arm64` 时在 QEMU 中按机载架构复核（本机编译加单测约 30 分钟） |
-| 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误（52 种） |
+| 单元测试 | `scripts/docker/run_tests.sh amd64` | 在全新的 ROS Noetic 容器中编译并运行全部单测（205 个）和 trajectory_core 的单测；参数换成 `arm64` 时在 QEMU 中按机载架构复核（本机编译加单测约 30 分钟） |
+| 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误（61 种） |
 | 闭环危害场景 | `scripts/analysis/run_hazard_scenarios.sh amd64` | 假飞控驱动真实 `BacktrackUseCase`，场景 H01–H14 |
 | 规划耗时 | `scripts/bench/run_gen_bench.sh amd64 10 30` | 轨迹生成耗时随录制时长的增长 |
 | SITL | `scripts/sitl/run_sitl_checks.sh` | PX4 v1.15.4 SITL 中确认方案依赖的飞控行为（N1、N2） |
@@ -257,7 +258,7 @@ catkin_test_results
 
 - [文档导航](doc/README.md)：按用途分类的完整索引。
 - [返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)：当前开发的依据。
-- [系统总览](doc/reference/SYSTEM_OVERVIEW.md)：实施到 R5 的接口、模块划分、处理顺序、状态机和执行层，以及与方案的差距。
+- [系统总览](doc/reference/SYSTEM_OVERVIEW.md)：实施到 R5b 的接口、模块划分、处理顺序、状态机和执行层，以及与方案的差距。
 - [前端对接开发文档](doc/reference/前端对接开发文档.md)：状态字符串、话题语义和 UI 建议。
 - [返航程序系统性分析（2026-10-20）](doc/reviews/返航程序系统性分析_2026-10-20.md)：危害分析、PX4 源码核对、闭环仿真和 SITL 确认。
 - [单元测试文档](doc/testing/单元测试文档.md)、[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)：测试方法与执行记录。
@@ -266,4 +267,5 @@ catkin_test_results
 ## 已知注意点
 
 - `README` 与 `LLM_MAP` 以当前 C++ 代码为准。
+- 原地悬停等待（离路径超过安全距离、停在轨迹断点处）目前没有超时升级，低电量也不降落，R6 加入。
 - 单元测试只覆盖少量 ROS adapters，没有 launch 级测试；修改状态机、条件层、轨迹接口或参数装配后，除单测外还要跑闭环场景，涉及与飞控交互时再做 SITL。
