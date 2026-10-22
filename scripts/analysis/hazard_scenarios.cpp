@@ -2,6 +2,7 @@
 // - 飞控规则逐条注明 PX4 v1.15.4 源码出处，参数取 v1.15.4 默认值；
 // - 接收机失控时（用户确认）：持续输出帧，摇杆回中，开关和 CH7 保持，CH18 = 800；
 // - 控制循环的阻塞按真实耗时计入仿真时间：节点是单线程 ros::spin，tick 阻塞期间不发 setpoint、不处理回调；
+// - 规划用真实的后台线程；规划进行期间按墙钟推进仿真时间，结果到达的时刻与实际耗时一致（R-76）；
 // - 模式请求由 UseCase 内的 ModeCommander 决定何时发出，服务调用按异步处理（结果随后送回）。
 // 用法：hazard_scenarios <trajectory_config.yaml> [场景编号 ...]，例如 H01 H06a；不带编号运行全部场景
 #include "px4_backtrack/application/backtrack_usecase.hpp"
@@ -17,6 +18,7 @@
 #include <functional>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -24,6 +26,7 @@ namespace {
 using px4_backtrack::application::BacktrackUseCase;
 using px4_backtrack::application::TickOutput;
 using px4_backtrack::application::UseCaseConfig;
+using px4_backtrack::domain::EventType;
 using px4_backtrack::domain::LandedState;
 using px4_backtrack::domain::SetpointTarget;
 using px4_backtrack::domain::Vec3;
@@ -289,6 +292,8 @@ struct Metrics {
   int mode_requests_sent = 0;
   double last_sp_t = -1.0;
   double max_sp_gap_in_offboard = 0.0;
+  double mission_last_sp_t = -1.0;
+  double max_sp_gap_in_mission = 0.0;   // 任务中相邻两次 setpoint 的最大间隔
   double max_tick_ms = 0.0;
 };
 
@@ -506,7 +511,7 @@ std::vector<Scenario> buildScenarios() {
                       m.mission_started_on_ground ? fmt("%.1f s 在地面启动了返航", m.mission_start_t) : "未在地面启动"}};
                }});
 
-  s.push_back({"H07", "30 分钟录制后失控（同步规划阻塞）", 1890.0,
+  s.push_back({"H07", "30 分钟录制后失控（规划耗时长）", 1890.0,
                [](double t, World& w) {
                  longOutbound(t, w, 30.0);
                  w.link_ok = !(t >= 1810.0);
@@ -516,7 +521,9 @@ std::vector<Scenario> buildScenarios() {
                      {"OFFBOARD 不因断流回退", w.fcu.offboard_fallbacks == 0,
                       fmt("回退 %.0f 次", w.fcu.offboard_fallbacks) +
                           fmt("，OFFBOARD 中 setpoint 最大间隔 %.2f s", m.max_sp_gap_in_offboard) +
-                          fmt("，最长 tick %.0f ms", m.max_tick_ms)}};
+                          fmt("，最长 tick %.0f ms", m.max_tick_ms)},
+                     {"规划期间 setpoint 不中断", m.max_sp_gap_in_mission < 0.2,
+                      fmt("任务中 setpoint 最大间隔 %.2f s", m.max_sp_gap_in_mission)}};
                }});
 
   s.push_back({"H08", "低电量返航中失控，随后被外部切出 OFFBOARD", 200.0,
@@ -692,6 +699,11 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
     if (m.touchdown_t > 0.0) m.max_z_after_touchdown = std::max(m.max_z_after_touchdown, w.fcu.pos.z());
   };
 
+  // 后台规划进行期间按墙钟推进仿真时间（R-76）
+  bool planning = false;
+  double planning_sim0 = 0.0;
+  std::chrono::steady_clock::time_point planning_wall0;
+
   // 节点在解锁前启动：先收到 t=0 的未解锁状态，0.5 s 时解锁（否则按空中重启处理，R-58）
   for (double t = 0.0; t < sc.duration;) {
     if (!w.fcu.armed && t >= 0.5 && t < 1.0) w.fcu.arm(t);
@@ -712,11 +724,24 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
     }
 
     if (t >= next_tick) {
+      if (planning) {
+        std::this_thread::sleep_until(
+            planning_wall0 + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                 std::chrono::duration<double>(t - planning_sim0)));
+      }
       setNow(t);
       const auto wall0 = std::chrono::steady_clock::now();
       const TickOutput out = uc.tick(kTimeOffset + t);
       const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count();
       m.max_tick_ms = std::max(m.max_tick_ms, wall * 1000.0);
+      for (const auto& e : out.events) {
+        if (e.type != EventType::Planning) continue;
+        planning = e.name == "submitted";
+        if (planning) {
+          planning_sim0 = t;
+          planning_wall0 = std::chrono::steady_clock::now();
+        }
+      }
 
       // tick 阻塞期间：飞控照常运行，模块不发 setpoint、不处理回调
       double t_after = t;
@@ -742,6 +767,14 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
           m.mission_started_on_ground = w.fcu.pos.z() < 0.3;
         }
         m.last_state = out.state;
+      }
+      if (!isMission(out.state)) {
+        m.mission_last_sp_t = -1.0;
+      } else if (out.setpoint) {
+        if (m.mission_last_sp_t >= 0.0) {
+          m.max_sp_gap_in_mission = std::max(m.max_sp_gap_in_mission, t_after - m.mission_last_sp_t);
+        }
+        m.mission_last_sp_t = t_after;
       }
       if (out.setpoint) {
         w.fcu.onSetpoint(t_after, *out.setpoint);
