@@ -33,7 +33,7 @@ ReturnStateMachineConfig makeConfig() {
   config.fallback_timeout_s = 3.0;
   config.handover_posctl_timeout_s = 3.0;
   config.rejoin_trigger_dist_m = 0.5;
-  config.reclaim_max_offset_m = 1.0;
+  config.safe_distance_m = 1.0;
   return config;
 }
 
@@ -350,7 +350,7 @@ Signature signatureOf(const ReturnStateMachine& sm, const StepOutput& out) {
       out.alerts.bits() &
       ((uint64_t{1} << static_cast<unsigned>(Alert::ReturnPending)) |
        (uint64_t{1} << static_cast<unsigned>(Alert::ExitRejectedLink)) |
-       (uint64_t{1} << static_cast<unsigned>(Alert::ReclaimOffset)) |
+       (uint64_t{1} << static_cast<unsigned>(Alert::PathOffset)) |
        (uint64_t{1} << static_cast<unsigned>(Alert::HandoverDirectLand)) |
        (uint64_t{1} << static_cast<unsigned>(Alert::MissionLanded)));
   return Signature(static_cast<int>(sm.phase()), static_cast<int>(sm.control()),

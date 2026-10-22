@@ -23,7 +23,7 @@ ReturnStateMachineConfig makeConfig() {
   config.fallback_timeout_s = 3.0;
   config.handover_posctl_timeout_s = 3.0;
   config.rejoin_trigger_dist_m = 0.5;
-  config.reclaim_max_offset_m = 1.0;
+  config.safe_distance_m = 1.0;
   return config;
 }
 
@@ -665,14 +665,14 @@ TEST(ReturnStateMachineTest, ReclaimChecksYawAndOffset) {
   h.c.cross_track_m = 1.5;
   h.step();
   EXPECT_EQ(h.out.control, ControlState::Reclaiming);
-  EXPECT_TRUE(h.out.alerts.has(Alert::ReclaimOffset));
+  EXPECT_TRUE(h.out.alerts.has(Alert::PathOffset));
   EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
 
   h.c.cross_track_m = 0.3;
   h.c.projection_ok = false;
   h.step();
   EXPECT_EQ(h.out.control, ControlState::Reclaiming);
-  EXPECT_TRUE(h.out.alerts.has(Alert::ReclaimOffset));
+  EXPECT_TRUE(h.out.alerts.has(Alert::PathOffset));
 
   // yaw 未对准：等待，不算偏差超限
   h.c.projection_ok = true;
@@ -680,7 +680,7 @@ TEST(ReturnStateMachineTest, ReclaimChecksYawAndOffset) {
   h.c.yaw = 0.3 + 0.5;
   h.step();
   EXPECT_EQ(h.out.control, ControlState::Reclaiming);
-  EXPECT_FALSE(h.out.alerts.has(Alert::ReclaimOffset));
+  EXPECT_FALSE(h.out.alerts.has(Alert::PathOffset));
 
   h.c.yaw = 0.3;
   h.step();

@@ -100,7 +100,7 @@
 - 链路恢复与退化：`link_recover_s`、`link_degraded_window_s`
 - 低电量：`enable_trigger_low_battery`、`low_battery_threshold`、`low_battery_confirm_s`
 - 输入新鲜度与在空中判定：`odom_stale_s`、`odom_timeout_s`、`fcu_state_stale_s`、`airborne_min_height_m`
-- 任务与控制权：`return_pending_max_s`、`pre_offboard_setpoint_count`、`fallback_gap_s`、`fallback_window_s`、`fallback_timeout_s`、`reclaim_max_offset_m`、`handover_posctl_timeout_s`、`mode_request_interval_s`、`mode_request_timeout_s`
+- 任务与控制权：`return_pending_max_s`、`pre_offboard_setpoint_count`、`fallback_gap_s`、`fallback_window_s`、`fallback_timeout_s`、`safe_distance_m`、`handover_posctl_timeout_s`、`mode_request_interval_s`、`mode_request_timeout_s`
 - 后台规划：`planning_warn_s`、`planning_timeout_s`
 - 退出后新轨迹：`cursor_window_m`
 - 回归：`rejoin_trigger_dist_m`、`rejoin_success_dist_m`、`rejoin_v_max_m_s`、`rejoin_lookahead_time_s`、`rejoin_trigger_hold_s`、`rejoin_success_hold_s`

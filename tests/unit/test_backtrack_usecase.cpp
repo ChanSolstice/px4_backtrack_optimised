@@ -67,7 +67,7 @@ UseCaseConfig makeConfig() {
   sm.fallback_timeout_s = 3.0;
   sm.handover_posctl_timeout_s = 3.0;
   sm.rejoin_trigger_dist_m = 0.5;
-  sm.reclaim_max_offset_m = 1.0;
+  sm.safe_distance_m = 1.0;
 
   c.mode_commander_config.request_interval_s = 1.0;
   c.mode_commander_config.request_timeout_s = 3.0;
@@ -618,7 +618,7 @@ TEST(BacktrackUseCaseTest, ReclaimAfterSwitchOutWhileLinkLost) {
 }
 
 TEST(BacktrackUseCaseTest, ReclaimWithMediumOffsetRejoinsAndLargeOffsetHolds) {
-  // S12：偏差 0.5～1.0 m 进入 Rejoin；超过 1.0 m 保持并告警 RECLAIM_OFFSET
+  // S12：偏差 0.5～1.0 m 进入 Rejoin；超过 1.0 m 保持并告警 PATH_OFFSET
   for (const double offset : {0.7, 1.3}) {
     Sim s;
     s.startLowBatteryReturn();
@@ -638,7 +638,7 @@ TEST(BacktrackUseCaseTest, ReclaimWithMediumOffsetRejoinsAndLargeOffsetHolds) {
       EXPECT_TRUE(s.in("ReturnRejoin")) << offset;
     } else {
       EXPECT_EQ(s.out.control, ControlState::Reclaiming) << offset;
-      EXPECT_TRUE(s.alert(Alert::ReclaimOffset)) << offset;
+      EXPECT_TRUE(s.alert(Alert::PathOffset)) << offset;
       ASSERT_TRUE(s.out.setpoint);
       EXPECT_LT((s.out.setpoint->position - s.pos).norm(), offset + 0.1);
     }

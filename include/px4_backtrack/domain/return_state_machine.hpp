@@ -26,7 +26,7 @@ struct ReturnStateMachineConfig {
   double fallback_timeout_s{};         ///< 飞控回退后等待自动回到 OFFBOARD 的上限 (s)
   double handover_posctl_timeout_s{};  ///< 交接中 POSCTL 未生效，改为直接请求 AUTO.LAND (s)
   double rejoin_trigger_dist_m{};      ///< 重新接入后横向偏差超过此值进入回归 (m)
-  double reclaim_max_offset_m{};       ///< 重新接入允许的最大横向偏差 (m)
+  double safe_distance_m{};            ///< 安全距离 (m)：不在录制轨迹上的直线移动上限（D30）
 };
 
 // ============================================================================
@@ -139,7 +139,7 @@ enum class Alert : uint8_t {
   ReturnExited,
   ReturnRequestIgnored,
   Reclaiming,
-  ReclaimOffset,
+  PathOffset,
   ReclaimTimeout,
   OffboardFallback,
   ModeRequestFailed,
@@ -375,7 +375,7 @@ private:
   // 任务中
   int pre_frames_{0};                ///< 已预发的 setpoint 帧数
   double pre_frames_done_t_{0.0};    ///< 预发结束的时间（R-75）
-  bool reclaim_offset_{false};       ///< 重新接入时偏差超限或投影失败
+  bool path_offset_{false};          ///< 离路径超过安全距离，原地保持（D30）
   bool exit_rejected_{false};        ///< 链路异常时收到短按
   bool trigger_ignored_landed_{false};  ///< 本拍有触发但不在空中
   int ignored_return_press_id_{0};   ///< 退出后被忽略的长按

@@ -176,7 +176,7 @@ const char* alertName(Alert alert) {
     case Alert::ReturnExited: return "RETURN_EXITED";
     case Alert::ReturnRequestIgnored: return "RETURN_REQUEST_IGNORED";
     case Alert::Reclaiming: return "RECLAIMING";
-    case Alert::ReclaimOffset: return "RECLAIM_OFFSET";
+    case Alert::PathOffset: return "PATH_OFFSET";
     case Alert::ReclaimTimeout: return "RECLAIM_TIMEOUT";
     case Alert::OffboardFallback: return "OFFBOARD_FALLBACK";
     case Alert::ModeRequestFailed: return "MODE_REQUEST_FAILED";
@@ -581,7 +581,7 @@ bool ReturnStateMachine::switchedOut(const Conditions& c, const char* rule,
   // 链路丢失或退化：重新申请控制权（D2）
   reclaim_position_ = c.position;
   reclaim_yaw_ = c.yaw;
-  reclaim_offset_ = false;
+  path_offset_ = false;
   setControl(ControlState::Reclaiming, rule, "LINK_ABNORMAL", out);
   return false;
 }
@@ -595,8 +595,8 @@ void ReturnStateMachine::tryReclaim(const Conditions& c, StepOutput& out) {
   // 跟随阶段：对准路径目标切向，且局部投影有效、偏差不超限，才重新接入（第 7.3 节）
   const bool yaw_ok = !c.path_target_yaw || yawAligned(c.yaw, *c.path_target_yaw);
   const bool offset_ok =
-      c.projection_ok && c.cross_track_m <= config_.reclaim_max_offset_m;
-  reclaim_offset_ = !offset_ok;
+      c.projection_ok && c.cross_track_m <= config_.safe_distance_m;
+  path_offset_ = !offset_ok;
   if (!yaw_ok || !offset_ok) {
     return;
   }
@@ -604,7 +604,7 @@ void ReturnStateMachine::tryReclaim(const Conditions& c, StepOutput& out) {
   setControl(ControlState::Owned, "4", "RECLAIMED", out);
   if (follow_ == FollowMode::OnPath &&
       c.cross_track_m > config_.rejoin_trigger_dist_m) {
-    setFollow(FollowMode::Rejoin, "4", "RECLAIM_OFFSET", out);
+    setFollow(FollowMode::Rejoin, "4", "RECLAIM_DEVIATION", out);
   }
 }
 
@@ -980,7 +980,7 @@ void ReturnStateMachine::computeAlerts(const Conditions& c, StepOutput& out) {
 
   if (control_ == ControlState::Reclaiming) {
     alerts.set(Alert::Reclaiming);
-    if (reclaim_offset_) alerts.set(Alert::ReclaimOffset);
+    if (path_offset_) alerts.set(Alert::PathOffset);
   }
   if (control_ == ControlState::Fallback) alerts.set(Alert::OffboardFallback);
   if (phase_ == MissionPhase::FcuLanding && c.link.lost &&

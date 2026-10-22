@@ -67,7 +67,7 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   requireParam(nh, "return_pending_max_s", sm.return_pending_max_s);
   requireParam(nh, "fallback_timeout_s", sm.fallback_timeout_s);
   requireParam(nh, "handover_posctl_timeout_s", sm.handover_posctl_timeout_s);
-  requireParam(nh, "reclaim_max_offset_m", sm.reclaim_max_offset_m);
+  requireParam(nh, "safe_distance_m", sm.safe_distance_m);
 
   // 回退判定与模式请求（D22、D24）
   requireParam(nh, "fallback_gap_s", c.fallback_gap_s);
