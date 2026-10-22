@@ -95,6 +95,9 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   requireParam(nh, "planning_warn_s", c.planning_warn_s);
   requireParam(nh, "planning_timeout_s", c.planning_timeout_s);
 
+  // 退出后新轨迹（第 7.4 节）
+  requireParam(nh, "cursor_window_m", c.cursor_window_m);
+
   // trajectory_core
   std::string trajectory_config_path;
   requireParam(nh, "trajectory_config_path", trajectory_config_path);

@@ -363,6 +363,7 @@ UseCaseConfig productionConfig(const std::string& traj_cfg) {
   c.trajectory_config = trajectory_core::TrajectoryConfig::loadFromYaml(traj_cfg);
   c.planning_warn_s = 10.0;
   c.planning_timeout_s = 30.0;
+  c.cursor_window_m = 2.0;
   c.debug_trajectory_sample_dt = 0.1;
   return c;
 }

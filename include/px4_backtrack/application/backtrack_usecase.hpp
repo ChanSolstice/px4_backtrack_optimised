@@ -58,6 +58,7 @@ struct UseCaseConfig {
   trajectory_core::TrajectoryConfig trajectory_config;
   double planning_warn_s{};     ///< 规划告警 (s)：超过后告警 PLANNING_SLOW
   double planning_timeout_s{};  ///< 规划超时 (s)：超过后丢弃结果，改为航点降级
+  double cursor_window_m{};     ///< 游标搜索窗口 (m)（第 7.4 节）
 
   // Debug/可视化（由节点决定是否创建导出器）
   bool debug_enable_csv_dump{};         ///< 启用CSV文件导出
@@ -161,6 +162,9 @@ private:
   /// 推进跟随进度，更新偏离与回归判定
   void updateFollow(const domain::StepOutput& step, double now);
 
+  /// 游标跟着跟随进度向起点移动：轨迹用路径投影点，航点降级用飞机位置（第 7.4 节）
+  void updateCursor();
+
   /// 按 setpoint 策略计算目标；拿不到目标时保持当前位置（P3）
   std::optional<domain::SetpointTarget> computeSetpoint(
       const domain::StepOutput& step);
@@ -192,6 +196,7 @@ private:
   domain::PlanStatus plan_status_{domain::PlanStatus::None};
   double plan_submit_t_{0.0};    ///< 本次规划的提交时间
   bool plan_timed_out_{false};   ///< 本任务的航点降级来自规划超时
+  size_t cursor_{0};             ///< 游标：返航已经走到的录制点（第 7.4 节）
 
   // 最近一次输入
   bool has_fcu_state_{false};

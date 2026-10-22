@@ -84,6 +84,7 @@ UseCaseConfig makeConfig() {
 
   c.planning_warn_s = 10.0;
   c.planning_timeout_s = 30.0;
+  c.cursor_window_m = 2.0;
   c.trajectory_config.ds_m = 0.1;
   c.trajectory_config.min_point_dist_m = 0.01;
   c.debug_trajectory_sample_dt = 0.1;
@@ -307,6 +308,19 @@ bool hasEvent(const std::vector<StepEvent>& events, EventType type,
   return std::any_of(events.begin(), events.end(), [&](const StepEvent& e) {
     return e.type == type && (name.empty() || e.name == name) && (to.empty() || e.to == to);
   });
+}
+
+/// 名为 name 的事件中 key=值 的取值，按出现顺序
+std::vector<double> eventValues(const std::vector<StepEvent>& events, const std::string& name,
+                                const std::string& key) {
+  std::vector<double> values;
+  for (const auto& e : events) {
+    const auto pos = e.detail.find(key + "=");
+    if (e.name == name && pos != std::string::npos) {
+      values.push_back(std::stod(e.detail.substr(pos + key.size() + 1)));
+    }
+  }
+  return values;
 }
 
 // ============================================================================
@@ -1086,19 +1100,10 @@ TEST(BacktrackUseCaseTest, DisconnectedFcuStateIsIgnored) {
 }
 
 TEST(BacktrackUseCaseTest, RecordingResumesAfterExitButNotDuringMission) {
-  // 退出后继续录制，任务期间不录制；之后失控的新任务基于新的录制规划
+  // 退出后从截断处继续录制；新任务基于"截断后的轨迹 + 退出后的手动段"规划
   Sim s;
   s.startLowBatteryReturn();
-  s.run(2.0);  // 任务期间飞机在移动，不应录制
-  auto planned_points = [&]() {
-    std::vector<int> counts;
-    for (const auto& e : s.events) {
-      if (e.type == EventType::Planning && e.name == "submitted") {
-        counts.push_back(std::stoi(e.detail.substr(e.detail.find('=') + 1)));
-      }
-    }
-    return counts;
-  };
+  s.run(2.0);
   s.mode = "ALTCTL";
   s.step();
   ASSERT_TRUE(s.in("Exited"));
@@ -1111,10 +1116,104 @@ TEST(BacktrackUseCaseTest, RecordingResumesAfterExitButNotDuringMission) {
   s.link_ok = false;
   ASSERT_TRUE(s.runUntilState("Ch18HoverWait", 2.0));
   exited_ticks += 21;  // 等待确认失控的这段时间仍在 Exited
-  const auto counts = planned_points();
-  ASSERT_EQ(counts.size(), 2u);
-  EXPECT_GT(counts[1], counts[0]);
-  EXPECT_LE(counts[1] - counts[0], exited_ticks + 1);
+  const auto points = eventValues(s.events, "submitted", "points");
+  const auto kept = eventValues(s.events, "trail_cut", "kept");
+  ASSERT_EQ(points.size(), 2u);
+  ASSERT_EQ(kept.size(), 1u);
+  EXPECT_LT(kept[0], points[0]);  // 返航了一段，截断了
+  EXPECT_GT(points[1], kept[0]);
+  EXPECT_LE(points[1] - kept[0], exited_ticks + 1);
+}
+
+// ============================================================================
+// 退出后新轨迹（R5）
+// ============================================================================
+
+TEST(BacktrackUseCaseTest, ShortPressDuringReturnCutsTrailAtCursor) {
+  // S6：返航中短按退出：录制截断到游标，继续录制，请求 POSCTL
+  Sim s;
+  s.startLowBatteryReturn();
+  s.run(1.0);
+  s.ch7 = true;
+  s.run(0.5);
+  s.ch7 = false;
+  ASSERT_TRUE(s.runUntilState("Exited", 1.0));
+  const double exit_t = s.t;
+
+  const auto recorded = eventValues(s.events, "submitted", "points");
+  const auto kept = eventValues(s.events, "trail_cut", "kept");
+  const auto removed = eventValues(s.events, "trail_cut", "removed");
+  ASSERT_EQ(kept.size(), 1u);
+  EXPECT_GT(removed[0], 0.0);
+  EXPECT_EQ(kept[0] + removed[0], recorded[0]);
+  EXPECT_GT(s.requestsSince("POSCTL", exit_t - kDt), 0);
+
+  // 继续录制：下一次规划的点数 = 保留的点 + 退出后录到的点
+  s.run(1.0);
+  s.link_ok = false;
+  ASSERT_TRUE(s.runUntilState("Ch18HoverWait", 2.0));
+  const auto points = eventValues(s.events, "submitted", "points");
+  ASSERT_EQ(points.size(), 2u);
+  EXPECT_GT(points[1], kept[0]);
+}
+
+TEST(BacktrackUseCaseTest, NewMissionAfterExitFollowsCutTrailAndManualSegment) {
+  // S11：退出后失控：新任务悬停 15 s，沿"截断后的轨迹 + 手动段"返航，从当前位置出发，
+  // 不再回到原触发点（x = 3）；续录的时间戳接在截断处之后，不含第一次任务的时长
+  Sim s;
+  s.startLowBatteryReturn();
+  s.run(1.0);
+  s.ch7 = true;
+  s.run(0.5);
+  s.ch7 = false;
+  ASSERT_TRUE(s.runUntilState("Exited", 1.0));
+  const double exit_t = s.t;
+  const Vec3 exit_pos = s.pos;
+  ASSERT_LT(exit_pos.x(), 2.8);  // 已经往回飞了一段
+
+  for (int i = 0; i < 15; ++i) {  // 手动向北飞 1.5 m
+    s.pos += Vec3(0.0, 0.1, 0.0);
+    s.step();
+  }
+  s.link_ok = false;
+  ASSERT_TRUE(s.runUntilState("Ch18HoverWait", 2.0));
+  const double exited_s = s.t - exit_t;
+  const Vec3 start_pos = s.pos;
+
+  const auto duration = eventValues(s.events, "submitted", "duration_s");
+  ASSERT_EQ(duration.size(), 2u);
+  EXPECT_LT(duration[1], duration[0] + exited_s + 0.1);
+
+  ASSERT_TRUE(s.runUntilState("ReturnPreOffboard", 16.0));
+  EXPECT_LT((s.pos - start_pos).norm(), 0.05);  // 悬停在当前位置
+  double max_x = s.pos.x();
+  double min_to_exit = (s.pos - exit_pos).norm();
+  ASSERT_TRUE(s.runUntil([&] {
+    max_x = std::max(max_x, s.pos.x());
+    min_to_exit = std::min(min_to_exit, (s.pos - exit_pos).norm());
+    return s.in("IdleDisarmed");
+  }, 60.0));
+  EXPECT_LT(max_x, exit_pos.x() + 0.3);   // 没有回到原触发点
+  EXPECT_LT(min_to_exit, 0.3);            // 先沿手动段回到退出位置
+  EXPECT_LT(s.pos.head<2>().norm(), 0.3); // 再沿截断后的轨迹回到录制起点
+}
+
+TEST(BacktrackUseCaseTest, ExitDuringHoverKeepsWholeTrail) {
+  // R-65、R-78：悬停阶段还没沿返航路径移动，游标仍在末点，退出时不截断；任务期间不录制
+  Sim s;
+  s.flyOutbound();
+  s.link_ok = false;
+  ASSERT_TRUE(s.runUntilState("Ch18HoverWait", 2.0));
+  s.link_ok = true;
+  s.run(5.5);  // 链路恢复，退化窗口结束
+  ASSERT_TRUE(s.in("Ch18HoverWait"));
+  s.ch7 = true;
+  s.run(0.5);
+  s.ch7 = false;
+  ASSERT_TRUE(s.runUntilState("Exited", 1.0));
+  const auto removed = eventValues(s.events, "trail_cut", "removed");
+  ASSERT_EQ(removed.size(), 1u);
+  EXPECT_EQ(removed[0], 0.0);
 }
 
 TEST(BacktrackUseCaseTest, SwitchOutRightAfterNewMissionReclaimsWithoutFallback) {

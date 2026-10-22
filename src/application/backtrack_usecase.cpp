@@ -157,6 +157,10 @@ TickOutput BacktrackUseCase::tick(double now) {
   for (auto& event : mode_commander_.takeEvents()) {
     out.events.push_back(std::move(event));
   }
+  if (step.record && !record_) {
+    // 录制在任务期间暂停后恢复：时间戳接在末点之后（第 7.4 节，R-77）
+    recording_buffer_.resume();
+  }
   record_ = step.record;
 
   out.state = domain::reportedStateName(step.phase, step.follow);
@@ -231,6 +235,19 @@ void BacktrackUseCase::executeCommands(const domain::StepOutput& step, double no
     pilot_input_.reset();
     battery_monitor_.reset();
   }
+  if (commands.start_planning) {
+    // 任务开始：游标指向末点，即触发点（第 7.4 节）
+    cursor_ = recording_buffer_.empty() ? 0 : recording_buffer_.size() - 1;
+  }
+  if (commands.trail_cut) {
+    // 退出：录制截断到游标（R-78）
+    const size_t before = recording_buffer_.size();
+    recording_buffer_.truncate(cursor_);
+    events.push_back(makeEvent(
+        domain::EventType::Mission, "trail_cut", "",
+        "kept=" + std::to_string(recording_buffer_.size()) +
+            " removed=" + std::to_string(before - recording_buffer_.size())));
+  }
   if (commands.cancel_planning) {
     if (plan_status_ == domain::PlanStatus::Pending) {
       planning_worker_->cancel();
@@ -240,7 +257,6 @@ void BacktrackUseCase::executeCommands(const domain::StepOutput& step, double no
   } else if (commands.start_planning) {
     submitPlanning(now, events);
   }
-  // commands.trail_cut：R5 实现截断
 }
 
 void BacktrackUseCase::submitPlanning(double now, std::vector<domain::StepEvent>& events) {
@@ -250,8 +266,10 @@ void BacktrackUseCase::submitPlanning(double now, std::vector<domain::StepEvent>
   input.debug_sample_dt = config_.debug_trajectory_sample_dt;
   input.dumper = debug_dumper_;
   input.publisher = debug_publisher_;
+  const double duration = input.points.empty() ? 0.0 : input.points.back().timestamp;
   events.push_back(makeEvent(domain::EventType::Planning, "submitted", "",
-                             "points=" + std::to_string(input.points.size())));
+                             "points=" + std::to_string(input.points.size()) +
+                                 " duration_s=" + formatSeconds(duration)));
   planning_worker_->request(std::move(input));
   plan_status_ = domain::PlanStatus::Pending;
   plan_submit_t_ = now;
@@ -334,6 +352,7 @@ void BacktrackUseCase::updateFollow(const domain::StepOutput& step, double now) 
 
   if (plan_status_ == domain::PlanStatus::ReadyFallback) {
     waypoint_fallback_session_.updateProgress(position_);
+    updateCursor();
     return;
   }
   if (plan_status_ != domain::PlanStatus::Ready) {
@@ -344,6 +363,7 @@ void BacktrackUseCase::updateFollow(const domain::StepOutput& step, double now) 
   if (step.follow == domain::FollowMode::OnPath) {
     const bool projection_ok = trajectory_session_->updateProgress(
         position_, rejoin.lookahead_time_s);
+    updateCursor();
     // 局部投影失败也算偏离（与 dev 相同）；纵向落后不算偏离
     if (!projection_ok) {
       deviation_confirmed_ = true;
@@ -363,6 +383,7 @@ void BacktrackUseCase::updateFollow(const domain::StepOutput& step, double now) 
 
   const bool projection_ok = trajectory_session_->updateRejoinProgress(
       position_, rejoin.lookahead_time_s, rejoin.trigger_dist_m);
+  updateCursor();
   const auto& target = trajectory_session_->getTargetState();
   const domain::Vec3 published =
       has_last_path_velocity_ ? last_path_velocity_ : target.velocity;
@@ -377,6 +398,16 @@ void BacktrackUseCase::updateFollow(const domain::StepOutput& step, double now) 
     rejoin_since_ = now;
   }
   rejoin_confirmed_ = now - rejoin_since_ + kTimeEpsS >= rejoin.success_hold_s;
+}
+
+void BacktrackUseCase::updateCursor() {
+  const domain::Vec3 reference =
+      plan_status_ == domain::PlanStatus::Ready
+          ? trajectory_session_->getTrajectory()
+                ->evaluateByArcLength(trajectory_session_->getProjectedArcLength())
+                .position
+          : position_;
+  cursor_ = recording_buffer_.nearestBefore(cursor_, reference, config_.cursor_window_m);
 }
 
 std::optional<domain::SetpointTarget> BacktrackUseCase::computeSetpoint(
