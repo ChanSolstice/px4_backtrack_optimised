@@ -10,7 +10,7 @@
 4. 所有状态转移都在 [`return_state_machine.cpp`](src/domain/return_state_machine.cpp) 的 `step()` 中完成，规则编号对应方案第 6.3 节。不要在 UseCase 里改状态或加分支。
 5. 条件层（`link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor`）只做检测，输出电平和带编号的按键指令，是否响应由状态机决定。
 6. 设计变化先改方案文档，并在第 15 节记一条审核记录（R-xx），再改代码；用户已确认的决策是 D1–D29。
-7. 本分支实施到 R4。退出截断（R5）、超时升级（R6）、JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+7. 本分支实施到 R5。超时升级（R6）、JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
 8. 参数全部在 [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 中必填，代码中没有默认值；新增参数要同时改 config 结构体、[`config_loader.cpp`](src/infrastructure/config_loader.cpp) 和 YAML。
 9. 用户要求整体简洁、避免过度防御：不加初值已保证的标志、不重复复位、不为小概率场景堆保护；不了解下方环境时，悬停优先于降落。
 
@@ -49,7 +49,7 @@
 
 执行层：
 
-- [`recording_buffer`](src/domain/recording_buffer.cpp)：录制节流与相对时间戳。
+- [`recording_buffer`](src/domain/recording_buffer.cpp)：录制节流与相对时间戳；退出时的截断、续录时间接续和游标搜索（方案第 7.4 节）。
 - [`trajectory_session`](src/domain/trajectory_session.cpp)：抽稀、逆序、调用 `trajectory_core`、局部投影、单调弧长进度、预瞄、完成判定；`probe()` 只查询当前偏差不推进进度（R-74）。
 - [`waypoint_fallback_session`](src/domain/waypoint_fallback_session.cpp)：轨迹生成可恢复地失败时的航点降级。
 - [`rejoin_policy`](src/domain/rejoin_policy.cpp)：偏离阈值、回归限速、退出时的速度收敛。
@@ -78,6 +78,7 @@
 ### 1. 录制与规划不是一回事
 
 - 只在 `Recording` 和 `Exited` 中录制，任务期间不录制；时间戳为相对首点的里程计消息时间。
+- 退出时录制截断到游标（UseCase 维护，只在跟随进度推进时向起点移动），所以悬停、准备阶段退出等于不截断；退出后续录的时间戳接在末点之后。不要改回按阶段决定截断方式：半路进入交接后截断到起点，会让下一次任务从退出位置直线飞向起点（R-78）。
 - 规划时先空间抽稀（`max(min_point_dist_m, ds_m * 0.5)`），距离不足的中间点直接忽略，不覆盖上一个有效点。不要改回 `reduced.back() = point`，否则低速连续飞行段会被整段吞掉。
 - 逆序后时间戳映射为 `t_new = t_last − t_rev`，只用于 `trajectory_core` 的时间质量诊断；执行由实际位置的弧长投影推进，不使用录制时间或 wall time。
 
@@ -137,7 +138,7 @@
 3. [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)：当前实现的说明
 4. [`doc/testing/`](doc/testing/)：测试方法和执行记录
 
-重构要达到的行为（R5–R8 还没有实现）以方案为准。`doc/testing/` 中注明"只适用于 dev"的文档不描述当前行为。
+重构要达到的行为（R6–R8 还没有实现）以方案为准。`doc/testing/` 中注明"只适用于 dev"的文档不描述当前行为。
 
 ## 容易踩坑的地方
 
