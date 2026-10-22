@@ -4,6 +4,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -81,6 +82,8 @@ UseCaseConfig makeConfig() {
   rejoin.trigger_hold_s = 0.25;
   rejoin.success_hold_s = 0.10;
 
+  c.planning_warn_s = 10.0;
+  c.planning_timeout_s = 30.0;
   c.trajectory_config.ds_m = 0.1;
   c.trajectory_config.min_point_dist_m = 0.01;
   c.debug_trajectory_sample_dt = 0.1;
@@ -95,10 +98,14 @@ UseCaseConfig makeConfig() {
 /// - 链路丢失时 CH18 = 800，CH7 保持失控瞬间的值。
 class Sim {
 public:
-  explicit Sim(const UseCaseConfig& config = makeConfig()) : uc(config) {}
+  explicit Sim(const UseCaseConfig& config = makeConfig())
+    : Sim(config, std::make_unique<PlanningWorker>(planReturn, false)) {}
 
+  /// 规划器不启动线程：每拍 tick 之后执行待处理的规划，下一拍得到结果
+  PlanningWorker* planner;
   BacktrackUseCase uc;
   double t = 0.0;
+  bool hold_planning = false;  ///< 为真时暂不执行规划，模拟慢规划
 
   // 飞控
   bool armed = false;
@@ -132,6 +139,9 @@ public:
   void step() {
     deliverInputs();
     out = uc.tick(t);
+    if (!hold_planning) {
+      planner->runPending();
+    }
     if (states.empty() || states.back() != out.state) {
       states.push_back(out.state);
     }
@@ -212,6 +222,9 @@ public:
   }
 
 private:
+  Sim(const UseCaseConfig& config, std::unique_ptr<PlanningWorker> worker)
+    : planner(worker.get()), uc(config, std::move(worker)) {}
+
   bool prev_link_ok_ = true;
   bool held_ch7_ = false;
   double last_sp_t_ = -1e9;
@@ -827,6 +840,100 @@ TEST(BacktrackUseCaseTest, EventsTraceLowBatteryReturnWithLinkLoss) {
 }
 
 // ============================================================================
+// 后台规划（R4）
+// ============================================================================
+
+bool hasPlanningReason(const std::vector<StepEvent>& events, const std::string& reason) {
+  return std::any_of(events.begin(), events.end(), [&](const StepEvent& e) {
+    return e.type == EventType::Planning && e.reason == reason;
+  });
+}
+
+TEST(BacktrackUseCaseTest, BackgroundPlanningKeepsPublishingThroughHover) {
+  // S15：规划在失控悬停期间进行，控制循环每拍照常发布；结果在悬停结束后才处理（D3）
+  Sim s;
+  s.flyOutbound();
+  s.hold_planning = true;
+  s.link_ok = false;
+  ASSERT_TRUE(s.runUntilState("Ch18HoverWait", 2.0));
+  ASSERT_TRUE(hasEvent(s.events, EventType::Planning, "submitted"));
+  const double start_t = s.t;
+
+  int ticks = 0;
+  int published = 0;
+  double slow_t = -1.0;
+  while (s.t - start_t < 12.0 - 1e-9) {
+    s.step();
+    ++ticks;
+    if (s.out.setpoint) ++published;
+    if (slow_t < 0.0 && s.alert(Alert::PlanningSlow)) slow_t = s.t;
+  }
+  EXPECT_EQ(published, ticks);
+  EXPECT_NEAR(slow_t - start_t, 10.0, 1e-6);
+  EXPECT_TRUE(s.in("Ch18HoverWait"));
+
+  s.hold_planning = false;  // 第 12 s 规划完成
+  s.run(0.1);
+  EXPECT_TRUE(hasPlanningReason(s.events, "READY"));
+  EXPECT_FALSE(s.alert(Alert::PlanningSlow));
+  EXPECT_TRUE(s.in("Ch18HoverWait"));
+
+  ASSERT_TRUE(s.runUntilState("ReturnPreOffboard", 4.0));
+  EXPECT_NEAR(s.t - start_t, 15.0, 1e-6);
+  ASSERT_TRUE(s.runUntilState("IdleDisarmed", 60.0));
+  EXPECT_TRUE(s.everIn("ReturnActive"));
+  EXPECT_LT(s.pos.head<2>().norm(), 0.3);
+}
+
+TEST(BacktrackUseCaseTest, PlanningTimeoutFallsBackToWaypoints) {
+  // S16：规划 30 s 未完成，丢弃结果，在控制线程构建航点降级返航；迟到的结果不采用
+  Sim s;
+  s.flyOutbound();
+  s.hold_planning = true;
+  s.battery = 0.10;
+  ASSERT_TRUE(s.runUntilState("ReturnPreOffboard", 2.0));
+  const double start_t = s.t;
+
+  ASSERT_TRUE(s.runUntil([&] { return s.alert(Alert::PlanningTimeoutFallback); }, 31.0));
+  EXPECT_NEAR(s.t - start_t, 30.0, 1e-6);
+  EXPECT_TRUE(hasPlanningReason(s.events, "TIMEOUT"));
+  EXPECT_TRUE(hasPlanningReason(s.events, "WAYPOINT_FALLBACK"));
+  EXPECT_FALSE(s.alert(Alert::PlanningSlow));
+
+  s.hold_planning = false;
+  ASSERT_TRUE(s.runUntilState("ReturnActive", 2.0));
+  EXPECT_TRUE(s.alert(Alert::PlanningTimeoutFallback));  // 持续到任务结束
+  ASSERT_TRUE(s.runUntilState("IdleDisarmed", 60.0));
+  EXPECT_FALSE(hasPlanningReason(s.events, "READY"));
+  EXPECT_TRUE(s.everIn("LandingHover"));
+  EXPECT_FALSE(s.alert(Alert::PlanningTimeoutFallback));
+}
+
+TEST(BacktrackUseCaseTest, ExitDuringPlanningCancelsIt) {
+  // 规划中退出：取消规划，结果不再采用；之后失控的新任务重新提交
+  Sim s;
+  s.flyOutbound();
+  s.hold_planning = true;
+  s.battery = 0.10;
+  ASSERT_TRUE(s.runUntilState("ReturnPreOffboard", 2.0));
+  s.run(1.0);
+  s.ch7 = true;  // 短按退出
+  s.run(0.5);
+  s.ch7 = false;
+  ASSERT_TRUE(s.runUntilState("Exited", 1.0));
+  EXPECT_TRUE(hasEvent(s.events, EventType::Planning, "cancelled"));
+
+  s.hold_planning = false;
+  s.run(0.5);
+  EXPECT_FALSE(hasEvent(s.events, EventType::Planning, "completed"));
+
+  s.link_ok = false;
+  ASSERT_TRUE(s.runUntilState("Ch18HoverWait", 2.0));
+  s.run(0.1);
+  EXPECT_TRUE(hasPlanningReason(s.events, "READY"));
+}
+
+// ============================================================================
 // 执行层（规划、跟随与输入）
 // ============================================================================
 
@@ -986,7 +1093,7 @@ TEST(BacktrackUseCaseTest, RecordingResumesAfterExitButNotDuringMission) {
   auto planned_points = [&]() {
     std::vector<int> counts;
     for (const auto& e : s.events) {
-      if (e.type == EventType::Planning && e.name == "completed") {
+      if (e.type == EventType::Planning && e.name == "submitted") {
         counts.push_back(std::stoi(e.detail.substr(e.detail.find('=') + 1)));
       }
     }

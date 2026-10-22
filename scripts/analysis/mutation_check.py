@@ -82,9 +82,9 @@ MUTATIONS = [
      '  c.fcu_state_fresh = has_fcu_state_ &&\n                      now - fcu_state_t_ <= config_.fcu_state_stale_s;\n',
      '  c.fcu_state_fresh = has_fcu_state_;\n', '飞控状态中断不判定'),
     ('probe_stale_projection', 'backtrack_usecase',
-     '    c.projection_ok = trajectory_session_.probe(position_, c.cross_track_m);\n',
-     '    c.projection_ok = trajectory_session_.hasValidProjection();\n'
-     '    c.cross_track_m = trajectory_session_.getCrossTrackError();\n',
+     '    c.projection_ok = trajectory_session_->probe(position_, c.cross_track_m);\n',
+     '    c.projection_ok = trajectory_session_->hasValidProjection();\n'
+     '    c.cross_track_m = trajectory_session_->getCrossTrackError();\n',
      '重新接入的偏差沿用冻结时的投影（R-74）'),
     ('publishing_not_ended', 'backtrack_usecase', '    // 不发布即结束这一段（R-69）\n    publishing_ = false;\n', '',
      '不发布的拍不结束这一段，任务之间的空档算作断流（R-69）'),

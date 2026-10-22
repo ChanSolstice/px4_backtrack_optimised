@@ -1,10 +1,10 @@
 #include "px4_backtrack/application/backtrack_usecase.hpp"
-#include "px4_backtrack/infrastructure/debug_dumper.hpp"
-#include "px4_backtrack/adapters/debug_publishers.hpp"
 
 #include <cmath>
 #include <iomanip>
+#include <iterator>
 #include <sstream>
+#include <utility>
 
 namespace px4_backtrack {
 namespace application {
@@ -59,7 +59,8 @@ std::string formatSeconds(double seconds) {
 
 }  // namespace
 
-BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config)
+BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config,
+                                   std::unique_ptr<PlanningWorker> planning_worker)
   : config_(config),
     link_monitor_(config.link_config),
     pilot_input_(config.pilot_config),
@@ -68,6 +69,8 @@ BacktrackUseCase::BacktrackUseCase(const UseCaseConfig& config)
     state_machine_(config.state_machine_config),
     mode_commander_(config.mode_commander_config),
     recording_buffer_(config.record_max_hz),
+    planning_worker_(planning_worker ? std::move(planning_worker)
+                                     : std::make_unique<PlanningWorker>()),
     rejoin_policy_(config.rejoin_config)
 {
 }
@@ -138,12 +141,14 @@ TickOutput BacktrackUseCase::tick(double now) {
   airborne_monitor_.update(now);
 
   // 用最近一次的执行结果组装条件，再决策（R-71）
+  TickOutput out;
+  receivePlanning(now, out.events);
   const domain::Conditions c = assembleConditions(now);
   domain::StepOutput step = state_machine_.step(c);
 
-  TickOutput out;
-  out.events = std::move(step.events);
-  executeCommands(step, out.events);
+  out.events.insert(out.events.end(), std::make_move_iterator(step.events.begin()),
+                    std::make_move_iterator(step.events.end()));
+  executeCommands(step, now, out.events);
   updateFollow(step, now);
   out.setpoint = computeSetpoint(step);
   trackPublishing(now, out.setpoint.has_value(), out.events);
@@ -187,13 +192,16 @@ domain::Conditions BacktrackUseCase::assembleConditions(double now) const {
   c.has_min_points = recording_buffer_.size() >=
                      static_cast<size_t>(config_.record_min_points);
   c.plan_status = plan_status_;
+  c.planning_slow = plan_status_ == domain::PlanStatus::Pending &&
+                    now - plan_submit_t_ + kTimeEpsS >= config_.planning_warn_s;
+  c.planning_timed_out = plan_timed_out_;
   if (plan_status_ == domain::PlanStatus::Ready) {
-    c.path_start_yaw = trajectory_session_.getTrajectory()->evaluateByArcLength(0.0).yaw;
-    c.path_target_yaw = trajectory_session_.getTargetState().yaw;
+    c.path_start_yaw = trajectory_session_->getTrajectory()->evaluateByArcLength(0.0).yaw;
+    c.path_target_yaw = trajectory_session_->getTargetState().yaw;
     // 按当前位置投影，不推进进度：跟随冻结时也反映当前偏差（R-74）
-    c.projection_ok = trajectory_session_.probe(position_, c.cross_track_m);
-    c.finished = trajectory_session_.isFinished(position_, velocity_,
-                                                kReturnEndPositionToleranceM);
+    c.projection_ok = trajectory_session_->probe(position_, c.cross_track_m);
+    c.finished = trajectory_session_->isFinished(position_, velocity_,
+                                                 kReturnEndPositionToleranceM);
   } else if (plan_status_ == domain::PlanStatus::ReadyFallback) {
     // 航点降级没有切向和投影：不要求对准，按投影有效、偏差 0 提供（第 5.6 节）
     c.projection_ok = true;
@@ -213,7 +221,7 @@ domain::Conditions BacktrackUseCase::assembleConditions(double now) const {
 // 执行层
 // ============================================================================
 
-void BacktrackUseCase::executeCommands(const domain::StepOutput& step,
+void BacktrackUseCase::executeCommands(const domain::StepOutput& step, double now,
                                        std::vector<domain::StepEvent>& events) {
   const auto& commands = step.commands;
   if (commands.new_flight) {
@@ -224,54 +232,78 @@ void BacktrackUseCase::executeCommands(const domain::StepOutput& step,
     battery_monitor_.reset();
   }
   if (commands.cancel_planning) {
+    if (plan_status_ == domain::PlanStatus::Pending) {
+      planning_worker_->cancel();
+      events.push_back(makeEvent(domain::EventType::Planning, "cancelled", "", ""));
+    }
     resetPlan();
   } else if (commands.start_planning) {
-    plan(events);
+    submitPlanning(now, events);
   }
   // commands.trail_cut：R5 实现截断
 }
 
-void BacktrackUseCase::plan(std::vector<domain::StepEvent>& events) {
-  // 任务结束的所有路径（退出、交接、上锁、AUTO.LAND）都已取消规划，这里是空的
-  const auto& points = recording_buffer_.getPoints();
-  const std::string point_count = "points=" + std::to_string(points.size());
+void BacktrackUseCase::submitPlanning(double now, std::vector<domain::StepEvent>& events) {
+  PlanningInput input;
+  input.points = recording_buffer_.getPoints();
+  input.config = config_.trajectory_config;
+  input.debug_sample_dt = config_.debug_trajectory_sample_dt;
+  input.dumper = debug_dumper_;
+  input.publisher = debug_publisher_;
+  events.push_back(makeEvent(domain::EventType::Planning, "submitted", "",
+                             "points=" + std::to_string(input.points.size())));
+  planning_worker_->request(std::move(input));
+  plan_status_ = domain::PlanStatus::Pending;
+  plan_submit_t_ = now;
+}
 
-  if (trajectory_session_.generate(points, config_.trajectory_config)) {
-    plan_status_ = domain::PlanStatus::Ready;
-    events.push_back(makeEvent(
-        domain::EventType::Planning, "completed", "READY",
-        point_count + " cost_ms=" +
-            formatSeconds(trajectory_session_.getLastGenerateCostMs())));
-    performDebugDump();
+void BacktrackUseCase::receivePlanning(double now, std::vector<domain::StepEvent>& events) {
+  if (plan_status_ != domain::PlanStatus::Pending) {
     return;
   }
-
-  switch (trajectory_session_.getLastFailureKind()) {
-    case domain::TrajectorySession::FailureKind::TooCloseGeometry:
-      plan_status_ = domain::PlanStatus::FailedTooClose;
-      events.push_back(makeEvent(domain::EventType::Planning, "failed",
-                                 "TOO_CLOSE", point_count));
-      return;
-    case domain::TrajectorySession::FailureKind::InvalidConfig:
-      plan_status_ = domain::PlanStatus::FailedConfig;
-      events.push_back(makeEvent(domain::EventType::Planning, "failed",
-                                 "INVALID_CONFIG", point_count));
-      return;
-    default:
-      break;
+  if (auto result = planning_worker_->takeResult()) {
+    applyPlanningResult(std::move(*result), events);
+    return;
   }
+  // 规划超时：丢弃结果，在控制线程直接构建航点降级（第 7.5 节）
+  const double elapsed = now - plan_submit_t_;
+  if (elapsed + kTimeEpsS >= config_.planning_timeout_s) {
+    planning_worker_->cancel();
+    plan_timed_out_ = true;
+    events.push_back(makeEvent(domain::EventType::Planning, "timeout", "TIMEOUT",
+                               "elapsed_s=" + formatSeconds(elapsed)));
+    applyPlanningResult(planFallback(recording_buffer_.getPoints()), events);
+  }
+}
 
-  // 其他失败：航点降级；降级也构建失败则原地降落（第 7.5 节）
-  if (waypoint_fallback_session_.build(points)) {
-    plan_status_ = domain::PlanStatus::ReadyFallback;
-    events.push_back(makeEvent(
-        domain::EventType::Planning, "completed", "WAYPOINT_FALLBACK",
-        point_count + " waypoints=" +
-            std::to_string(waypoint_fallback_session_.size())));
-  } else {
-    plan_status_ = domain::PlanStatus::FailedFallback;
-    events.push_back(makeEvent(domain::EventType::Planning, "failed",
-                               "FALLBACK_FAILED", point_count));
+void BacktrackUseCase::applyPlanningResult(PlanningResult result,
+                                           std::vector<domain::StepEvent>& events) {
+  plan_status_ = result.status;
+  const std::string point_count = "points=" + std::to_string(result.point_count);
+  switch (result.status) {
+    case domain::PlanStatus::Ready:
+      trajectory_session_ = std::move(result.trajectory);
+      events.push_back(makeEvent(domain::EventType::Planning, "completed", "READY",
+                                 point_count + " cost_ms=" + formatSeconds(result.cost_ms)));
+      break;
+    case domain::PlanStatus::ReadyFallback:
+      waypoint_fallback_session_ = std::move(result.fallback);
+      events.push_back(makeEvent(
+          domain::EventType::Planning, "completed", "WAYPOINT_FALLBACK",
+          point_count + " waypoints=" + std::to_string(waypoint_fallback_session_.size())));
+      break;
+    case domain::PlanStatus::FailedTooClose:
+      events.push_back(makeEvent(domain::EventType::Planning, "failed", "TOO_CLOSE",
+                                 point_count));
+      break;
+    case domain::PlanStatus::FailedConfig:
+      events.push_back(makeEvent(domain::EventType::Planning, "failed", "INVALID_CONFIG",
+                                 point_count));
+      break;
+    default:
+      events.push_back(makeEvent(domain::EventType::Planning, "failed", "FALLBACK_FAILED",
+                                 point_count));
+      break;
   }
 }
 
@@ -279,6 +311,7 @@ void BacktrackUseCase::resetPlan() {
   trajectory_session_.reset();
   waypoint_fallback_session_.reset();
   plan_status_ = domain::PlanStatus::None;
+  plan_timed_out_ = false;
   deviation_confirmed_ = false;
   rejoin_confirmed_ = false;
   deviation_since_ = -1.0;
@@ -309,14 +342,14 @@ void BacktrackUseCase::updateFollow(const domain::StepOutput& step, double now) 
 
   const auto& rejoin = config_.rejoin_config;
   if (step.follow == domain::FollowMode::OnPath) {
-    const bool projection_ok = trajectory_session_.updateProgress(
+    const bool projection_ok = trajectory_session_->updateProgress(
         position_, rejoin.lookahead_time_s);
     // 局部投影失败也算偏离（与 dev 相同）；纵向落后不算偏离
     if (!projection_ok) {
       deviation_confirmed_ = true;
       return;
     }
-    if (!rejoin_policy_.shouldTriggerRejoin(trajectory_session_.getCrossTrackError())) {
+    if (!rejoin_policy_.shouldTriggerRejoin(trajectory_session_->getCrossTrackError())) {
       deviation_since_ = -1.0;
       deviation_confirmed_ = false;
       return;
@@ -328,13 +361,13 @@ void BacktrackUseCase::updateFollow(const domain::StepOutput& step, double now) 
     return;
   }
 
-  const bool projection_ok = trajectory_session_.updateRejoinProgress(
+  const bool projection_ok = trajectory_session_->updateRejoinProgress(
       position_, rejoin.lookahead_time_s, rejoin.trigger_dist_m);
-  const auto& target = trajectory_session_.getTargetState();
+  const auto& target = trajectory_session_->getTargetState();
   const domain::Vec3 published =
       has_last_path_velocity_ ? last_path_velocity_ : target.velocity;
   if (!projection_ok ||
-      !rejoin_policy_.shouldExitRejoin(trajectory_session_.getCrossTrackError(),
+      !rejoin_policy_.shouldExitRejoin(trajectory_session_->getCrossTrackError(),
                                        velocity_, target.velocity, published)) {
     rejoin_since_ = -1.0;
     rejoin_confirmed_ = false;
@@ -360,7 +393,7 @@ std::optional<domain::SetpointTarget> BacktrackUseCase::computeSetpoint(
         return waypoint_fallback_session_.currentTarget();
       }
       if (plan_status_ == domain::PlanStatus::Ready) {
-        const auto target = pathSetpoint(trajectory_session_.getTargetState());
+        const auto target = pathSetpoint(trajectory_session_->getTargetState());
         last_path_velocity_ = target.velocity;
         has_last_path_velocity_ = true;
         return target;
@@ -369,11 +402,11 @@ std::optional<domain::SetpointTarget> BacktrackUseCase::computeSetpoint(
 
     case domain::SetpointKind::PathTargetRejoin:
       if (plan_status_ == domain::PlanStatus::Ready) {
-        const auto& path_state = trajectory_session_.getTargetState();
+        const auto& path_state = trajectory_session_->getTargetState();
         const domain::Vec3 previous =
             has_last_path_velocity_ ? last_path_velocity_ : path_state.velocity;
         const auto target = pathSetpoint(rejoin_policy_.applyRejoinLimits(
-            path_state, trajectory_session_.getCrossTrackError(), previous));
+            path_state, trajectory_session_->getCrossTrackError(), previous));
         last_path_velocity_ = target.velocity;
         has_last_path_velocity_ = true;
         return target;
@@ -424,26 +457,6 @@ void BacktrackUseCase::setDebugDumper(
 void BacktrackUseCase::setDebugPublisher(
     std::shared_ptr<adapters::DebugPublisher> publisher) {
   debug_publisher_ = std::move(publisher);
-}
-
-void BacktrackUseCase::performDebugDump() {
-  if (!debug_dumper_ && !debug_publisher_) return;
-
-  const auto* traj = trajectory_session_.getTrajectory();
-  if (!traj || !traj->isValid()) return;
-
-  auto states = traj->sample(config_.debug_trajectory_sample_dt);
-  const auto& waypoints = recording_buffer_.getPoints();
-
-  if (debug_dumper_) {
-    debug_dumper_->dumpWaypoints(waypoints);
-    debug_dumper_->dumpTrajectory(states);
-  }
-
-  if (debug_publisher_) {
-    debug_publisher_->publishWaypoints(waypoints);
-    debug_publisher_->publishTrajectory(states);
-  }
 }
 
 }  // namespace application

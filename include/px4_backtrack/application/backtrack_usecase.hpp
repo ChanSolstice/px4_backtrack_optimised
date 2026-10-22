@@ -1,6 +1,7 @@
 #pragma once
 
 #include "px4_backtrack/application/mode_commander.hpp"
+#include "px4_backtrack/application/planning_worker.hpp"
 #include "px4_backtrack/domain/airborne_monitor.hpp"
 #include "px4_backtrack/domain/battery_monitor.hpp"
 #include "px4_backtrack/domain/link_monitor.hpp"
@@ -55,6 +56,8 @@ struct UseCaseConfig {
   // 执行层
   domain::RejoinConfig rejoin_config;
   trajectory_core::TrajectoryConfig trajectory_config;
+  double planning_warn_s{};     ///< 规划告警 (s)：超过后告警 PLANNING_SLOW
+  double planning_timeout_s{};  ///< 规划超时 (s)：超过后丢弃结果，改为航点降级
 
   // Debug/可视化（由节点决定是否创建导出器）
   bool debug_enable_csv_dump{};         ///< 启用CSV文件导出
@@ -92,7 +95,9 @@ class BacktrackUseCase {
 public:
   /// 构造函数
   /// @param config 配置参数
-  explicit BacktrackUseCase(const UseCaseConfig& config);
+  /// @param planning_worker 规划器；为空时创建带工作线程的规划器（单测传入不启动线程的，R-76）
+  explicit BacktrackUseCase(const UseCaseConfig& config,
+                            std::unique_ptr<PlanningWorker> planning_worker = nullptr);
 
   /// 每个控制周期调用一次
   /// @param now 当前时间 (s)
@@ -137,11 +142,18 @@ private:
   domain::Conditions assembleConditions(double now) const;
 
   /// 执行状态机本拍的命令
-  void executeCommands(const domain::StepOutput& step,
+  void executeCommands(const domain::StepOutput& step, double now,
                        std::vector<domain::StepEvent>& events);
 
-  /// 基于当前录制缓存同步规划（R4 改为后台）
-  void plan(std::vector<domain::StepEvent>& events);
+  /// 基于当前录制缓存提交后台规划（第 7.5 节）
+  void submitPlanning(double now, std::vector<domain::StepEvent>& events);
+
+  /// 取规划结果；规划超时时丢弃结果，在控制线程直接构建航点降级
+  void receivePlanning(double now, std::vector<domain::StepEvent>& events);
+
+  /// 采用规划结果
+  void applyPlanningResult(PlanningResult result,
+                           std::vector<domain::StepEvent>& events);
 
   /// 丢弃规划结果与跟随状态
   void resetPlan();
@@ -158,9 +170,6 @@ private:
                        std::vector<domain::StepEvent>& events);
   bool streamGapRecent(double now) const;
 
-  /// 执行 debug 数据导出（轨迹生成成功后调用）
-  void performDebugDump();
-
   /// 配置参数
   UseCaseConfig config_;
 
@@ -176,10 +185,13 @@ private:
 
   // 执行层
   domain::RecordingBuffer recording_buffer_;
-  domain::TrajectorySession trajectory_session_;
+  std::unique_ptr<PlanningWorker> planning_worker_;
+  std::unique_ptr<domain::TrajectorySession> trajectory_session_;  ///< 规划就绪后有效
   domain::WaypointFallbackSession waypoint_fallback_session_;
   domain::RejoinPolicy rejoin_policy_;
   domain::PlanStatus plan_status_{domain::PlanStatus::None};
+  double plan_submit_t_{0.0};    ///< 本次规划的提交时间
+  bool plan_timed_out_{false};   ///< 本任务的航点降级来自规划超时
 
   // 最近一次输入
   bool has_fcu_state_{false};
@@ -212,7 +224,7 @@ private:
   double last_publish_t_{0.0};
   std::optional<double> last_gap_end_t_;
 
-  // Debug helpers（可选，nullptr 表示禁用）
+  // Debug helpers（可选，nullptr 表示禁用），随规划请求交给规划线程
   std::shared_ptr<infrastructure::DebugDumper> debug_dumper_;
   std::shared_ptr<adapters::DebugPublisher> debug_publisher_;
 };

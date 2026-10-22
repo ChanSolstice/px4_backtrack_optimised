@@ -91,6 +91,10 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   requireParam(nh, "debug_trajectory_sample_dt", c.debug_trajectory_sample_dt);
   requireParam(nh, "debug_enable_rviz_publish", c.debug_enable_rviz_publish);
 
+  // 后台规划（第 7.5 节）
+  requireParam(nh, "planning_warn_s", c.planning_warn_s);
+  requireParam(nh, "planning_timeout_s", c.planning_timeout_s);
+
   // trajectory_core
   std::string trajectory_config_path;
   requireParam(nh, "trajectory_config_path", trajectory_config_path);
