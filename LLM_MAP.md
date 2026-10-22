@@ -10,7 +10,7 @@
 4. 所有状态转移都在 [`return_state_machine.cpp`](src/domain/return_state_machine.cpp) 的 `step()` 中完成，规则编号对应方案第 6.3 节。不要在 UseCase 里改状态或加分支。
 5. 条件层（`link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor`）只做检测，输出电平和带编号的按键指令，是否响应由状态机决定。
 6. 设计变化先改方案文档，并在第 15 节记一条审核记录（R-xx），再改代码；用户已确认的决策是 D1–D29。
-7. 本分支实施到 R3。后台规划（R4）、退出截断（R5）、超时升级（R6）、JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+7. 本分支实施到 R4。退出截断（R5）、超时升级（R6）、JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
 8. 参数全部在 [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 中必填，代码中没有默认值；新增参数要同时改 config 结构体、[`config_loader.cpp`](src/infrastructure/config_loader.cpp) 和 YAML。
 9. 用户要求整体简洁、避免过度防御：不加初值已保证的标志、不重复复位、不为小概率场景堆保护；不了解下方环境时，悬停优先于降落。
 
@@ -19,6 +19,7 @@
 见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 3.1 节。要点：
 
 - 先把异步模式请求的结果送回 `ModeCommander`，再让条件层推进到当前时间；
+- 规划中时先取规划线程的结果，超时则改为航点降级；
 - 用执行层"最近一次"的结果组装条件、调用 `step()`，之后才推进跟随进度、计算 setpoint（执行事实晚一拍，R-71）；
 - 模式意图交给 `ModeCommander`，由它决定本拍是否发出请求；
 - 事件（区域转换、条件边沿、任务、规划、模式请求、断流）随 `TickOutput` 返回，节点写到 rosout 和调试日志。
@@ -30,6 +31,7 @@
 - [`src/backtrack_node.cpp`](src/backtrack_node.cpp)：加载参数、创建适配器和 UseCase、驱动控制周期、写事件。
 - [`backtrack_usecase`](src/application/backtrack_usecase.cpp)：条件组装、命令执行、setpoint 计算、自身断流判定（R-69）、偏离与回归的持续判定。
 - [`mode_commander`](src/application/mode_commander.cpp)：模式请求的发送、重发、生效观察和失败告警（方案第 7.7 节，R-70）。
+- [`planning_worker`](src/application/planning_worker.cpp)：后台规划线程、失败分类与航点降级、规划成功后的 CSV 和 RViz 导出（方案第 7.5 节，R-76）。单测用不启动线程的方式，由 `runPending()` 决定结果到达的时刻。
 
 ### 领域层
 
@@ -106,7 +108,7 @@
 
 ### 7. 规划失败的分流
 
-点过近 → 原地降落；配置非法 → 保持；其他失败 → 航点降级；航点降级也失败 → 原地降落；点数不足 → 最多等 3 s 补点，仍不足则原地降落。
+点过近 → 原地降落；配置非法 → 保持；其他失败 → 航点降级；航点降级也失败 → 原地降落；点数不足 → 最多等 3 s 补点，仍不足则原地降落；规划 30 s 未完成 → 丢弃结果，在控制线程构建航点降级。规划在后台线程，控制周期不等它；悬停期间到达的结果在悬停结束后才处理（D3）。
 
 ### 8. Rejoin 是同一路径跟随器的低速模式
 
@@ -135,7 +137,7 @@
 3. [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)：当前实现的说明
 4. [`doc/testing/`](doc/testing/)：测试方法和执行记录
 
-重构要达到的行为（R4–R8 还没有实现）以方案为准。`doc/testing/` 中注明"只适用于 dev"的文档不描述当前行为。
+重构要达到的行为（R5–R8 还没有实现）以方案为准。`doc/testing/` 中注明"只适用于 dev"的文档不描述当前行为。
 
 ## 容易踩坑的地方
 
@@ -153,7 +155,7 @@
 - [`test_return_state_machine`](tests/unit/test_return_state_machine.cpp)：状态机场景
 - [`test_return_state_machine_invariants`](tests/unit/test_return_state_machine_invariants.cpp)：随机游走和单步穷举，检查安全约束 SC1–SC7、SC9
 - [`test_backtrack_usecase`](tests/unit/test_backtrack_usecase.cpp)：UseCase 闭环场景，用简化的飞控与链路模型覆盖方案第 11 节的场景
-- [`test_mode_commander`](tests/unit/test_mode_commander.cpp)、[`test_debug_log`](tests/unit/test_debug_log.cpp)：模式请求、调试日志
+- [`test_mode_commander`](tests/unit/test_mode_commander.cpp)、[`test_planning_worker`](tests/unit/test_planning_worker.cpp)、[`test_debug_log`](tests/unit/test_debug_log.cpp)：模式请求、后台规划、调试日志
 - [`test_trajectory_session`](tests/unit/test_trajectory_session.cpp)、[`test_rejoin_policy`](tests/unit/test_rejoin_policy.cpp)、[`test_waypoint_fallback_session`](tests/unit/test_waypoint_fallback_session.cpp)、[`test_recording_buffer`](tests/unit/test_recording_buffer.cpp)、[`test_path_yaw`](tests/unit/test_path_yaw.cpp)、[`test_ros_subscribers`](tests/unit/test_ros_subscribers.cpp)：执行层与适配
 
 运行：`DOCKER="sudo docker" scripts/docker/run_tests.sh amd64`；之后 `scripts/analysis/run_mutation_check.sh amd64`、`scripts/analysis/run_hazard_scenarios.sh amd64`。

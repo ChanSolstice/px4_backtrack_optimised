@@ -9,6 +9,7 @@
 - 解锁 15 s 后开始录制航迹（不超过 15 Hz）；退出返航后继续录制。
 - 三类触发：遥控链路丢失（CH18 失控帧漏桶确认，或 RC 消息中断）、低电量（持续 3 s 低于 15%，锁存到下一次解锁）、CH7 长按 2 s。不在空中时不启动；录制点不足时最多等 3 s 补点，仍不足则原地降落。
 - 失控时先原地悬停 15 s，期间完成规划；低电量和长按直接进入准备。
+- 规划在后台线程进行，控制周期照常发布保持点；10 s 未完成告警，30 s 未完成则改为航点降级返航。
 - 规划前对悬停形成的密集录制点做空间抽稀；生成失败时改为逆序航点降级返航，起终点过近时原地降落。
 - 按实际位置在路径上的局部投影推进进度，不依赖 wall time；偏离超过 0.5 m 时沿路径低速回归。
 - 控制权由状态机管理：预发 setpoint 后申请 OFFBOARD；本模块断流引起的飞控回退不算接管，等飞控自动回到 OFFBOARD；链路正常时飞手拨开关或短按 CH7 退出返航，链路丢失或不稳定时被切出则重新申请控制权。
@@ -21,7 +22,7 @@
 
 当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。
 
-本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线已完成，节点运行的是新状态机，dev 的暂停/恢复语义已删除。R4 后台规划、R5 退出后截断轨迹、R6 超时与升级、R7 上报与调试日志完善、R8 文档与部署还没有实施，现在与方案的差距见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线、R4 后台规划已完成，节点运行的是新状态机，dev 的暂停/恢复语义已删除。R5 退出后截断轨迹、R6 超时与升级、R7 上报与调试日志完善、R8 文档与部署还没有实施，现在与方案的差距见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
 
 本分支还没有实飞。按方案，R6 完成后做完整 SITL，R7 完成并通过台架检查后再上实飞。
 
@@ -32,7 +33,7 @@
 - `src/backtrack_node.cpp`
   加载参数，创建订阅、发布、服务客户端和 `BacktrackUseCase`，按 `publish_hz` 驱动控制周期，把事件写到 rosout 和调试日志
 - `include/px4_backtrack/application` / `src/application`
-  `BacktrackUseCase` 组装条件、调用状态机、执行命令、计算 setpoint，不访问 ROS；`ModeCommander` 负责模式请求的发送、重发和失败告警
+  `BacktrackUseCase` 组装条件、调用状态机、执行命令、计算 setpoint，不访问 ROS；`ModeCommander` 负责模式请求的发送、重发和失败告警；`PlanningWorker` 在后台线程规划
 - `include/px4_backtrack/domain` / `src/domain`
   条件层（链路、CH7、电量、在空中）、`ReturnStateMachine`（任务阶段、控制权、跟随方式三个区域），以及录制、轨迹会话、航点降级、回归限速、切向 yaw 等执行组件
 - `include/px4_backtrack/adapters` / `src/adapters`
@@ -46,7 +47,7 @@
 
 1. 启动时 `ConfigLoader` 从参数服务器读取返航参数（缺少任何一项即启动失败），再加载 `trajectory_config.yaml`；打开调试日志时，先写入生效参数。
 2. 订阅回调把飞控状态、落地状态、里程计、RC 和电池数据连同接收时间送入 `BacktrackUseCase`。
-3. 每个控制周期（20 Hz）：条件层推进到当前时间 → 组装 `Conditions` 快照 → `ReturnStateMachine::step()` 给出命令、setpoint 策略和模式意图 → UseCase 执行命令（新飞行周期复位、同步规划）、推进路径进度、计算 setpoint → `ModeCommander` 决定本拍要发出的模式请求。
+3. 每个控制周期（20 Hz）：条件层推进到当前时间 → 组装 `Conditions` 快照 → `ReturnStateMachine::step()` 给出命令、setpoint 策略和模式意图 → UseCase 执行命令（新飞行周期复位、提交或取消后台规划）、推进路径进度、计算 setpoint；规划结果在之后的周期中取回 → `ModeCommander` 决定本拍要发出的模式请求。
 4. 节点发布状态和 setpoint，在单独线程中调用 `/mavros/set_mode`，并把事件写到 rosout 和调试日志。
 
 ## ROS 接口
@@ -100,6 +101,7 @@
 - 低电量：`enable_trigger_low_battery`、`low_battery_threshold`、`low_battery_confirm_s`
 - 输入新鲜度与在空中判定：`odom_stale_s`、`odom_timeout_s`、`fcu_state_stale_s`、`airborne_min_height_m`
 - 任务与控制权：`return_pending_max_s`、`pre_offboard_setpoint_count`、`fallback_gap_s`、`fallback_window_s`、`fallback_timeout_s`、`reclaim_max_offset_m`、`handover_posctl_timeout_s`、`mode_request_interval_s`、`mode_request_timeout_s`
+- 后台规划：`planning_warn_s`、`planning_timeout_s`
 - 回归：`rejoin_trigger_dist_m`、`rejoin_success_dist_m`、`rejoin_v_max_m_s`、`rejoin_lookahead_time_s`、`rejoin_trigger_hold_s`、`rejoin_success_hold_s`
 - 降落：`landing_hover_s`
 - 轨迹配置路径：`trajectory_config_path`
@@ -163,7 +165,7 @@ roslaunch px4_backtrack_optimised backtrack.launch
 设置 `debug_log_enable: true` 后，节点每次启动在 `debug_log_dir`（留空为 `~/.ros/backtrack_logs`，非空时必须是绝对路径）下建一个运行目录 `run_YYYYMMDD_HHMMSS/`，把事件一行一个写入 `events.jsonl`：
 
 - 第一行是生效参数和本模块的提交号；
-- 之后是状态转换（带规则编号和原因）、飞控模式和解锁变化、条件边沿、CH7 指令、任务开始与结束、规划结果、模式请求、自身断流，以及告警的出现和消失；
+- 之后是状态转换（带规则编号和原因）、飞控模式和解锁变化、条件边沿、CH7 指令、任务开始与结束、规划的提交、结果、超时和取消、模式请求、自身断流，以及告警的出现和消失；
 - 写盘在后台线程；写失败时停止写日志并告警 `DEBUG_LOG_FAILED`，返航不受影响。
 
 试飞期间建议打开。逐拍记录、保留策略和查看脚本在 R7 加入，目前日志目录不会自动清理。
@@ -234,8 +236,8 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 
 | 层次 | 命令 | 说明 |
 | --- | --- | --- |
-| 单元测试 | `scripts/docker/run_tests.sh amd64` | 在全新的 ROS Noetic 容器中编译并运行全部单测（178 个）和 trajectory_core 的单测；参数换成 `arm64` 时在 QEMU 中按机载架构复核（本机编译加单测约 30 分钟） |
-| 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误（42 种） |
+| 单元测试 | `scripts/docker/run_tests.sh amd64` | 在全新的 ROS Noetic 容器中编译并运行全部单测（187 个）和 trajectory_core 的单测；参数换成 `arm64` 时在 QEMU 中按机载架构复核（本机编译加单测约 30 分钟） |
+| 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误（46 种） |
 | 闭环危害场景 | `scripts/analysis/run_hazard_scenarios.sh amd64` | 假飞控驱动真实 `BacktrackUseCase`，场景 H01–H14 |
 | 规划耗时 | `scripts/bench/run_gen_bench.sh amd64 10 30` | 轨迹生成耗时随录制时长的增长 |
 | SITL | `scripts/sitl/run_sitl_checks.sh` | PX4 v1.15.4 SITL 中确认方案依赖的飞控行为（N1、N2） |
@@ -254,7 +256,7 @@ catkin_test_results
 
 - [文档导航](doc/README.md)：按用途分类的完整索引。
 - [返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)：当前开发的依据。
-- [系统总览](doc/reference/SYSTEM_OVERVIEW.md)：实施到 R3 的接口、模块划分、处理顺序、状态机和执行层，以及与方案的差距。
+- [系统总览](doc/reference/SYSTEM_OVERVIEW.md)：实施到 R4 的接口、模块划分、处理顺序、状态机和执行层，以及与方案的差距。
 - [前端对接开发文档](doc/reference/前端对接开发文档.md)：状态字符串、话题语义和 UI 建议。
 - [返航程序系统性分析（2026-10-20）](doc/reviews/返航程序系统性分析_2026-10-20.md)：危害分析、PX4 源码核对、闭环仿真和 SITL 确认。
 - [单元测试文档](doc/testing/单元测试文档.md)、[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)：测试方法与执行记录。
@@ -263,5 +265,4 @@ catkin_test_results
 ## 已知注意点
 
 - `README` 与 `LLM_MAP` 以当前 C++ 代码为准。
-- 规划仍在任务开始时同步执行（R4 改为后台）：30 分钟录制约阻塞控制周期 4.7 s（本机），失控任务进入 OFFBOARD 相应推迟。
 - 单元测试只覆盖少量 ROS adapters，没有 launch 级测试；修改状态机、条件层、轨迹接口或参数装配后，除单测外还要跑闭环场景，涉及与飞控交互时再做 SITL。
