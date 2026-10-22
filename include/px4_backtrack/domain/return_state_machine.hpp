@@ -116,19 +116,12 @@ enum class ModeIntent {
 /// 模式意图对应的 MAVROS 模式字符串；None 为空串
 const char* modeIntentName(ModeIntent intent);
 
-/// 退出时对轨迹的截断方式（重构方案第 7.4 节，R5 实现）
-enum class TrailCut {
-  None,      ///< 不截断（悬停、准备阶段退出）
-  AtCursor,  ///< 截断到游标（跟随阶段退出）
-  ToStart    ///< 截断到起点（到点、交接阶段退出）
-};
-
 /// 本拍要求执行层执行的命令（一次性）
 struct ExecCommands {
   bool new_flight{false};        ///< 新的飞行周期：清空录制和会话，复位电量与按键
   bool start_planning{false};    ///< 任务开始：基于当前录制缓存提交规划
   bool cancel_planning{false};   ///< 任务结束或进入交接：取消规划，丢弃会话
-  TrailCut trail_cut{TrailCut::None};  ///< 退出时截断轨迹
+  bool trail_cut{false};         ///< 退出：录制截断到执行层的游标（第 7.4 节，R-78）
 };
 
 /// 告警码（重构方案第 9.1 节）

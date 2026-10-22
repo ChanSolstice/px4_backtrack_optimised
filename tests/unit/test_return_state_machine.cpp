@@ -443,7 +443,7 @@ TEST(ReturnStateMachineTest, ShortPressExitsMission) {
   EXPECT_FALSE(h.out.mission_active);
   EXPECT_TRUE(h.out.record);
   EXPECT_TRUE(h.out.commands.cancel_planning);
-  EXPECT_EQ(h.out.commands.trail_cut, TrailCut::AtCursor);
+  EXPECT_TRUE(h.out.commands.trail_cut);
   EXPECT_TRUE(h.out.alerts.has(Alert::ReturnExited));
   EXPECT_TRUE(h.sawEvent(EventType::State, "Exited", "5", "PILOT_EXIT"));
   // 飞控离开 OFFBOARD 之前保持当前位置并请求 POSCTL
@@ -496,7 +496,7 @@ TEST(ReturnStateMachineTest, PressStartedBeforeMissionDoesNotExit) {
   h.shortPressNow();
   h.step();
   EXPECT_EQ(h.out.phase, MissionPhase::Exited);
-  EXPECT_EQ(h.out.commands.trail_cut, TrailCut::None);
+  EXPECT_TRUE(h.out.commands.trail_cut);
 }
 
 TEST(ReturnStateMachineTest, LongPressDuringMissionDoesNotExit) {
@@ -934,7 +934,7 @@ TEST(ReturnStateMachineTest, HandoverPilotTakeoverOnlyWithCleanLink) {
   h.c.mode = "ALTCTL";
   h.step();
   EXPECT_EQ(h.out.phase, MissionPhase::Exited);
-  EXPECT_EQ(h.out.commands.trail_cut, TrailCut::ToStart);
+  EXPECT_TRUE(h.out.commands.trail_cut);
   h.run(2.0);
   EXPECT_NE(h.out.mode_intent, ModeIntent::AutoLand);
 
@@ -1095,8 +1095,8 @@ TEST(ReturnStateMachineTest, ExitedDoesNotRestartOnGround) {
   EXPECT_TRUE(h.out.alerts.has(Alert::TriggerIgnoredLanded));
 }
 
-TEST(ReturnStateMachineTest, ExitTrailCutDependsOnPhase) {
-  // R-65：悬停、准备不截断；跟随截断到游标；到点、交接截断到起点
+TEST(ReturnStateMachineTest, ExitAlwaysRequestsTrailCut) {
+  // R-78：任何阶段退出都要求截断，截断位置由执行层的游标决定；只有退出时才截断
   Harness hover;
   hover.startLinkLossMission();
   hover.acquire();
@@ -1104,14 +1104,24 @@ TEST(ReturnStateMachineTest, ExitTrailCutDependsOnPhase) {
   hover.shortPressNow();
   hover.step();
   ASSERT_EQ(hover.out.phase, MissionPhase::Exited);
-  EXPECT_EQ(hover.out.commands.trail_cut, TrailCut::None);
+  EXPECT_TRUE(hover.out.commands.trail_cut);
+  hover.step();
+  EXPECT_FALSE(hover.out.commands.trail_cut);
 
   Harness arrival;
   arrival.toArrival();
   arrival.shortPressNow();
   arrival.step();
   ASSERT_EQ(arrival.out.phase, MissionPhase::Exited);
-  EXPECT_EQ(arrival.out.commands.trail_cut, TrailCut::ToStart);
+  EXPECT_TRUE(arrival.out.commands.trail_cut);
+
+  // 到点悬停结束、进入交接不是退出，不截断
+  Harness handover;
+  handover.toArrival();
+  ASSERT_GT(handover.runUntil([](const StepOutput& o) {
+    return o.phase == MissionPhase::Handover;
+  }), 0);
+  EXPECT_FALSE(handover.out.commands.trail_cut);
 }
 
 // ============================================================================

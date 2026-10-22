@@ -694,19 +694,8 @@ void ReturnStateMachine::enterHandover(const Conditions& c, HandoverReason reaso
 
 void ReturnStateMachine::exitMission(const Conditions& c, const char* rule,
                                      const char* reason, StepOutput& out) {
-  switch (phase_) {
-    case MissionPhase::Follow:
-      out.commands.trail_cut = TrailCut::AtCursor;
-      break;
-    case MissionPhase::Arrival:
-    case MissionPhase::Handover:
-      out.commands.trail_cut = TrailCut::ToStart;
-      break;
-    default:
-      // 悬停、准备阶段还没沿返航路径移动，不截断（R-65）
-      out.commands.trail_cut = TrailCut::None;
-      break;
-  }
+  // 截断到游标：游标只在跟随时推进，悬停、准备阶段退出等于不截断（R-65、R-78）
+  out.commands.trail_cut = true;
   out.commands.cancel_planning = true;
   exit_position_ = c.position;
   exit_yaw_ = c.yaw;
