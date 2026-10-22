@@ -63,6 +63,18 @@ public:
   /// @return 是否为空
   bool empty() const;
 
+  /// 截断：只保留 [0, last_index]（重构方案第 7.4 节）
+  void truncate(size_t last_index);
+
+  /// 录制在任务期间暂停后恢复：下一个点的时间戳接在末点之后 1/max_hz（第 7.4 节，R-77）
+  void resume();
+
+  /// 游标搜索（第 7.4 节）：从 cursor 往前、与 cursor 的累计距离不超过 window_m 的录制点中，
+  /// 找离 reference 最近的点，距离相同时取更小的索引
+  /// @param cursor 当前游标，须小于 size()
+  /// @return 新的游标，不大于 cursor
+  size_t nearestBefore(size_t cursor, const Vec3& reference, double window_m) const;
+
 private:
   /// 最大录制频率 (Hz)
   double max_hz_;
@@ -70,8 +82,11 @@ private:
   /// 最小录制时间间隔 (s) = 1.0 / max_hz_
   double min_dt_;
 
-  /// 第一个里程计时间戳（用作时间参考原点）
-  double first_odom_stamp_;
+  /// 相对时间 0 对应的里程计时间戳；续录时平移
+  double time_origin_;
+
+  /// 下一个点按续录接续时间戳
+  bool resume_pending_;
 
   /// 上次录制的里程计时间戳
   double last_record_stamp_;

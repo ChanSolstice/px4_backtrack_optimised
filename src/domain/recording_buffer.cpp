@@ -1,5 +1,6 @@
 #include "px4_backtrack/domain/recording_buffer.hpp"
 #include <algorithm>
+#include <cstddef>
 
 namespace px4_backtrack {
 namespace domain {
@@ -7,7 +8,8 @@ namespace domain {
 RecordingBuffer::RecordingBuffer(double max_hz)
   : max_hz_(max_hz),
     min_dt_(1.0 / max_hz),
-    first_odom_stamp_(0.0),
+    time_origin_(0.0),
+    resume_pending_(false),
     last_record_stamp_(0.0),
     has_first_point_(false)
 {
@@ -16,7 +18,8 @@ RecordingBuffer::RecordingBuffer(double max_hz)
 
 void RecordingBuffer::reset() {
   points_.clear();
-  first_odom_stamp_ = 0.0;
+  time_origin_ = 0.0;
+  resume_pending_ = false;
   last_record_stamp_ = 0.0;
   has_first_point_ = false;
 }
@@ -24,12 +27,22 @@ void RecordingBuffer::reset() {
 bool RecordingBuffer::addPoint(const Vec3& position, double yaw, double odom_stamp) {
   // 第一个点：初始化时间参考
   if (!has_first_point_) {
-    first_odom_stamp_ = odom_stamp;
+    time_origin_ = odom_stamp;
     last_record_stamp_ = odom_stamp;
     has_first_point_ = true;
 
     // 第一个点的相对时间戳为0
     points_.emplace_back(position, yaw, 0.0);
+    return true;
+  }
+
+  // 续录：第一个新点接在末点之后 min_dt_，之后按里程计时间递增（第 7.4 节）
+  if (resume_pending_) {
+    resume_pending_ = false;
+    const double timestamp = points_.back().timestamp + min_dt_;
+    time_origin_ = odom_stamp - timestamp;
+    last_record_stamp_ = odom_stamp;
+    points_.emplace_back(position, yaw, timestamp);
     return true;
   }
 
@@ -40,7 +53,7 @@ bool RecordingBuffer::addPoint(const Vec3& position, double yaw, double odom_sta
   }
 
   // 计算相对时间戳（从第一个点开始）
-  double relative_timestamp = odom_stamp - first_odom_stamp_;
+  double relative_timestamp = odom_stamp - time_origin_;
 
   // 单调性检查（防御性编程）
   if (!points_.empty() && relative_timestamp <= points_.back().timestamp) {
@@ -69,6 +82,35 @@ std::vector<RecordPoint> RecordingBuffer::getPointsCopy() const {
 
 bool RecordingBuffer::empty() const {
   return points_.empty();
+}
+
+void RecordingBuffer::truncate(size_t last_index) {
+  if (last_index + 1 < points_.size()) {
+    points_.erase(points_.begin() + static_cast<std::ptrdiff_t>(last_index + 1), points_.end());
+  }
+}
+
+void RecordingBuffer::resume() {
+  resume_pending_ = !points_.empty();
+}
+
+size_t RecordingBuffer::nearestBefore(size_t cursor, const Vec3& reference,
+                                      double window_m) const {
+  size_t best = cursor;
+  double best_distance = (points_[cursor].position - reference).norm();
+  double arc = 0.0;
+  for (size_t i = cursor; i > 0; --i) {
+    arc += (points_[i].position - points_[i - 1].position).norm();
+    if (arc > window_m) {
+      break;
+    }
+    const double distance = (points_[i - 1].position - reference).norm();
+    if (distance <= best_distance) {  // 距离相同时取更小的索引
+      best = i - 1;
+      best_distance = distance;
+    }
+  }
+  return best;
 }
 
 }  // namespace domain
