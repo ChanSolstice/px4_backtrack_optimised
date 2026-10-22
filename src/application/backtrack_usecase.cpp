@@ -196,6 +196,7 @@ domain::Conditions BacktrackUseCase::assembleConditions(double now) const {
   c.has_min_points = recording_buffer_.size() >=
                      static_cast<size_t>(config_.record_min_points);
   c.plan_status = plan_status_;
+  c.trail_gap = plan_begin_ > 0;
   c.planning_slow = plan_status_ == domain::PlanStatus::Pending &&
                     now - plan_submit_t_ + kTimeEpsS >= config_.planning_warn_s;
   c.planning_timed_out = plan_timed_out_;
@@ -260,16 +261,21 @@ void BacktrackUseCase::executeCommands(const domain::StepOutput& step, double no
 }
 
 void BacktrackUseCase::submitPlanning(double now, std::vector<domain::StepEvent>& events) {
+  // 只用末点到最近断点的连续段，不跨过超过安全距离的间隔（D30）
+  const auto& points = recording_buffer_.getPoints();
+  plan_begin_ = recording_buffer_.continuousFrom(config_.state_machine_config.safe_distance_m);
   PlanningInput input;
-  input.points = recording_buffer_.getPoints();
+  input.points.assign(points.begin() + static_cast<std::ptrdiff_t>(plan_begin_), points.end());
   input.config = config_.trajectory_config;
   input.debug_sample_dt = config_.debug_trajectory_sample_dt;
   input.dumper = debug_dumper_;
   input.publisher = debug_publisher_;
-  const double duration = input.points.empty() ? 0.0 : input.points.back().timestamp;
-  events.push_back(makeEvent(domain::EventType::Planning, "submitted", "",
-                             "points=" + std::to_string(input.points.size()) +
-                                 " duration_s=" + formatSeconds(duration)));
+  const double duration = input.points.empty()
+      ? 0.0 : input.points.back().timestamp - input.points.front().timestamp;
+  events.push_back(makeEvent(
+      domain::EventType::Planning, "submitted", "",
+      "points=" + std::to_string(input.points.size()) + " duration_s=" + formatSeconds(duration) +
+          (plan_begin_ > 0 ? " gap_at=" + std::to_string(plan_begin_) : "")));
   planning_worker_->request(std::move(input));
   plan_status_ = domain::PlanStatus::Pending;
   plan_submit_t_ = now;
@@ -290,7 +296,10 @@ void BacktrackUseCase::receivePlanning(double now, std::vector<domain::StepEvent
     plan_timed_out_ = true;
     events.push_back(makeEvent(domain::EventType::Planning, "timeout", "TIMEOUT",
                                "elapsed_s=" + formatSeconds(elapsed)));
-    applyPlanningResult(planFallback(recording_buffer_.getPoints()), events);
+    const auto& points = recording_buffer_.getPoints();
+    applyPlanningResult(
+        planFallback({points.begin() + static_cast<std::ptrdiff_t>(plan_begin_), points.end()}),
+        events);
   }
 }
 
@@ -330,6 +339,7 @@ void BacktrackUseCase::resetPlan() {
   waypoint_fallback_session_.reset();
   plan_status_ = domain::PlanStatus::None;
   plan_timed_out_ = false;
+  plan_begin_ = 0;
   deviation_confirmed_ = false;
   rejoin_confirmed_ = false;
   deviation_since_ = -1.0;

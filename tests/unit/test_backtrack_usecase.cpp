@@ -776,6 +776,74 @@ TEST(BacktrackUseCaseTest, PositionJumpDuringReturnHoldsInPlace) {
   EXPECT_LT((s.out.setpoint->position - s.pos).norm(), 0.1);
 }
 
+TEST(BacktrackUseCaseTest, PositionJumpInRecordingStopsReturnAtGap) {
+  // S33：录制中定位突跳 5 m：返航只沿突跳之后的一段回到突跳处，原地悬停，不跨过、不降落
+  Sim s;
+  s.flyOutbound(2.0);
+  s.pos = Vec3(2.0, 5.0, 2.0);  // 定位突跳
+  const Vec3 gap_end = s.pos;
+  for (int i = 1; i <= 20; ++i) {
+    s.pos = Vec3(2.0 + 0.1 * i, 5.0, 2.0);
+    s.step();
+  }
+  s.battery = 0.10;
+  ASSERT_TRUE(s.runUntilState("ReturnActive", 5.0));
+  EXPECT_FALSE(eventValues(s.events, "submitted", "gap_at").empty());
+  double min_y = s.pos.y();
+  ASSERT_TRUE(s.runUntil([&] {
+    min_y = std::min(min_y, s.pos.y());
+    return s.in("LandingHover");
+  }, 20.0));
+  s.run(10.0);
+  EXPECT_TRUE(s.in("LandingHover"));
+  EXPECT_TRUE(s.alert(Alert::TrailGap));
+  EXPECT_LT((s.pos - gap_end).norm(), 0.3);
+  EXPECT_GT(min_y, 4.7);  // 没有朝突跳前的轨迹飞
+  EXPECT_EQ(s.requestsSince("AUTO.LAND", 0.0), 0);
+}
+
+TEST(BacktrackUseCaseTest, NewMissionDoesNotCrossGapLeftByMovedAircraft) {
+  // S33、D30：返航中链路异常，飞手把飞机移开 5 m 后退出；之后失控的新任务
+  // 只沿手动段回到退出位置，不跨过截断处与退出位置之间的大间隔直线飞向起点
+  Sim s;
+  s.flyOutbound(10.0);
+  s.battery = 0.10;
+  ASSERT_TRUE(s.runUntilState("ReturnActive", 5.0));
+  s.run(0.5);
+  s.link_ok = false;
+  ASSERT_TRUE(s.runUntil([&] { return s.out.link_lost; }, 2.0));
+  s.reject_offboard = true;
+  s.mode = "POSCTL";
+  s.track = false;
+  for (int i = 0; i < 20; ++i) {
+    s.pos += Vec3(0.0, 0.25, 0.0);
+    s.step();
+  }
+  s.link_ok = true;  // 链路恢复，飞手当时的模式生效（R-63）
+  ASSERT_TRUE(s.runUntilState("Exited", 10.0));
+  const Vec3 exit_pos = s.pos;
+  for (int i = 0; i < 30; ++i) {  // 手动向北再飞 3 m
+    s.pos += Vec3(0.0, 0.1, 0.0);
+    s.step();
+  }
+  s.reject_offboard = false;
+  s.track = true;
+  s.link_ok = false;
+  ASSERT_TRUE(s.runUntilState("Ch18HoverWait", 2.0));
+  EXPECT_FALSE(eventValues(s.events, "submitted", "gap_at").empty());
+  double min_y = s.pos.y();
+  ASSERT_TRUE(s.runUntil([&] {
+    min_y = std::min(min_y, s.pos.y());
+    return s.in("LandingHover");
+  }, 40.0));
+  s.run(10.0);
+  EXPECT_TRUE(s.in("LandingHover"));
+  EXPECT_TRUE(s.alert(Alert::TrailGap));
+  EXPECT_LT((s.pos - exit_pos).norm(), 0.3);  // 停在退出位置
+  EXPECT_GT(min_y, exit_pos.y() - 0.3);        // 没有越过断点
+  EXPECT_EQ(s.requestsSince("AUTO.LAND", 0.0), 0);
+}
+
 // ============================================================================
 // 降落与让步
 // ============================================================================

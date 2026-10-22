@@ -75,6 +75,9 @@ public:
   /// @return 新的游标，不大于 cursor
   size_t nearestBefore(size_t cursor, const Vec3& reference, double window_m) const;
 
+  /// 从末点往前，相邻两点间距都不超过 max_gap_m 的连续段的起点索引；没有断点时为 0（D30）
+  size_t continuousFrom(double max_gap_m) const;
+
 private:
   /// 最大录制频率 (Hz)
   double max_hz_;

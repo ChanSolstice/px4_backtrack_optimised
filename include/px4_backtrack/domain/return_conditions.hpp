@@ -56,6 +56,7 @@ struct Conditions {
   // 执行事实（第 5.6 节）
   bool has_min_points{false};             ///< 录制点数 ≥ record_min_points
   PlanStatus plan_status{PlanStatus::None};
+  bool trail_gap{false};                  ///< 规划用的轨迹在断点处截断，不通到录制起点（D30）
   bool planning_slow{false};              ///< 规划中且已超过 planning_warn_s（R-76）
   bool planning_timed_out{false};         ///< 本任务的航点降级来自规划超时，持续到任务结束（R-76）
   std::optional<double> path_start_yaw;   ///< 轨迹就绪后的路径起始切向；航点降级没有，不要求对准

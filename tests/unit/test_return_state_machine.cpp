@@ -881,6 +881,30 @@ TEST(ReturnStateMachineTest, FollowHoldsWhenOffsetExceedsSafeDistance) {
   EXPECT_FALSE(h.out.alerts.has(Alert::PathOffset));
 }
 
+TEST(ReturnStateMachineTest, TrailGapHoldsInsteadOfLanding) {
+  // S33、D30：轨迹在断点处截断时，到点、点过近、航点降级也构建失败都原地悬停，不降落
+  Harness a;
+  a.c.trail_gap = true;
+  a.toArrival();
+  a.run(10.0);
+  EXPECT_EQ(a.out.phase, MissionPhase::Arrival);
+  EXPECT_EQ(a.out.setpoint, SetpointKind::Hold);
+  EXPECT_NE(a.out.mode_intent, ModeIntent::AutoLand);
+  EXPECT_TRUE(a.out.alerts.has(Alert::TrailGap));
+
+  for (const PlanStatus failed : {PlanStatus::FailedTooClose, PlanStatus::FailedFallback}) {
+    Harness h;
+    h.startLowBatteryMission();
+    h.acquire();
+    h.c.trail_gap = true;
+    h.c.plan_status = failed;
+    h.run(2.0);
+    EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+    EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+    EXPECT_TRUE(h.out.alerts.has(Alert::TrailGap));
+  }
+}
+
 TEST(ReturnStateMachineTest, PlanFailuresLandOrHold) {
   Harness t;
   t.startLowBatteryMission();

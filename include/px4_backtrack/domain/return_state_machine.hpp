@@ -140,6 +140,7 @@ enum class Alert : uint8_t {
   ReturnRequestIgnored,
   Reclaiming,
   PathOffset,
+  TrailGap,
   ReclaimTimeout,
   OffboardFallback,
   ModeRequestFailed,

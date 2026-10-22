@@ -177,6 +177,7 @@ const char* alertName(Alert alert) {
     case Alert::ReturnRequestIgnored: return "RETURN_REQUEST_IGNORED";
     case Alert::Reclaiming: return "RECLAIMING";
     case Alert::PathOffset: return "PATH_OFFSET";
+    case Alert::TrailGap: return "TRAIL_GAP";
     case Alert::ReclaimTimeout: return "RECLAIM_TIMEOUT";
     case Alert::OffboardFallback: return "OFFBOARD_FALLBACK";
     case Alert::ModeRequestFailed: return "MODE_REQUEST_FAILED";
@@ -417,12 +418,17 @@ void ReturnStateMachine::stepMission(const Conditions& c, StepOutput& out) {
 }
 
 void ReturnStateMachine::stepPrepare(const Conditions& c, StepOutput& out) {
+  // 轨迹在断点处截断时飞机不一定靠近起点：这两种失败原地悬停，不降落（D30）
   switch (c.plan_status) {
     case PlanStatus::FailedTooClose:
-      enterHandover(c, HandoverReason::PlanTooClose, false, "7", out);
+      if (!c.trail_gap) {
+        enterHandover(c, HandoverReason::PlanTooClose, false, "7", out);
+      }
       return;
     case PlanStatus::FailedFallback:
-      enterHandover(c, HandoverReason::FallbackFailed, false, "7", out);
+      if (!c.trail_gap) {
+        enterHandover(c, HandoverReason::FallbackFailed, false, "7", out);
+      }
       return;
     case PlanStatus::Ready:
     case PlanStatus::ReadyFallback:
@@ -481,7 +487,10 @@ void ReturnStateMachine::stepArrival(const Conditions& c, StepOutput& out) {
     arrival_owned_s_ += dt;
   }
   if (arrival_owned_s_ + kTimeEpsS >= config_.landing_hover_s) {
-    enterHandover(c, HandoverReason::Arrived, false, "7", out);
+    // 到达的是轨迹断点而不是录制起点：原地悬停，不降落（D30）
+    if (!c.trail_gap) {
+      enterHandover(c, HandoverReason::Arrived, false, "7", out);
+    }
   }
 }
 
@@ -1009,6 +1018,7 @@ void ReturnStateMachine::computeAlerts(const Conditions& c, StepOutput& out) {
 
   if (control_ == ControlState::Reclaiming) alerts.set(Alert::Reclaiming);
   if (path_offset_) alerts.set(Alert::PathOffset);
+  if (mission_.active && c.trail_gap) alerts.set(Alert::TrailGap);
   if (control_ == ControlState::Fallback) alerts.set(Alert::OffboardFallback);
   if (phase_ == MissionPhase::FcuLanding && c.link.lost &&
       knownMode() != kModeAutoLand) {

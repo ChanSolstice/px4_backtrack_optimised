@@ -146,5 +146,14 @@ TEST(RecordingBufferTest, NearestBeforeStaysOnLocalBranchOfSelfCrossingTrail) {
   EXPECT_EQ(cursor, 20u);  // (2, 0)，后一段上的点
 }
 
+TEST(RecordingBufferTest, ContinuousFromFindsLastGap) {
+  // D30：从末点往前，相邻两点超过 max_gap 的位置是断点
+  EXPECT_EQ(lineAlongX({0.0, 0.5, 1.0, 1.5}).continuousFrom(1.0), 0u);
+  EXPECT_EQ(lineAlongX({0.0, 0.5, 4.0, 4.5, 5.0}).continuousFrom(1.0), 2u);
+  EXPECT_EQ(lineAlongX({0.0, 3.0, 3.5, 8.0}).continuousFrom(1.0), 3u);  // 断点就在末点前
+  EXPECT_EQ(lineAlongX({0.0, 1.0, 2.0}).continuousFrom(1.0), 0u);       // 正好等于不算断点
+  EXPECT_EQ(RecordingBuffer(10.0).continuousFrom(1.0), 0u);
+}
+
 }  // namespace
 }  // namespace px4_backtrack::domain

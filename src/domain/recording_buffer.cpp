@@ -94,6 +94,15 @@ void RecordingBuffer::resume() {
   resume_pending_ = !points_.empty();
 }
 
+size_t RecordingBuffer::continuousFrom(double max_gap_m) const {
+  size_t begin = points_.empty() ? 0 : points_.size() - 1;
+  while (begin > 0 &&
+         (points_[begin].position - points_[begin - 1].position).norm() <= max_gap_m) {
+    --begin;
+  }
+  return begin;
+}
+
 size_t RecordingBuffer::nearestBefore(size_t cursor, const Vec3& reference,
                                       double window_m) const {
   size_t best = cursor;

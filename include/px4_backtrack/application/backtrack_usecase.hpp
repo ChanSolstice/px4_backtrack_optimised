@@ -195,6 +195,7 @@ private:
   domain::RejoinPolicy rejoin_policy_;
   domain::PlanStatus plan_status_{domain::PlanStatus::None};
   double plan_submit_t_{0.0};    ///< 本次规划的提交时间
+  size_t plan_begin_{0};         ///< 规划用的连续段在录制中的起点，大于 0 表示有断点（D30）
   bool plan_timed_out_{false};   ///< 本任务的航点降级来自规划超时
   size_t cursor_{0};             ///< 游标：返航已经走到的录制点（第 7.4 节）
 
