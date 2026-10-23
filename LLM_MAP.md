@@ -70,7 +70,7 @@
 - [`scripts/docker/run_tests.sh`](scripts/docker/run_tests.sh)：在全新的 ROS Noetic 容器中编译并运行全部单测。
 - [`scripts/analysis/`](scripts/analysis/)：闭环危害场景（假飞控驱动真实 UseCase，H01–H16）和错误注入检查，复用上面的容器。
 - [`scripts/bench/`](scripts/bench/)：轨迹生成耗时基准。
-- [`scripts/sitl/`](scripts/sitl/)：PX4 v1.15.4 SITL（SIH）中确认方案依赖的飞控行为。
+- [`scripts/sitl/`](scripts/sitl/)：PX4 v1.15.4 SITL（SIH）中确认方案依赖的飞控行为（N1、N2），以及运行本节点回放方案第 11 节的场景（`run_sitl_checks.sh scenarios`）。
 - [`scripts/plot_debug_csv.py`](scripts/plot_debug_csv.py)：规划 CSV 绘图。
 
 ## 行为语义上的关键点
