@@ -1,4 +1,5 @@
 #include "px4_backtrack/infrastructure/config_loader.hpp"
+#include <cstdlib>
 #include <stdexcept>
 
 namespace px4_backtrack {
@@ -14,6 +15,15 @@ void requireParam(ros::NodeHandle& nh, const char* name, T& value) {
 
   ROS_ERROR("[ConfigLoader] Required parameter '%s' is not set", name);
   throw std::runtime_error(std::string("required parameter missing: ") + name);
+}
+
+/// 以 ~/ 开头的目录展开为 $HOME，同一份参数在不同用户名的机器上都能用（R-81）
+std::string expandHome(const std::string& path) {
+  if (path.rfind("~/", 0) != 0) {
+    return path;
+  }
+  const char* home = std::getenv("HOME");
+  return std::string(home ? home : "/tmp") + path.substr(1);
 }
 
 }  // namespace
@@ -88,6 +98,7 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   // Debug/可视化
   requireParam(nh, "debug_enable_csv_dump", c.debug_enable_csv_dump);
   requireParam(nh, "debug_csv_output_dir", c.debug_csv_output_dir);
+  c.debug_csv_output_dir = expandHome(c.debug_csv_output_dir);
   requireParam(nh, "debug_trajectory_sample_dt", c.debug_trajectory_sample_dt);
   requireParam(nh, "debug_enable_rviz_publish", c.debug_enable_rviz_publish);
 
@@ -117,8 +128,9 @@ DebugLogConfig ConfigLoader::loadDebugLog(ros::NodeHandle& nh) {
   DebugLogConfig c;
   requireParam(nh, "debug_log_enable", c.enable);
   requireParam(nh, "debug_log_dir", c.dir);
+  c.dir = expandHome(c.dir);
   if (!c.dir.empty() && c.dir.front() != '/') {
-    throw std::runtime_error("debug_log_dir must be an absolute path: " + c.dir);
+    throw std::runtime_error("debug_log_dir must be an absolute path or start with ~/: " + c.dir);
   }
   return c;
 }
