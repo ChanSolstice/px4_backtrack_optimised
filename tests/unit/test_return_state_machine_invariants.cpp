@@ -245,6 +245,11 @@ public:
                   (out.phase == MissionPhase::FcuLanding && c.link.lost),
               "SC9 AUTO.LAND without reason", before, c, out);
     }
+    // SC9：升级为原地降落只在确认低电量时（D11、D32）
+    if (out.phase == MissionPhase::Handover && from != MissionPhase::Handover &&
+        after.handoverReason() == HandoverReason::Escalated) {
+      require(c.battery.low, "SC9 escalated without low battery", before, c, out);
+    }
   }
 
   long steps() const { return steps_; }

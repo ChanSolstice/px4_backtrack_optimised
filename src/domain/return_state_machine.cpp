@@ -146,6 +146,7 @@ const char* handoverReasonName(HandoverReason reason) {
     case HandoverReason::InsufficientPoints: return "INSUFFICIENT_POINTS";
     case HandoverReason::PlanTooClose: return "PLAN_TOO_CLOSE";
     case HandoverReason::FallbackFailed: return "FALLBACK_FAILED";
+    case HandoverReason::Escalated: return "ESCALATED";
     case HandoverReason::None: break;
   }
   return "NONE";
@@ -189,7 +190,6 @@ const char* alertName(Alert alert) {
     case Alert::ProgressStall: return "PROGRESS_STALL";
     case Alert::OdomStale: return "ODOM_STALE";
     case Alert::HandoverDirectLand: return "HANDOVER_DIRECT_LAND";
-    case Alert::AutolandNotAccepted: return "AUTOLAND_NOT_ACCEPTED";
     case Alert::AutolandOverridden: return "AUTOLAND_OVERRIDDEN";
     case Alert::EscalatedLand: return "ESCALATED_LAND";
     case Alert::FcuStateStale: return "FCU_STATE_STALE";
@@ -371,6 +371,7 @@ void ReturnStateMachine::stepStart(const Conditions& c, bool from_exited,
 
 void ReturnStateMachine::stepMission(const Conditions& c, StepOutput& out) {
   trackMissionConditions(c, out);
+  updateWaits(c);
 
   // 规则 3：任务中落地（D23）
   const bool landed = (phase_ == MissionPhase::Hover ||
@@ -392,9 +393,7 @@ void ReturnStateMachine::stepMission(const Conditions& c, StepOutput& out) {
     return;
   }
 
-  // 规则 6：超时升级（R6）
-
-  // 规则 7：当前阶段自身的规则
+  // 规则 7：当前阶段自身的规则（规则 6 在它之后判定）
   switch (phase_) {
     case MissionPhase::Hover:
       // 悬停照常计时，期间返回的规划结果在准备阶段处理（D3）
@@ -413,6 +412,12 @@ void ReturnStateMachine::stepMission(const Conditions& c, StepOutput& out) {
       break;
     default:
       break;
+  }
+
+  // 规则 6：超时升级（第 8.1 节）。按本阶段的规则仍不能继续返航、等待已超时且确认低电量，
+  // 才原地降落；电量正常或读数无效时保持并告警（D11、D32、R-85）
+  if (c.battery.low && waitTimedOut()) {
+    enterHandover(c, HandoverReason::Escalated, true, "6", out);
   }
 }
 
@@ -436,7 +441,7 @@ void ReturnStateMachine::stepPrepare(const Conditions& c, StepOutput& out) {
     case PlanStatus::ReadyFallback:
       break;
     default:
-      // 规划中或配置非法：保持（配置非法由准备超时兜底，R6）
+      // 规划中或配置非法：保持；配置非法由准备超时兜底（第 8.1 节）
       return;
   }
 
@@ -452,10 +457,15 @@ void ReturnStateMachine::stepPrepare(const Conditions& c, StepOutput& out) {
     }
     return;
   }
-  if (c.path_start_yaw && !yawAligned(c.yaw, *c.path_start_yaw)) {
+  // 低电量且准备超时：不再等起始对准，能开始跟随就开始（D32、R-85）
+  const bool aligned = !c.path_start_yaw || yawAligned(c.yaw, *c.path_start_yaw);
+  if (!aligned && !(c.battery.low && waitTimedOut())) {
     return;
   }
-  setPhase(MissionPhase::Follow, "7", "PLAN_READY", out);
+  // 进入跟随：停滞重新计时
+  stall_wait_s_ = 0.0;
+  stall_mark_m_ = c.remaining_m;
+  setPhase(MissionPhase::Follow, "7", aligned ? "PLAN_READY" : "PREPARE_TIMEOUT", out);
 }
 
 void ReturnStateMachine::stepFollow(const Conditions& c, StepOutput& out) {
@@ -479,7 +489,6 @@ void ReturnStateMachine::stepFollow(const Conditions& c, StepOutput& out) {
     arrival_position_ = c.position;
     arrival_yaw_ = c.yaw;
     arrival_owned_s_ = 0.0;
-    arrival_last_t_ = c.now;
     setPhase(MissionPhase::Arrival, "7", "FINISHED", out);
     return;
   }
@@ -492,21 +501,16 @@ void ReturnStateMachine::stepFollow(const Conditions& c, StepOutput& out) {
 }
 
 void ReturnStateMachine::stepArrival(const Conditions& c, StepOutput& out) {
-  // 到点悬停只在持有控制权时计时
-  const double dt = std::max(0.0, c.now - arrival_last_t_);
-  arrival_last_t_ = c.now;
-  const bool owned = control_ == ControlState::Owned && !c.odom_stale;
-  if (owned) {
-    arrival_owned_s_ += dt;
+  // 到点悬停只在持有控制权时计时（updateWaits）
+  if (arrival_owned_s_ + kTimeEpsS < config_.landing_hover_s) {
+    return;
   }
-  if (arrival_owned_s_ + kTimeEpsS >= config_.landing_hover_s) {
-    // 到达的是轨迹断点而不是录制起点：不降落（D30）；断点之前有离飞机不超过安全距离的
-    // 点就接上，否则原地悬停（D33）
-    if (!c.trail_gap) {
-      enterHandover(c, HandoverReason::Arrived, false, "7", out);
-    } else if (owned && c.anchor_past_gap) {
-      reanchor(c, "7", "TRAIL_GAP", out);
-    }
+  // 到达的是轨迹断点而不是录制起点：不降落（D30）；断点之前有离飞机不超过安全距离的
+  // 点就接上，否则原地悬停（D33）
+  if (!c.trail_gap) {
+    enterHandover(c, HandoverReason::Arrived, false, "7", out);
+  } else if (control_ == ControlState::Owned && !c.odom_stale && c.anchor_past_gap) {
+    reanchor(c, "7", "TRAIL_GAP", out);
   }
 }
 
@@ -616,6 +620,7 @@ bool ReturnStateMachine::switchedOut(const Conditions& c, const char* rule,
   // 链路丢失或退化：重新申请控制权（D2）
   reclaim_position_ = c.position;
   reclaim_yaw_ = c.yaw;
+  reclaim_wait_s_ = 0.0;
   setControl(ControlState::Reclaiming, rule, "LINK_ABNORMAL", out);
   return false;
 }
@@ -692,6 +697,7 @@ void ReturnStateMachine::startMission(const Conditions& c, bool enter_phase,
   trigger_yaw_ = c.yaw;
   pre_frames_ = 0;
   pre_frames_done_t_ = c.now;
+  prepare_wait_s_ = 0.0;
   out.commands.start_planning = true;
 
   std::string conditions;
@@ -755,8 +761,55 @@ void ReturnStateMachine::reanchor(const Conditions& c, const char* rule,
   out.commands.start_planning = true;
   trigger_position_ = c.position;
   trigger_yaw_ = c.yaw;
+  prepare_wait_s_ = 0.0;
   addEvent(out, EventType::Mission, "reanchored", "", "", rule, reason, "");
   setPhase(MissionPhase::Prepare, rule, "REANCHOR", out);
+}
+
+void ReturnStateMachine::updateWaits(const Conditions& c) {
+  // 到点悬停和第 8.1 节的等待都只在里程计新鲜时计时，里程计中断不会引起降落（D31）
+  if (c.odom_stale) {
+    return;
+  }
+  const double dt = std::max(0.0, c.now - prev_.now);
+  if (control_ == ControlState::Reclaiming) {
+    // 重新申请期间准备和停滞计时冻结，由重新申请的计时负责（R-18）
+    reclaim_wait_s_ += dt;
+    return;
+  }
+  if (phase_ == MissionPhase::Prepare &&
+      (control_ == ControlState::Acquiring || control_ == ControlState::Owned) &&
+      c.plan_status != PlanStatus::None && c.plan_status != PlanStatus::Pending) {
+    prepare_wait_s_ += dt;
+  }
+  if (phase_ == MissionPhase::Arrival && control_ == ControlState::Owned) {
+    arrival_owned_s_ += dt;
+  }
+  if ((phase_ == MissionPhase::Follow || phase_ == MissionPhase::Arrival) &&
+      control_ == ControlState::Owned) {
+    if (c.remaining_m <= stall_mark_m_ - config_.stall_min_progress_m) {
+      stall_mark_m_ = c.remaining_m;
+      stall_wait_s_ = 0.0;
+    } else {
+      stall_wait_s_ += dt;
+    }
+  }
+}
+
+bool ReturnStateMachine::waitTimedOut() const {
+  if (control_ == ControlState::Reclaiming) {
+    return reclaim_wait_s_ + kTimeEpsS >= config_.reclaim_timeout_s;
+  }
+  switch (phase_) {
+    case MissionPhase::Prepare:
+      return prepare_wait_s_ + kTimeEpsS >= config_.prepare_timeout_s;
+    case MissionPhase::Follow:
+    case MissionPhase::Arrival:
+      // 到点悬停也计停滞：停在断点处又找不到点时按停滞超时升级（R-85）
+      return stall_wait_s_ + kTimeEpsS >= config_.stall_timeout_s;
+    default:
+      return false;
+  }
 }
 
 void ReturnStateMachine::endMission(const char* reason, StepOutput& out) {
@@ -1028,7 +1081,22 @@ void ReturnStateMachine::computeAlerts(const Conditions& c, StepOutput& out) {
     if (handover_reason_ == HandoverReason::MissionLanded) {
       alerts.set(Alert::MissionLanded);
     }
+    if (handover_reason_ == HandoverReason::Escalated) alerts.set(Alert::EscalatedLand);
     if (handover_direct_) alerts.set(Alert::HandoverDirectLand);
+  }
+
+  // 等待计时（第 8.1 节）
+  if (phase_ == MissionPhase::Prepare) {
+    if (prepare_wait_s_ + kTimeEpsS >= config_.prepare_warn_s) alerts.set(Alert::PrepareSlow);
+    if (prepare_wait_s_ + kTimeEpsS >= config_.prepare_timeout_s) alerts.set(Alert::PrepareTimeout);
+  }
+  if ((phase_ == MissionPhase::Follow || phase_ == MissionPhase::Arrival) &&
+      stall_wait_s_ + kTimeEpsS >= config_.stall_warn_s) {
+    alerts.set(Alert::ProgressStall);
+  }
+  if (control_ == ControlState::Reclaiming &&
+      reclaim_wait_s_ + kTimeEpsS >= config_.reclaim_timeout_s) {
+    alerts.set(Alert::ReclaimTimeout);
   }
 
   // 拒绝退出的告警持续到链路恢复正常或任务结束（R-66，任务结束时由 endMission 清除）

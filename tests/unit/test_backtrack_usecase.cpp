@@ -1240,8 +1240,12 @@ TEST(BacktrackUseCaseTest, AlignsStartYawBeforeHorizontalReturn) {
 }
 
 TEST(BacktrackUseCaseTest, WallTimeCannotAdvanceSpatialTrajectory) {
+  // 长按触发、电量正常：时钟跳变只会让停滞告警，不会升级降落（第 8.1 节）
   Sim s;
-  s.startLowBatteryReturn();
+  s.flyOutbound();
+  s.ch7 = true;
+  ASSERT_TRUE(s.runUntilState("ReturnActive", 5.0));
+  s.ch7 = false;
   s.track = false;
   s.t += 20000.0;  // 时钟跳变
   s.run(1.0);

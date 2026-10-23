@@ -87,7 +87,8 @@ enum class HandoverReason {
   MissionLanded,       ///< 任务中判定落地（规则 3）
   InsufficientPoints,  ///< 补点等待超时，点数仍不足（起点附近）
   PlanTooClose,        ///< 规划判定点过近（起点附近）
-  FallbackFailed       ///< 航点降级也构建失败（起点附近）
+  FallbackFailed,      ///< 航点降级也构建失败（起点附近）
+  Escalated            ///< 等待超时且确认低电量，返航不能继续（第 8.1 节，D32）
 };
 
 /// 是否处于返航任务（悬停、准备、跟随、到点、交接）
@@ -160,7 +161,6 @@ enum class Alert : uint8_t {
   ProgressStall,
   OdomStale,
   HandoverDirectLand,
-  AutolandNotAccepted,
   AutolandOverridden,
   EscalatedLand,
   FcuStateStale,
@@ -320,6 +320,10 @@ private:
                    StepOutput& out);
   /// 找点接上：从接上的点重新规划，回到准备阶段（D33）
   void reanchor(const Conditions& c, const char* rule, const char* reason, StepOutput& out);
+  /// 到点悬停和第 8.1 节的等待计时，每拍在执行各阶段的规则之前按上一拍的状态累计
+  void updateWaits(const Conditions& c);
+  /// 当前所处的等待是否已超时
+  bool waitTimedOut() const;
   void endMission(const char* reason, StepOutput& out);
   void trackMissionConditions(const Conditions& c, StepOutput& out);
   void consumeCommands(const Conditions& c);
@@ -365,7 +369,6 @@ private:
   double record_delay_start_t_{0.0};
   double hover_start_t_{0.0};
   double arrival_owned_s_{0.0};   ///< 到点悬停中持有控制权的累计时间
-  double arrival_last_t_{0.0};
   double fallback_start_t_{0.0};
   double handover_start_t_{0.0};
 
@@ -386,6 +389,12 @@ private:
   bool offset_hold_active_{false};         ///< 跟随中离路径超过安全距离时的保持点（D30）
   Vec3 offset_hold_position_ = Vec3::Zero();
   double offset_hold_yaw_{0.0};
+
+  // 等待计时（第 8.1 节），只在里程计新鲜时累计
+  double prepare_wait_s_{0.0};       ///< 准备：规划结果已出后申请或持有 OFFBOARD 的累计时间
+  double reclaim_wait_s_{0.0};       ///< 重新申请的累计时间
+  double stall_wait_s_{0.0};         ///< 停滞：剩余路径上次缩短以来的累计时间
+  double stall_mark_m_{0.0};         ///< 上次缩短时的剩余路径 (m)
 
   // 任务中
   int pre_frames_{0};                ///< 已预发的 setpoint 帧数

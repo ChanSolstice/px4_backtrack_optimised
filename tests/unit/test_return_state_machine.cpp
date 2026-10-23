@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "px4_backtrack/domain/return_state_machine.hpp"
@@ -129,6 +131,14 @@ struct Harness {
     ASSERT_EQ(sm.phase(), MissionPhase::Hover);
   }
 
+  /// 长按 CH7 启动任务，电量正常
+  void startPilotMission() {
+    toRecording();
+    longPress();
+    step();
+    ASSERT_EQ(sm.phase(), MissionPhase::Prepare);
+  }
+
   /// 等到申请 OFFBOARD，然后飞控进入 OFFBOARD
   void acquire() {
     ASSERT_GT(runUntil([](const StepOutput& o) {
@@ -139,9 +149,13 @@ struct Harness {
     ASSERT_EQ(sm.control(), ControlState::Owned);
   }
 
-  /// 低电量任务进入跟随
-  void toFollow() {
-    startLowBatteryMission();
+  /// 任务进入跟随；默认是低电量任务
+  void toFollow(bool low_battery = true) {
+    if (low_battery) {
+      startLowBatteryMission();
+    } else {
+      startPilotMission();
+    }
     acquire();
     c.plan_status = PlanStatus::Ready;
     c.path_start_yaw = c.yaw;
@@ -1519,6 +1533,200 @@ TEST(ReturnStateMachineTest, EventsTraceLowBatteryThenLinkLoss) {
   // 链路丢失时交接直接 AUTO.LAND，不经过 POSCTL
   EXPECT_TRUE(h.sawEvent(EventType::Alert, "on") &&
               h.sawNamed(EventType::Alert, "HANDOVER_DIRECT_LAND"));
+}
+
+
+// ============================================================================
+// 超时与升级（第 8.1 节，R6）
+// ============================================================================
+
+/// 升级为原地降落：交接原因 ESCALATED，直接请求 AUTO.LAND（规则 6）
+void expectEscalated(const Harness& h) {
+  EXPECT_EQ(h.out.phase, MissionPhase::Handover);
+  EXPECT_EQ(h.sm.handoverReason(), HandoverReason::Escalated);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::AutoLand);
+  EXPECT_TRUE(h.out.alerts.has(Alert::EscalatedLand));
+  EXPECT_TRUE(h.sawEvent(EventType::State, "LandingTransition", "6", "ESCALATED"));
+}
+
+TEST(ReturnStateMachineTest, PrepareTimeoutLandsOnlyAtLowBattery) {
+  // 准备：规划结果出来后才计时，10 s 告警、30 s 超时；电量正常时一直保持（D11），确认低电量后原地降落
+  Harness h;
+  h.startPilotMission();
+  h.c.plan_status = PlanStatus::Pending;  // 规划中不计时，由规划超时负责
+  h.run(40.0);
+  EXPECT_FALSE(h.out.alerts.has(Alert::PrepareSlow));
+
+  h.c.plan_status = PlanStatus::Ready;    // 飞控一直不进入 OFFBOARD
+  h.run(9.9);
+  EXPECT_FALSE(h.out.alerts.has(Alert::PrepareSlow));
+  h.run(0.2);
+  EXPECT_TRUE(h.out.alerts.has(Alert::PrepareSlow));
+  h.run(20.0);
+  EXPECT_TRUE(h.out.alerts.has(Alert::PrepareTimeout));
+  h.run(60.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+
+  h.c.battery.low = true;
+  h.step();
+  expectEscalated(h);
+}
+
+TEST(ReturnStateMachineTest, PrepareTimeoutAtLowBatteryStopsWaitingForAlignment) {
+  // D32、R-85：低电量且准备超时，只差起始对准时不再等，开始跟随，不降落
+  Harness h;
+  h.startLowBatteryMission();
+  h.acquire();
+  h.c.plan_status = PlanStatus::Ready;
+  h.c.path_start_yaw = h.c.yaw + 1.0;  // 一直对不准
+  h.run(29.9);
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+  h.run(0.2);
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_TRUE(h.sawEvent(EventType::State, "ReturnActive", "7", "PREPARE_TIMEOUT"));
+}
+
+TEST(ReturnStateMachineTest, ReclaimTimeoutLandsOnlyAtLowBattery) {
+  // S12 的超时部分：重新申请 10 s 仍未重新接入，告警 RECLAIM_TIMEOUT；电量正常时继续申请，
+  // 确认低电量后原地降落
+  Harness h;
+  h.toFollow(false);
+  h.linkLost();
+  h.c.mode = "POSCTL";
+  h.step();
+  ASSERT_EQ(h.out.control, ControlState::Reclaiming);
+  h.run(9.9);
+  EXPECT_FALSE(h.out.alerts.has(Alert::ReclaimTimeout));
+  h.run(0.2);
+  EXPECT_TRUE(h.out.alerts.has(Alert::ReclaimTimeout));
+  h.run(30.0);
+  EXPECT_EQ(h.out.control, ControlState::Reclaiming);
+  EXPECT_EQ(h.out.mode_intent, ModeIntent::Offboard);
+
+  h.c.battery.low = true;
+  h.step();
+  expectEscalated(h);
+}
+
+TEST(ReturnStateMachineTest, StallTimeoutLandsOnlyAtLowBattery) {
+  // S17：剩余路径 20 s 没有缩短 0.2 m 以上，告警 PROGRESS_STALL；缩短后重新计时。
+  // 60 s 后电量正常时保持，确认低电量后原地降落
+  Harness h;
+  h.c.remaining_m = 10.0;
+  h.toFollow(false);
+  h.run(19.9);
+  EXPECT_FALSE(h.out.alerts.has(Alert::ProgressStall));
+  h.run(0.2);
+  EXPECT_TRUE(h.out.alerts.has(Alert::ProgressStall));
+
+  h.c.remaining_m = 9.85;  // 缩短不到 0.2 m
+  h.step();
+  EXPECT_TRUE(h.out.alerts.has(Alert::ProgressStall));
+  h.c.remaining_m = 9.75;
+  h.step();
+  EXPECT_FALSE(h.out.alerts.has(Alert::ProgressStall));
+
+  h.run(70.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  h.c.battery.low = true;
+  h.step();
+  expectEscalated(h);
+}
+
+TEST(ReturnStateMachineTest, TrailGapHoldEscalatesAfterStallTimeout) {
+  // R-85：停在断点处又找不到点，按停滞计时；低电量任务 60 s 后原地降落
+  Harness h;
+  h.c.trail_gap = true;
+  h.toArrival();
+  h.run(59.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Arrival);
+  EXPECT_TRUE(h.out.alerts.has(Alert::ProgressStall));
+  h.run(1.1);
+  expectEscalated(h);
+}
+
+TEST(ReturnStateMachineTest, WaitsFreezeWhileOdomStale) {
+  // D31：里程计延迟期间不计时，里程计中断不会引起降落
+  Harness h;
+  h.startLowBatteryMission();
+  h.c.plan_status = PlanStatus::Ready;  // 飞控一直不进入 OFFBOARD
+  h.run(20.0);
+  h.c.odom_stale = true;
+  h.run(100.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+  h.c.odom_stale = false;
+  h.run(9.9);
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+  h.run(0.2);
+  expectEscalated(h);
+}
+
+TEST(ReturnStateMachineTest, StuckWaitsEscalateWithinLimitsAtLowBattery) {
+  // SC8：低电量时，返航卡住的每种等待都在超时时升级为原地降落，不提前也不拖延。每种情形
+  // 100 条随机序列：里程计、飞控状态随机中断，链路在退化和丢失之间随机切换（不会被当作飞手
+  // 退出）；里程计延迟的时间不计入等待（D31）
+  enum class Stuck { OffboardRejected, InvalidConfig, PathOffset, Reclaim, Stall, TrailGap };
+  const std::pair<Stuck, double> cases[] = {
+      {Stuck::OffboardRejected, 30.0}, {Stuck::InvalidConfig, 30.0}, {Stuck::PathOffset, 30.0},
+      {Stuck::Reclaim, 10.0}, {Stuck::Stall, 60.0}, {Stuck::TrailGap, 60.0}};
+  for (const auto& [stuck, limit_s] : cases) {
+    for (unsigned seed = 0; seed < 100; ++seed) {
+      Harness h;
+      switch (stuck) {
+        case Stuck::OffboardRejected:
+          h.startLowBatteryMission();
+          h.c.plan_status = PlanStatus::Ready;
+          break;
+        case Stuck::InvalidConfig:
+          h.startLowBatteryMission();
+          h.acquire();
+          h.c.plan_status = PlanStatus::FailedConfig;
+          break;
+        case Stuck::PathOffset:
+          h.startLowBatteryMission();
+          h.acquire();
+          h.c.plan_status = PlanStatus::Ready;
+          h.c.cross_track_m = 1.5;
+          break;
+        case Stuck::Reclaim:
+          h.toFollow();
+          h.linkLost();
+          h.c.mode = "POSCTL";
+          h.step();
+          break;
+        case Stuck::Stall:
+          h.toFollow();
+          break;
+        case Stuck::TrailGap:
+          h.c.trail_gap = true;
+          h.toArrival();
+          break;
+      }
+
+      std::mt19937 rng(seed);
+      auto chance = [&rng](double p) {
+        return std::uniform_real_distribution<double>(0.0, 1.0)(rng) < p;
+      };
+      double waited = 0.0;
+      while (h.out.phase != MissionPhase::Handover && waited < limit_s + 1.0) {
+        if (chance(0.05)) h.c.odom_stale = !h.c.odom_stale;
+        h.c.fcu_state_fresh = !chance(0.05);
+        if (chance(0.05)) {
+          if (chance(0.5)) {
+            h.linkLost();
+          } else {
+            h.linkDegraded();
+          }
+        }
+        h.step();
+        if (!h.c.odom_stale) waited += kDt;
+      }
+      const std::string label = std::to_string(static_cast<int>(stuck)) + " seed " +
+                                std::to_string(seed);
+      EXPECT_EQ(h.sm.handoverReason(), HandoverReason::Escalated) << label;
+      EXPECT_NEAR(waited, limit_s, 2 * kDt) << label;
+    }
+  }
 }
 
 }  // namespace
