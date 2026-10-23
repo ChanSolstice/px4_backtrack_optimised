@@ -45,6 +45,9 @@ public:
   /// 获取当前目标索引
   size_t currentIndex() const;
 
+  /// 当前目标航点到终点的折线长度 (m)，用于停滞判定（重构方案第 8.1 节）
+  double remainingLength() const;
+
 private:
   double spacing_m_;
   double reach_radius_m_;

@@ -79,5 +79,23 @@ TEST(WaypointFallbackSessionTest, FinalWaypointMarksSessionFinished) {
   EXPECT_TRUE(session.isFinished());
 }
 
+TEST(WaypointFallbackSessionTest, RemainingLengthShrinksAsTargetsAdvance) {
+  // 第 8.1 节：停滞判定用当前目标航点到终点的折线长度
+  WaypointFallbackSession session(0.5, 0.25);
+  ASSERT_TRUE(session.build(makeRecordedLine()));
+  EXPECT_NEAR(session.remainingLength(), 2.0, 1e-6);
+
+  session.updateProgress(Vec3(2.0, 0.0, 1.0));
+  EXPECT_NEAR(session.remainingLength(), 1.5, 1e-6);
+  session.updateProgress(Vec3(1.2, 0.0, 1.0));  // 没到下一个航点
+  EXPECT_NEAR(session.remainingLength(), 1.5, 1e-6);
+
+  for (const double x : {1.5, 1.0, 0.5, 0.0}) {
+    session.updateProgress(Vec3(x, 0.0, 1.0));
+  }
+  EXPECT_TRUE(session.isFinished());
+  EXPECT_NEAR(session.remainingLength(), 0.0, 1e-9);
+}
+
 }  // namespace
 }  // namespace px4_backtrack::domain

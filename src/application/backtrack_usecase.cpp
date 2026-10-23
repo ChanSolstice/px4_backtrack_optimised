@@ -211,11 +211,14 @@ domain::Conditions BacktrackUseCase::assembleConditions(double now) const {
     c.projection_ok = trajectory_session_->probe(position_, c.cross_track_m);
     c.finished = trajectory_session_->isFinished(position_, velocity_,
                                                  kReturnEndPositionToleranceM);
+    c.remaining_m = trajectory_session_->getTrajectory()->pathLength() -
+                    trajectory_session_->getProjectedArcLength();
   } else if (plan_status_ == domain::PlanStatus::ReadyFallback) {
     // 航点降级没有切向和投影：不要求对准；偏差取到当前目标航点的距离（D30）
     c.projection_ok = true;
     c.cross_track_m = (position_ - waypoint_fallback_session_.currentTarget().position).norm();
     c.finished = waypoint_fallback_session_.isFinished();
+    c.remaining_m = waypoint_fallback_session_.remainingLength();
   }
   c.deviation_confirmed = deviation_confirmed_;
   c.rejoin_confirmed = rejoin_confirmed_;

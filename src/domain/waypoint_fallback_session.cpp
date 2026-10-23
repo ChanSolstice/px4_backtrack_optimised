@@ -142,5 +142,13 @@ size_t WaypointFallbackSession::currentIndex() const {
   return current_index_;
 }
 
+double WaypointFallbackSession::remainingLength() const {
+  double length = 0.0;
+  for (size_t i = current_index_; i + 1 < waypoints_.size(); ++i) {
+    length += (waypoints_[i + 1].position - waypoints_[i].position).norm();
+  }
+  return length;
+}
+
 }  // namespace domain
 }  // namespace px4_backtrack
