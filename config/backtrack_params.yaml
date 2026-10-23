@@ -63,7 +63,7 @@ enable_trigger_rc_loss: true
 rc_loss_timeout_s: 0.15
 
 # RC丢失防抖时间 (s) - 持续丢失超过此时间才触发
-rc_loss_debounce_s: 0.1
+rc_loss_debounce_s: 0.2
 
 # ============================
 # 链路恢复与退化
@@ -196,8 +196,8 @@ trajectory_config_path: "$(find px4_backtrack_optimised)/config/trajectory_confi
 # 是否启用CSV文件导出（轨迹生成成功后自动导出录制点和生成轨迹）
 debug_enable_csv_dump: true
 
-# CSV导出目录路径（留空则默认 ~/.ros/backtrack_debug/）
-debug_csv_output_dir: ""
+# CSV导出目录路径（留空则默认 ~/.ros/backtrack_debug/；可以用 ~/ 开头）
+debug_csv_output_dir: "~/Projects/backtrack_ws/debug/"
 
 # 轨迹采样步长 (s) - 用于CSV导出和ROS可视化
 debug_trajectory_sample_dt: 0.1
@@ -208,5 +208,5 @@ debug_enable_rviz_publish: true
 # 是否写调试日志（每次启动一个运行目录，events.jsonl）；试飞期间建议打开
 debug_log_enable: false
 
-# 调试日志根目录；留空为 ~/.ros/backtrack_logs，非空必须是绝对路径
-debug_log_dir: ""
+# 调试日志根目录；留空为 ~/.ros/backtrack_logs，非空时为绝对路径或以 ~/ 开头
+debug_log_dir: "~/Projects/backtrack_ws/debug/"

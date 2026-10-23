@@ -330,7 +330,7 @@ UseCaseConfig productionConfig(const std::string& traj_cfg) {
   link.link_loss_leak_rate = 0.2;
   link.enable_rc_loss = true;
   link.rc_loss_timeout_s = 0.15;
-  link.rc_loss_debounce_s = 0.1;
+  link.rc_loss_debounce_s = 0.2;
   link.link_recover_s = 2.0;
   link.link_degraded_window_s = 5.0;
   auto& pilot = c.pilot_config;

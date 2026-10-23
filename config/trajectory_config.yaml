@@ -64,10 +64,10 @@ enable_end_converge: true
 s_stop_m: 3.0
 
 # 收敛触发距离 (m)
-r_stop_m: 2.0
+r_stop_m: 0.5
 
 # 收敛段最大速度 (m/s)
-v_end_max: 0.8
+v_end_max: 0.4
 
 # Yaw 保持距离 (m)
 r_yaw_hold_m: 1.0
@@ -77,10 +77,10 @@ r_yaw_hold_m: 1.0
 # ============================
 
 # 最大水平速度 (m/s)
-v_max: 1.0
+v_max: 0.6
 
 # 最大竖直速度 (m/s)
-vz_max: 0.6
+vz_max: 0.4
 
 # 最大切向加速度 (m/s²)
 a_tan_max: 1.0
