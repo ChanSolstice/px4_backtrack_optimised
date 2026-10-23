@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <set>
 #include <string>
 #include <thread>
@@ -275,7 +276,7 @@ struct World {
   double stall_at = -1.0;                    // 注入一次控制循环卡顿（例如 CPU 被抢占）
   double stall_s = 0.0;
   bool mode_service_down = false;            // MAVROS set_mode 服务不可用：请求不送达飞控
-  bool pushed_away = false;                  // 飞手已切出并推杆（H15）
+  bool pushed_away = false;                  // 飞手已切出并推杆（H15、H16）
 };
 
 struct Metrics {
@@ -285,6 +286,7 @@ struct Metrics {
   double mission_start_z = 0.0;
   bool mission_started_on_ground = false;
   Vec3 trail_start = Vec3::Zero();
+  std::vector<Vec3> trail;              // Recording 期间每拍的飞机位置
   bool exited = false;                  // 进入了 Exited
   double posctl_lost_since = -1.0;
   double max_posctl_while_lost = 0.0;   // 任务开始后、链路丢失时，在 POSCTL 下的最长连续时间
@@ -297,11 +299,14 @@ struct Metrics {
   double max_sp_gap_in_offboard = 0.0;
   double mission_last_sp_t = -1.0;
   double max_sp_gap_in_mission = 0.0;   // 任务中相邻两次 setpoint 的最大间隔
-  bool left_offboard = false;           // 飞手推开飞机：飞控已离开 OFFBOARD（H15）
+  bool left_offboard = false;           // 飞手推开飞机：飞控已离开 OFFBOARD（H15、H16）
   double regain_t = -1.0;               // 之后飞控重新进入 OFFBOARD 的时刻
   Vec3 regain_pos = Vec3::Zero();
   double max_move_after_regain = 0.0;   // 之后飞机离该位置的最大距离
+  double max_x_after_regain = -1e9;     // 之后飞机最东的位置
+  double max_trail_dist_after_regain = 0.0;  // 之后 OFFBOARD 中飞机离录制轨迹的最大距离
   bool path_offset_seen = false;        // 出现过 PATH_OFFSET 告警
+  bool reanchored = false;              // 出现过找点接上（D33）
   double max_tick_ms = 0.0;
 };
 
@@ -659,6 +664,47 @@ std::vector<Scenario> buildScenarios() {
                      {"离路径超过安全距离时告警", m.path_offset_seen,
                       m.path_offset_seen ? "出现 PATH_OFFSET" : "没有 PATH_OFFSET"}};
                }});
+  s.push_back({"H16", "往返航线，返航中链路时断时续，飞手切出把飞机推到去程附近（D33 找点接上）", 130.0,
+               [](double t, World& w) {
+                 // 去程向东约 20 m（16 s 起录制），向北约 1.2 m，回程向西约 10 m
+                 w.pilot.vel_cmd = Vec3::Zero();
+                 w.pilot.throttle = 0.0;
+                 if (t >= 1.0 && t < 4.0) {
+                   w.pilot.vel_cmd = Vec3(0, 0, 1.0);
+                   w.pilot.throttle = 0.6;
+                 } else if (t >= 4.0 && t < 24.0) {
+                   w.pilot.vel_cmd = Vec3(1.0, 0, 0);
+                 } else if (t >= 24.0 && t < 25.2) {
+                   w.pilot.vel_cmd = Vec3(0, 1.0, 0);
+                 } else if (t >= 25.2 && t < 35.2) {
+                   w.pilot.vel_cmd = Vec3(-1.0, 0, 0);
+                 }
+                 if (t >= 40.0) w.battery = 0.10;
+                 // 沿回程向东返航时，55 s 起每秒掉线 0.3 s；56～64 s 模式服务不可用。
+                 // 飞手拨开关到 ALTCTL，向南推杆约 1 s（掉线时摇杆回中），把飞机推到去程附近
+                 w.link_ok = !(t >= 55.0 && std::fmod(t - 55.0, 1.0) >= 0.7);
+                 w.mode_service_down = t >= 56.0 && t < 64.0;
+                 if (t >= 56.0 && !w.pushed_away) {
+                   w.pilot.mode_switch = "ALTCTL";
+                   w.pushed_away = true;
+                 }
+                 if (t >= 56.0 && t < 57.3) w.pilot.vel_cmd = Vec3(0.0, -1.0, 0.0);
+               },
+               [](const World& w, const Metrics& m) {
+                 std::string detail;
+                 const bool landed = landedNearTrailStart(w, m, detail);
+                 return std::vector<Check>{
+                     {"拿回 OFFBOARD 后从去程接上", m.regain_t > 0.0 && m.reanchored,
+                      m.regain_t > 0.0 ? fmt("%.1f s 拿回 OFFBOARD", m.regain_t) +
+                                             (m.reanchored ? "，找点接上" : "，没有找点接上")
+                                       : std::string("没有拿回 OFFBOARD")},
+                     {"接上后离录制轨迹不超过安全距离，不绕回程",
+                      m.reanchored && m.max_trail_dist_after_regain <= 0.7 &&
+                          m.max_x_after_regain < m.regain_pos.x() + 0.3,
+                      fmt("OFFBOARD 中离录制轨迹最远 %.2f m", m.max_trail_dist_after_regain) +
+                          fmt("，最东超出拿回位置 %.2f m", m.max_x_after_regain - m.regain_pos.x())},
+                     {"返航完成并在录制起点上锁", landed, detail}};
+               }});
   return s;
 }
 
@@ -722,6 +768,12 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
         m.regain_pos = w.fcu.pos;
       }
       m.max_move_after_regain = std::max(m.max_move_after_regain, (w.fcu.pos - m.regain_pos).norm());
+      m.max_x_after_regain = std::max(m.max_x_after_regain, w.fcu.pos.x());
+      if (w.fcu.nav == "OFFBOARD") {
+        double d = std::numeric_limits<double>::infinity();
+        for (const Vec3& p : m.trail) d = std::min(d, (w.fcu.pos - p).norm());
+        m.max_trail_dist_after_regain = std::max(m.max_trail_dist_after_regain, d);
+      }
     }
     // 飞控意图为 OFFBOARD 期间的 setpoint 间隔
     if (w.fcu.intention == "OFFBOARD" && m.last_sp_t > 0.0) {
@@ -776,6 +828,7 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
       const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count();
       m.max_tick_ms = std::max(m.max_tick_ms, wall * 1000.0);
       for (const auto& e : out.events) {
+        if (e.type == EventType::Mission && e.name == "reanchored") m.reanchored = true;
         if (e.type != EventType::Planning) continue;
         planning = e.name == "submitted";
         if (planning) {
@@ -795,6 +848,7 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
       }
 
       w.module_state = out.state;
+      if (out.state == "Recording") m.trail.push_back(w.fcu.pos);
       if (out.state == "ReturnPreOffboard" && w.prepare_seen_t < 0.0) w.prepare_seen_t = t_after;
       if (out.state != m.last_state) {
         m.states.push_back({t_after, out.state});
