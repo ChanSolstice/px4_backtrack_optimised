@@ -904,6 +904,159 @@ TEST(ReturnStateMachineTest, TrailGapHoldsInsteadOfLanding) {
   }
 }
 
+/// 找点接上的那一拍：回到准备阶段，在飞机当前位置、当前 yaw 原地保持，重新规划（D33）
+void expectReanchored(const Harness& h, const char* reason) {
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+  EXPECT_EQ(h.out.control, ControlState::Owned);
+  EXPECT_TRUE(h.out.commands.reanchor);
+  EXPECT_TRUE(h.out.commands.start_planning);
+  EXPECT_FALSE(h.out.commands.cancel_planning);
+  EXPECT_EQ(h.out.setpoint, SetpointKind::Hold);
+  EXPECT_TRUE(h.out.hold_position.isApprox(h.c.position));
+  EXPECT_DOUBLE_EQ(h.out.hold_yaw, h.c.yaw);  // 不用旧轨迹的起始切向
+  EXPECT_FALSE(h.out.follow_active);
+  EXPECT_FALSE(h.out.alerts.has(Alert::PathOffset));
+  EXPECT_TRUE(std::any_of(h.out.events.begin(), h.out.events.end(), [&](const StepEvent& e) {
+    return e.type == EventType::Mission && e.name == "reanchored" && e.reason == reason;
+  }));
+}
+
+TEST(ReturnStateMachineTest, PathOffsetReanchorsWhenTrailPointIsNearby) {
+  // S34、D33：跟随中离路径超过安全距离，游标之前有离飞机不超过安全距离的录制点：从那里重新规划
+  Harness h;
+  h.toFollow();
+  h.c.position = Vec3(4.0, 5.0, 6.0);
+  h.c.yaw = 1.2;
+  h.c.path_start_yaw = 0.3;
+  h.c.cross_track_m = 1.5;
+  h.c.anchor_ahead = true;
+  h.step();
+  expectReanchored(h, "PATH_OFFSET");
+  EXPECT_TRUE(h.sawEvent(EventType::State, "ReturnPreOffboard", "7", "REANCHOR"));
+
+  // 规划中原地保持；规划就绪、偏差在安全距离内且对准后继续跟随
+  h.c.plan_status = PlanStatus::Pending;
+  h.c.position = Vec3(4.1, 5.0, 6.0);
+  h.run(1.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+  EXPECT_FALSE(h.out.commands.reanchor);
+  EXPECT_TRUE(h.out.hold_position.isApprox(Vec3(4.0, 5.0, 6.0)));
+  h.c.plan_status = PlanStatus::Ready;
+  h.c.path_start_yaw = h.c.yaw;
+  h.c.cross_track_m = 0.6;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+}
+
+TEST(ReturnStateMachineTest, ReanchorNeedsControlFreshOdomAndAnchor) {
+  // D33：找不到点、不持有控制权或里程计延迟时，原地保持，不接上
+  Harness h;
+  h.toFollow();
+  h.c.cross_track_m = 1.5;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_TRUE(h.out.alerts.has(Alert::PathOffset));
+
+  h.c.anchor_ahead = true;
+  h.c.odom_stale = true;
+  h.step();
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_FALSE(h.out.commands.reanchor);
+  EXPECT_TRUE(h.out.alerts.has(Alert::PathOffset));
+
+  // 本模块断流引起的飞控回退：不持有控制权
+  h.c.odom_stale = false;
+  h.c.mode = "POSCTL";
+  h.c.stream_gap_recent = true;
+  h.step();
+  ASSERT_EQ(h.out.control, ControlState::Fallback);
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_FALSE(h.out.commands.reanchor);
+
+  h.c.mode = "OFFBOARD";
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Owned);
+  expectReanchored(h, "PATH_OFFSET");
+}
+
+TEST(ReturnStateMachineTest, PrepareOffsetReanchors) {
+  // D33：开始跟随前离路径超过安全距离，能找点接上就从那里重新规划
+  Harness h;
+  h.startLowBatteryMission();
+  h.acquire();
+  h.c.plan_status = PlanStatus::Ready;
+  h.c.path_start_yaw = h.c.yaw;
+  h.c.cross_track_m = 1.5;
+  h.run(1.0);
+  EXPECT_TRUE(h.out.alerts.has(Alert::PathOffset));
+  h.c.path_start_yaw = h.c.yaw + 1.0;
+  h.c.anchor_ahead = true;
+  h.step();
+  expectReanchored(h, "PATH_OFFSET");
+}
+
+TEST(ReturnStateMachineTest, ReclaimWithLargeOffsetReanchors) {
+  // D33：重新申请时拿回 OFFBOARD，偏差超过安全距离但能找点接上：重新接入，从那里重新规划
+  Harness h;
+  h.toFollow();
+  h.linkLost();
+  h.c.mode = "POSCTL";
+  h.step();
+  ASSERT_EQ(h.out.control, ControlState::Reclaiming);
+  h.c.position = Vec3(6.0, 0.5, 3.0);
+  h.c.mode = "OFFBOARD";
+  h.c.cross_track_m = 1.5;
+  h.c.path_target_yaw = h.c.yaw + 1.0;  // 不要求对准路径目标切向，准备阶段会对准新路径
+  h.step();
+  EXPECT_EQ(h.out.control, ControlState::Reclaiming);
+  EXPECT_TRUE(h.out.alerts.has(Alert::PathOffset));
+
+  h.c.anchor_ahead = true;
+  h.step();
+  expectReanchored(h, "PATH_OFFSET");
+  EXPECT_TRUE(h.sawEvent(EventType::Control, "owned", "4", "RECLAIMED"));
+  EXPECT_TRUE(h.sawEvent(EventType::State, "ReturnPreOffboard", "4", "REANCHOR"));
+}
+
+TEST(ReturnStateMachineTest, TrailGapReanchorsOnlyPastGap) {
+  // S34、D33：停在断点处时只接断点之前的点；到点悬停结束后才找
+  Harness h;
+  h.c.trail_gap = true;
+  h.toArrival();
+  h.c.anchor_ahead = true;  // 游标之前的点在飞机所在的这一段上：不接
+  h.run(10.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Arrival);
+  EXPECT_FALSE(h.sawNamed(EventType::Mission, "reanchored"));
+
+  Harness a;
+  a.c.trail_gap = true;
+  a.c.anchor_ahead = true;
+  a.c.anchor_past_gap = true;
+  a.toArrival();
+  a.run(5.0 - 0.1);
+  EXPECT_EQ(a.out.phase, MissionPhase::Arrival);
+  a.c.position = Vec3(1.1, 2.0, 3.0);
+  a.step();
+  a.step();
+  expectReanchored(a, "TRAIL_GAP");
+  EXPECT_TRUE(a.sawEvent(EventType::State, "ReturnPreOffboard", "7", "REANCHOR"));
+
+  // 断点处规划失败（点过近、航点降级也失败）：持有控制权后接上
+  for (const PlanStatus failed : {PlanStatus::FailedTooClose, PlanStatus::FailedFallback}) {
+    Harness f;
+    f.startLowBatteryMission();
+    f.c.trail_gap = true;
+    f.c.plan_status = failed;
+    f.c.anchor_ahead = true;
+    f.c.anchor_past_gap = true;
+    f.step();
+    EXPECT_EQ(f.out.control, ControlState::Acquiring);
+    EXPECT_FALSE(f.out.commands.reanchor);
+    f.acquire();
+    expectReanchored(f, "TRAIL_GAP");
+  }
+}
+
 TEST(ReturnStateMachineTest, PlanFailuresLandOrHold) {
   Harness t;
   t.startLowBatteryMission();

@@ -122,6 +122,7 @@ struct ExecCommands {
   bool start_planning{false};    ///< 任务开始：基于当前录制缓存提交规划
   bool cancel_planning{false};   ///< 任务结束或进入交接：取消规划，丢弃会话
   bool trail_cut{false};         ///< 退出：录制截断到执行层的游标（第 7.4 节，R-78）
+  bool reanchor{false};          ///< 找点接上：录制截断到接上的点，随 start_planning 从该点重新规划（D33）
 };
 
 /// 告警码（重构方案第 9.1 节）
@@ -299,8 +300,8 @@ private:
   bool updateControl(const Conditions& c, StepOutput& out);
   /// 被切出且不属于回退：链路正常退出，否则重新申请
   bool switchedOut(const Conditions& c, const char* rule, StepOutput& out);
-  /// 重新申请期间观察到 OFFBOARD：检查重新接入条件
-  void tryReclaim(const Conditions& c, StepOutput& out);
+  /// 重新申请期间观察到 OFFBOARD：检查重新接入条件；返回区域 A 是否已改变
+  bool tryReclaim(const Conditions& c, StepOutput& out);
   /// 规则 5：短按退出；返回是否已退出
   bool handleExitRequest(const Conditions& c, StepOutput& out);
 
@@ -310,6 +311,8 @@ private:
                      const char* rule, StepOutput& out);
   void exitMission(const Conditions& c, const char* rule, const char* reason,
                    StepOutput& out);
+  /// 找点接上：从接上的点重新规划，回到准备阶段（D33）
+  void reanchor(const Conditions& c, const char* rule, const char* reason, StepOutput& out);
   void endMission(const char* reason, StepOutput& out);
   void trackMissionConditions(const Conditions& c, StepOutput& out);
   void consumeCommands(const Conditions& c);

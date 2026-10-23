@@ -417,16 +417,19 @@ void ReturnStateMachine::stepMission(const Conditions& c, StepOutput& out) {
 }
 
 void ReturnStateMachine::stepPrepare(const Conditions& c, StepOutput& out) {
-  // 轨迹在断点处截断时飞机不一定靠近起点：这两种失败原地悬停，不降落（D30）
+  const bool owned = control_ == ControlState::Owned && !c.odom_stale;
   switch (c.plan_status) {
     case PlanStatus::FailedTooClose:
-      if (!c.trail_gap) {
-        enterHandover(c, HandoverReason::PlanTooClose, false, "7", out);
-      }
-      return;
     case PlanStatus::FailedFallback:
+      // 轨迹在断点处截断时飞机不一定靠近起点：不降落（D30）；断点之前有离飞机不超过
+      // 安全距离的点就接上，否则原地悬停（D33）
       if (!c.trail_gap) {
-        enterHandover(c, HandoverReason::FallbackFailed, false, "7", out);
+        enterHandover(c, c.plan_status == PlanStatus::FailedTooClose
+                             ? HandoverReason::PlanTooClose
+                             : HandoverReason::FallbackFailed,
+                      false, "7", out);
+      } else if (owned && c.anchor_past_gap) {
+        reanchor(c, "7", "TRAIL_GAP", out);
       }
       return;
     case PlanStatus::Ready:
@@ -437,12 +440,16 @@ void ReturnStateMachine::stepPrepare(const Conditions& c, StepOutput& out) {
       return;
   }
 
-  if (control_ != ControlState::Owned || c.odom_stale) {
+  if (!owned) {
     return;
   }
-  // 开始跟随前检查偏差：离路径超过安全距离时原地保持（D30）
+  // 开始跟随前检查偏差：离路径超过安全距离时能找点接上就接上，否则原地保持（D30、D33）
   if (!offsetOk(c)) {
-    path_offset_ = true;
+    if (c.anchor_ahead) {
+      reanchor(c, "7", "PATH_OFFSET", out);
+    } else {
+      path_offset_ = true;
+    }
     return;
   }
   if (c.path_start_yaw && !yawAligned(c.yaw, *c.path_start_yaw)) {
@@ -452,13 +459,19 @@ void ReturnStateMachine::stepPrepare(const Conditions& c, StepOutput& out) {
 }
 
 void ReturnStateMachine::stepFollow(const Conditions& c, StepOutput& out) {
-  // 离路径超过安全距离（含投影失败）：原地保持、冻结进度，不回归（D30）
+  const bool owned = control_ == ControlState::Owned && !c.odom_stale;
+  // 离路径超过安全距离（含投影失败）：不回归。能找点接上就从接上的点重新规划（D33），
+  // 否则原地保持、冻结进度（D30）
   if (!offsetOk(c)) {
-    path_offset_ = true;
+    if (owned && c.anchor_ahead) {
+      reanchor(c, "7", "PATH_OFFSET", out);
+    } else {
+      path_offset_ = true;
+    }
     return;
   }
   // 不持有控制权或里程计延迟时冻结进度（R-18）
-  if (control_ != ControlState::Owned || c.odom_stale) {
+  if (!owned) {
     return;
   }
 
@@ -482,13 +495,17 @@ void ReturnStateMachine::stepArrival(const Conditions& c, StepOutput& out) {
   // 到点悬停只在持有控制权时计时
   const double dt = std::max(0.0, c.now - arrival_last_t_);
   arrival_last_t_ = c.now;
-  if (control_ == ControlState::Owned && !c.odom_stale) {
+  const bool owned = control_ == ControlState::Owned && !c.odom_stale;
+  if (owned) {
     arrival_owned_s_ += dt;
   }
   if (arrival_owned_s_ + kTimeEpsS >= config_.landing_hover_s) {
-    // 到达的是轨迹断点而不是录制起点：原地悬停，不降落（D30）
+    // 到达的是轨迹断点而不是录制起点：不降落（D30）；断点之前有离飞机不超过安全距离的
+    // 点就接上，否则原地悬停（D33）
     if (!c.trail_gap) {
       enterHandover(c, HandoverReason::Arrived, false, "7", out);
+    } else if (owned && c.anchor_past_gap) {
+      reanchor(c, "7", "TRAIL_GAP", out);
     }
   }
 }
@@ -576,8 +593,7 @@ bool ReturnStateMachine::updateControl(const Conditions& c, StepOutput& out) {
 
     case ControlState::Reclaiming:
       if (in_offboard) {
-        tryReclaim(c, out);
-        return false;
+        return tryReclaim(c, out);
       }
       // 链路先恢复：飞手当时的模式选择生效（R-63）
       if (linkClean(c)) {
@@ -604,21 +620,27 @@ bool ReturnStateMachine::switchedOut(const Conditions& c, const char* rule,
   return false;
 }
 
-void ReturnStateMachine::tryReclaim(const Conditions& c, StepOutput& out) {
+bool ReturnStateMachine::tryReclaim(const Conditions& c, StepOutput& out) {
   if (phase_ != MissionPhase::Follow) {
     // 悬停、准备、到点阶段：保持点改为重新接入时的位置，不飞回原来的位置（D30）
     trigger_position_ = reclaim_position_;
     arrival_position_ = reclaim_position_;
     setControl(ControlState::Owned, "4", "RECLAIMED", out);
-    return;
+    return false;
   }
 
-  // 跟随阶段：对准路径目标切向，且局部投影有效、偏差不超限，才重新接入（第 7.3 节）
-  const bool yaw_ok = !c.path_target_yaw || yawAligned(c.yaw, *c.path_target_yaw);
+  // 跟随阶段：对准路径目标切向，且局部投影有效、偏差不超限，才重新接入（第 7.3 节）；
+  // 偏差超限但能找点接上时，重新接入并从接上的点重新规划（D33）
   const bool offset_ok = offsetOk(c);
+  if (!offset_ok && c.anchor_ahead && !c.odom_stale) {
+    setControl(ControlState::Owned, "4", "RECLAIMED", out);
+    reanchor(c, "4", "PATH_OFFSET", out);
+    return true;
+  }
+  const bool yaw_ok = !c.path_target_yaw || yawAligned(c.yaw, *c.path_target_yaw);
   path_offset_ = !offset_ok;
   if (!yaw_ok || !offset_ok) {
-    return;
+    return false;
   }
 
   setControl(ControlState::Owned, "4", "RECLAIMED", out);
@@ -626,6 +648,7 @@ void ReturnStateMachine::tryReclaim(const Conditions& c, StepOutput& out) {
       c.cross_track_m > config_.rejoin_trigger_dist_m) {
     setFollow(FollowMode::Rejoin, "4", "RECLAIM_DEVIATION", out);
   }
+  return false;
 }
 
 bool ReturnStateMachine::handleExitRequest(const Conditions& c, StepOutput& out) {
@@ -722,6 +745,18 @@ void ReturnStateMachine::exitMission(const Conditions& c, const char* rule,
   endMission(reason, out);
   setControl(ControlState::Yielded, rule, reason, out);
   setPhase(MissionPhase::Exited, rule, reason, out);
+}
+
+void ReturnStateMachine::reanchor(const Conditions& c, const char* rule,
+                                  const char* reason, StepOutput& out) {
+  // 执行层截断到接上的点、从该点重新规划；准备阶段原地保持，规划就绪后同样检查偏差、
+  // 对准再跟随（D33）
+  out.commands.reanchor = true;
+  out.commands.start_planning = true;
+  trigger_position_ = c.position;
+  trigger_yaw_ = c.yaw;
+  addEvent(out, EventType::Mission, "reanchored", "", "", rule, reason, "");
+  setPhase(MissionPhase::Prepare, rule, "REANCHOR", out);
 }
 
 void ReturnStateMachine::endMission(const char* reason, StepOutput& out) {
@@ -883,8 +918,8 @@ void ReturnStateMachine::computeMissionOutputs(const Conditions& c,
   double yaw = trigger_yaw_;
   switch (phase_) {
     case MissionPhase::Prepare:
-      // 规划就绪后 yaw 改为路径起始切向
-      if (planReady(c) && c.path_start_yaw) {
+      // 规划就绪后 yaw 改为路径起始切向；找点接上的那一拍规划事实还是上一次的（D33）
+      if (planReady(c) && c.path_start_yaw && !out.commands.reanchor) {
         yaw = *c.path_start_yaw;
       }
       break;

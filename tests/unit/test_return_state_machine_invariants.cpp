@@ -15,7 +15,7 @@
 
 // 穷举不变量检查（重构方案第 13 节 R2、系统性分析第 4 节）：
 // 1. 随机游走收集可达的状态机快照，游走本身也逐拍检查；
-// 2. 对每个快照，遍历关键条件的全部组合各走一拍，检查 SC1–SC7、SC9–SC11 和结构一致性。
+// 2. 对每个快照，遍历关键条件的全部组合各走一拍，检查 SC1–SC7、SC9–SC12 和结构一致性。
 
 namespace px4_backtrack::domain {
 namespace {
@@ -217,6 +217,21 @@ public:
               "SC11 landing at trail gap", before, c, out);
     }
 
+    // SC12：只在原地悬停（离路径超过安全距离，或停在断点处）、持有控制权、里程计新鲜且找到点时
+    // 找点接上；接上后回到准备阶段，在飞机当前位置、当前 yaw 原地保持，重新规划（D33）
+    if (out.commands.reanchor) {
+      const bool offset_hold =
+          c.anchor_ahead && (!c.projection_ok || c.cross_track_m > kSafeDistanceM);
+      const bool gap_hold = c.anchor_past_gap && c.trail_gap;
+      require(armed_flow && from != MissionPhase::Hover && holdsPhase(from) &&
+                  (offset_hold || gap_hold) && !c.odom_stale &&
+                  out.phase == MissionPhase::Prepare && out.control == ControlState::Owned &&
+                  out.commands.start_planning && !out.commands.cancel_planning &&
+                  out.setpoint == SetpointKind::Hold && out.hold_position == c.position &&
+                  out.hold_yaw == c.yaw,
+              "SC12 reanchor", before, c, out);
+    }
+
     // SC9：只在返航完成、已落地、起点附近或飞控已在降落时请求 AUTO.LAND
     if (out.mode_intent == ModeIntent::AutoLand) {
       require((out.phase == MissionPhase::Handover &&
@@ -322,6 +337,8 @@ public:
     c_.projection_ok = !chance(0.1);
     c_.cross_track_m = uniform() * 2.0;
     c_.trail_gap = chance(0.05);
+    c_.anchor_ahead = chance(0.05);
+    c_.anchor_past_gap = c_.anchor_ahead && chance(0.5);
     c_.stream_gap_recent = chance(0.05);
     c_.odom_stale = chance(0.02);
     c_.mode_request_failed = chance(0.02);
@@ -500,6 +517,8 @@ TEST(ReturnStateMachineInvariantTest, ExhaustiveSingleStepFromReachableStates) {
       c.projection_ok = chance(0.8);
       c.cross_track_m = chance(0.5) ? 0.2 : 1.5;
       c.trail_gap = chance(0.3);
+      c.anchor_ahead = chance(0.5);
+      c.anchor_past_gap = c.anchor_ahead && chance(0.5);
       c.odom_stale = chance(0.1);
       c.battery.low = chance(0.3);
 
