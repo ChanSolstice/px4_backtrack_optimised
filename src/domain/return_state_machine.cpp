@@ -767,15 +767,14 @@ void ReturnStateMachine::reanchor(const Conditions& c, const char* rule,
 }
 
 void ReturnStateMachine::updateWaits(const Conditions& c) {
-  // 到点悬停和第 8.1 节的等待都只在里程计新鲜时计时，里程计中断不会引起降落（D31）
+  // 到点悬停和第 8.1 节的等待都只在里程计新鲜时计时，里程计中断不会引起降落（D31）。
+  // 准备、到点和停滞只在申请或持有 OFFBOARD 时计时，所以重新申请期间都冻结（R-18）
   if (c.odom_stale) {
     return;
   }
   const double dt = std::max(0.0, c.now - prev_.now);
   if (control_ == ControlState::Reclaiming) {
-    // 重新申请期间准备和停滞计时冻结，由重新申请的计时负责（R-18）
     reclaim_wait_s_ += dt;
-    return;
   }
   if (phase_ == MissionPhase::Prepare &&
       (control_ == ControlState::Acquiring || control_ == ControlState::Owned) &&
