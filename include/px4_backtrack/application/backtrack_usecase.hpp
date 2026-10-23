@@ -164,6 +164,12 @@ private:
   /// 游标跟着跟随进度向起点移动：轨迹用路径投影点，航点降级用飞机位置（第 7.4 节）
   void updateCursor();
 
+  /// 找点接上：游标之前离飞机不超过安全距离的录制点里最早录制的一个（D33）
+  std::optional<size_t> findAnchor() const;
+
+  /// 录制截断到 last（含），记录事件
+  void cutTrail(size_t last, std::vector<domain::StepEvent>& events);
+
   /// 按 setpoint 策略计算目标；拿不到目标时保持当前位置（P3）
   std::optional<domain::SetpointTarget> computeSetpoint(
       const domain::StepOutput& step);

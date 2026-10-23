@@ -196,6 +196,13 @@ domain::Conditions BacktrackUseCase::assembleConditions(double now) const {
                      static_cast<size_t>(config_.record_min_points);
   c.plan_status = plan_status_;
   c.trail_gap = plan_begin_ > 0;
+  if (plan_status_ != domain::PlanStatus::None) {
+    // 找点接上（D33）：停在断点处时，最早的那个点须在断点之前
+    if (const auto anchor = findAnchor()) {
+      c.anchor_ahead = true;
+      c.anchor_past_gap = *anchor < plan_begin_;
+    }
+  }
   c.planning_slow = plan_status_ == domain::PlanStatus::Pending &&
                     now - plan_submit_t_ + kTimeEpsS >= config_.planning_warn_s;
   c.planning_timed_out = plan_timed_out_;
@@ -235,18 +242,19 @@ void BacktrackUseCase::executeCommands(const domain::StepOutput& step, double no
     pilot_input_.reset();
     battery_monitor_.reset();
   }
+  if (commands.reanchor) {
+    // 找点接上：丢弃当前规划，录制截断到接上的点，下面从该点重新规划（D33）
+    const size_t anchor = *findAnchor();
+    resetPlan();
+    cutTrail(anchor, events);
+  }
   if (commands.start_planning) {
-    // 任务开始：游标指向末点，即触发点（第 7.4 节）
+    // 任务开始：游标指向末点，即触发点；找点接上时为接上的点（第 7.4 节）
     cursor_ = recording_buffer_.empty() ? 0 : recording_buffer_.size() - 1;
   }
   if (commands.trail_cut) {
     // 退出：录制截断到游标（R-78）
-    const size_t before = recording_buffer_.size();
-    recording_buffer_.truncate(cursor_);
-    events.push_back(makeEvent(
-        domain::EventType::Mission, "trail_cut", "",
-        "kept=" + std::to_string(recording_buffer_.size()) +
-            " removed=" + std::to_string(before - recording_buffer_.size())));
+    cutTrail(cursor_, events);
   }
   if (commands.cancel_planning) {
     if (plan_status_ == domain::PlanStatus::Pending) {
@@ -417,6 +425,20 @@ void BacktrackUseCase::updateCursor() {
                 .position
           : position_;
   cursor_ = recording_buffer_.nearestBefore(cursor_, reference, config_.cursor_window_m);
+}
+
+std::optional<size_t> BacktrackUseCase::findAnchor() const {
+  return recording_buffer_.firstWithin(cursor_, position_,
+                                       config_.state_machine_config.safe_distance_m);
+}
+
+void BacktrackUseCase::cutTrail(size_t last, std::vector<domain::StepEvent>& events) {
+  const size_t before = recording_buffer_.size();
+  recording_buffer_.truncate(last);
+  events.push_back(makeEvent(
+      domain::EventType::Mission, "trail_cut", "",
+      "kept=" + std::to_string(recording_buffer_.size()) +
+          " removed=" + std::to_string(before - recording_buffer_.size())));
 }
 
 std::optional<domain::SetpointTarget> BacktrackUseCase::computeSetpoint(

@@ -146,7 +146,7 @@ MUTATIONS = [
     ('plan_crosses_gap', 'backtrack_usecase',
      '  plan_begin_ = recording_buffer_.continuousFrom(config_.state_machine_config.safe_distance_m);',
      '  plan_begin_ = 0;', '规划用整段录制，跨过断点直线飞行（D30）'),
-    ('trail_cut_ignored', 'backtrack_usecase', '    recording_buffer_.truncate(cursor_);\n', '',
+    ('trail_cut_ignored', 'backtrack_usecase', '    cutTrail(cursor_, events);\n', '',
      '退出时不截断，新任务先飞回原触发点（S11）'),
     ('cursor_not_updated', 'backtrack_usecase',
      '  cursor_ = recording_buffer_.nearestBefore(cursor_, reference, config_.cursor_window_m);\n',

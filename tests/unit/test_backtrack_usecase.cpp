@@ -843,6 +843,106 @@ TEST(BacktrackUseCaseTest, NewMissionDoesNotCrossGapLeftByMovedAircraft) {
   EXPECT_EQ(s.requestsSince("AUTO.LAND", 0.0), 0);
 }
 
+TEST(BacktrackUseCaseTest, PushedNearEarlierTrailReanchorsAndReturnsHome) {
+  // S34、D33：往返航线，返航中链路丢失，飞手把飞机推到去程附近。拿回 OFFBOARD 后从去程上
+  // 离飞机不超过安全距离的点接上，沿去程回到起点，不再绕回程
+  Sim s;
+  s.flyOutbound(3.0);  // 去程：y = 0，x 0→3
+  for (int i = 1; i <= 10; ++i) {  // 向北 1 m
+    s.pos = Vec3(3.0, 0.1 * i, 2.0);
+    s.step();
+  }
+  for (int i = 1; i <= 20; ++i) {  // 回程：y = 1，x 3→1
+    s.pos = Vec3(3.0 - 0.1 * i, 1.0, 2.0);
+    s.step();
+  }
+  s.battery = 0.10;
+  s.link_ok = false;  // 低电量返航开始后不久确认链路丢失
+  ASSERT_TRUE(s.runUntil([&] { return s.out.link_lost; }, 3.0));
+  ASSERT_TRUE(s.in("ReturnActive"));
+  ASSERT_LT(s.pos.x(), 2.0);  // 还在回程上
+  s.reject_offboard = true;
+  s.mode = "POSCTL";
+  s.track = false;
+  for (int i = 0; i < 8; ++i) {  // 向南推 0.8 m：离回程超过安全距离，离去程 0.2 m
+    s.pos += Vec3(0.0, -0.1, 0.0);
+    s.step();
+  }
+  ASSERT_TRUE(s.alert(Alert::Reclaiming));
+  const Vec3 pushed = s.pos;
+  s.reject_offboard = false;
+  s.track = true;
+  ASSERT_TRUE(s.runUntil([&] { return hasEvent(s.events, EventType::Mission, "reanchored"); },
+                         3.0));
+  EXPECT_TRUE(s.in("ReturnPreOffboard"));
+  EXPECT_EQ(s.out.control, ControlState::Owned);
+  EXPECT_FALSE(eventValues(s.events, "trail_cut", "removed").empty());
+
+  double max_x = s.pos.x();
+  double max_y = s.pos.y();
+  ASSERT_TRUE(s.runUntil([&] {
+    max_x = std::max(max_x, s.pos.x());
+    max_y = std::max(max_y, s.pos.y());
+    return s.in("IdleDisarmed");
+  }, 60.0));
+  EXPECT_LT(max_x, pushed.x() + 0.05);  // 没有沿回程继续向东
+  EXPECT_LT(max_y, pushed.y() + 0.05);  // 没有回到回程
+  EXPECT_LT(s.pos.head<2>().norm(), 0.3);
+  EXPECT_FALSE(s.everIn("Exited"));
+}
+
+TEST(BacktrackUseCaseTest, GapEndNearEarlierTrailReanchorsAndReturnsHome) {
+  // S34、D33：录制中定位突跳形成断点，突跳后的位置离突跳前的轨迹不远。返航到断点处，
+  // 到点悬停结束后从断点之前的轨迹接上，沿原路回到起点降落
+  Sim s;
+  s.flyOutbound(3.0);  // y = 0，x 0→3
+  for (int i = 1; i <= 20; ++i) {  // 向北 2 m
+    s.pos = Vec3(3.0, 0.1 * i, 2.0);
+    s.step();
+  }
+  const Vec3 gap_end(3.3, 0.3, 2.0);  // 定位突跳 1.7 m
+  for (int i = 0; i <= 17; ++i) {     // 向东 1.7 m
+    s.pos = gap_end + Vec3(0.1 * i, 0.0, 0.0);
+    s.step();
+  }
+  s.battery = 0.10;
+  ASSERT_TRUE(s.runUntilState("ReturnActive", 5.0));
+  EXPECT_FALSE(eventValues(s.events, "submitted", "gap_at").empty());
+  ASSERT_TRUE(s.runUntilState("LandingHover", 20.0));
+  EXPECT_LT((s.pos - gap_end).norm(), 0.3);
+  const double arrived_t = s.t;
+  ASSERT_TRUE(s.runUntil([&] { return hasEvent(s.events, EventType::Mission, "reanchored"); },
+                         6.0));
+  EXPECT_GE(s.t - arrived_t, 4.9);  // 到点悬停结束后才找
+  EXPECT_TRUE(s.in("ReturnPreOffboard"));
+
+  double max_y = s.pos.y();
+  ASSERT_TRUE(s.runUntil([&] {
+    max_y = std::max(max_y, s.pos.y());
+    return s.in("IdleDisarmed");
+  }, 60.0));
+  EXPECT_LT(max_y, gap_end.y() + 0.25);  // 接上去程，没有沿向北的一段飞
+  EXPECT_LT(s.pos.head<2>().norm(), 0.3);
+  EXPECT_EQ(eventValues(s.events, "submitted", "gap_at").size(), 1u);  // 接上后的轨迹没有断点
+}
+
+TEST(BacktrackUseCaseTest, ShortSegmentAfterGapHoldsWithoutReanchoring) {
+  // D30、D33：定位突跳 5 m 后马上低电量，突跳后的一段太短，规划失败：原地悬停；断点之前
+  // 没有离飞机不超过安全距离的点，不接上，也不接飞机所在的这一段
+  Sim s;
+  s.flyOutbound(2.0);
+  s.pos = Vec3(2.0, 5.0, 2.0);
+  s.run(1.0);
+  s.battery = 0.10;
+  ASSERT_TRUE(s.runUntilState("ReturnPreOffboard", 5.0));
+  s.run(10.0);
+  EXPECT_TRUE(s.in("ReturnPreOffboard"));
+  EXPECT_TRUE(s.alert(Alert::TrailGap));
+  EXPECT_FALSE(hasEvent(s.events, EventType::Mission, "reanchored"));
+  EXPECT_EQ(s.requestsSince("AUTO.LAND", 0.0), 0);
+  EXPECT_LT((s.pos - Vec3(2.0, 5.0, 2.0)).norm(), 0.1);
+}
+
 // ============================================================================
 // 降落与让步
 // ============================================================================
