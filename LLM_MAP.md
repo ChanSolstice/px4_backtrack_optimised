@@ -9,8 +9,8 @@
 3. 编排在 [`src/application/backtrack_usecase.cpp`](src/application/backtrack_usecase.cpp)：组装 `Conditions` → `ReturnStateMachine::step()` → 执行命令、计算 setpoint。UseCase 不访问 ROS，所有输入的接收时间由节点传入，所以可以在单测里完全控制时间。
 4. 所有状态转移都在 [`return_state_machine.cpp`](src/domain/return_state_machine.cpp) 的 `step()` 中完成，规则编号对应方案第 6.3 节。不要在 UseCase 里改状态或加分支。
 5. 条件层（`link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor`）只做检测，输出电平和带编号的按键指令，是否响应由状态机决定。
-6. 设计变化先改方案文档，并在第 15 节记一条审核记录（R-xx），再改代码；用户已确认的决策是 D1–D29。
-7. 本分支实施到 R5b（D30 安全距离）。超时升级（R6）、JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+6. 设计变化先改方案文档，并在第 15 节记一条审核记录（R-xx），再改代码；用户已确认的决策是 D1–D33。
+7. 本分支实施到 R5c（D30 安全距离、D33 找点接上）。超时升级（R6）、JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
 8. 参数全部在 [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 中必填，代码中没有默认值；新增参数要同时改 config 结构体、[`config_loader.cpp`](src/infrastructure/config_loader.cpp) 和 YAML。
 9. 用户要求整体简洁、避免过度防御：不加初值已保证的标志、不重复复位、不为小概率场景堆保护；不了解下方环境时，悬停优先于降落。
 
@@ -49,7 +49,7 @@
 
 执行层：
 
-- [`recording_buffer`](src/domain/recording_buffer.cpp)：录制节流与相对时间戳；退出时的截断、续录时间接续和游标搜索（方案第 7.4 节）。
+- [`recording_buffer`](src/domain/recording_buffer.cpp)：录制节流与相对时间戳；退出时的截断、续录时间接续和游标搜索（方案第 7.4 节）；断点扫描和找点接上的查找（第 7.8 节）。
 - [`trajectory_session`](src/domain/trajectory_session.cpp)：抽稀、逆序、调用 `trajectory_core`、局部投影、单调弧长进度、预瞄、完成判定；`probe()` 只查询当前偏差不推进进度（R-74）。
 - [`waypoint_fallback_session`](src/domain/waypoint_fallback_session.cpp)：轨迹生成可恢复地失败时的航点降级。
 - [`rejoin_policy`](src/domain/rejoin_policy.cpp)：偏离阈值、回归限速、退出时的速度收敛。
@@ -121,7 +121,7 @@
 
 ### 10. 安全距离（D30）
 
-只沿录制轨迹飞行，不在录制轨迹上的直线移动不超过 `safe_distance_m`（0.7 m），超过就原地保持并告警：保持点都取飞机所在的位置（重新申请期间跟着飞机，拿回 OFFBOARD 后固定）；开始和恢复跟随前检查偏差；跟随中投影失败或偏差超限时不回归；录制轨迹中相邻两点超过安全距离即为断点，规划不跨越，返航停在断点处悬停、不降落。用户明确要求杜绝直线飞向起点（2026-10-22），改这些逻辑前先读方案第 7.8 节。
+只沿录制轨迹飞行，不在录制轨迹上的直线移动不超过 `safe_distance_m`（0.7 m），超过就原地保持并告警：保持点都取飞机所在的位置（重新申请期间跟着飞机，拿回 OFFBOARD 后固定）；开始和恢复跟随前检查偏差；跟随中投影失败或偏差超限时不回归；录制轨迹中相邻两点超过安全距离即为断点，规划不跨越，返航停在断点处悬停、不降落。用户明确要求杜绝直线飞向起点（2026-10-22），原地悬停时找点接上（D33）：在游标之前（停在断点处时为断点之前）找离飞机不超过安全距离、最近的录制点，截断到该点并重新规划，回到准备阶段。改这些逻辑前先读方案第 7.8 节。
 
 ## 常见改动应该改哪里
 
