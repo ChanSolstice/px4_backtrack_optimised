@@ -10,8 +10,9 @@
 | 错误注入 | 单测能否发现典型错误 | `scripts/analysis/run_mutation_check.sh` | 单元测试文档第 8 节 |
 | 闭环危害场景 | 真实 `BacktrackUseCase` 在按 PX4 源码写的假飞控下的整体行为 | `scripts/analysis/run_hazard_scenarios.sh` | 第 2 节 |
 | SITL 飞控行为检查 | 重构方案依赖的 PX4 行为（N1、N2） | `scripts/sitl/run_sitl_checks.sh` | 第 3 节 |
-| 规划耗时基准 | 轨迹生成耗时随录制时长的增长 | `scripts/bench/run_gen_bench.sh` | 第 4 节 |
-| 完整 SITL、台架、实飞 | 方案第 11 节的场景 | R6 完成后做完整 SITL；清单按方案第 14.3–14.5 节编写，R8 定稿 | dev 版本的测试文档见[返航功能测试文档](返航功能测试文档.md)、[当前版本返航飞行测试清单](当前版本返航飞行测试清单.md) |
+| SITL 返航场景 | 真实 PX4（SIH）和 MAVROS 下本节点的整体行为（方案第 11 节中涉及飞控交互的场景） | `scripts/sitl/run_sitl_checks.sh scenarios` | 第 4 节 |
+| 规划耗时基准 | 轨迹生成耗时随录制时长的增长 | `scripts/bench/run_gen_bench.sh` | 第 5 节 |
+| 台架、实飞 | 方案第 11 节的场景 | 清单按方案第 14.4、14.5 节编写，R8 定稿 | dev 版本的测试文档见[返航功能测试文档](返航功能测试文档.md)、[当前版本返航飞行测试清单](当前版本返航飞行测试清单.md) |
 
 所有脚本都在 Docker 中运行，本机需要 sudo 时设置 `DOCKER="sudo docker"`。闭环场景、注入检查和基准复用 `scripts/docker/run_tests.sh` 留下的容器 `backtrack_noetic_<arch>`，先跑一次单测即可。
 
@@ -94,7 +95,66 @@ DOCKER="sudo docker" scripts/sitl/run_sitl_checks.sh check    # 之后只跑检�
 
 没有出现反例。结论与分析见系统性分析第 6 节 N1、N2；`/mavros/state` 约 1 Hz，模块看到模式变化最多晚约 1 s，在方案的回退窗口（3 s）之内。
 
-## 4. 规划耗时基准
+## 4. SITL 返航场景
+
+**目的：** 在真实的 PX4 v1.15.4（SIH）和 MAVROS 下运行返航节点，回放方案第 11 节中涉及飞控交互的场景（方案第 14.3 节，R-86）。与第 2 节的闭环危害场景相比，这里的飞控模式逻辑、MAVROS 的心跳频率和服务调用、节点的话题和参数加载都是真实的。
+
+**做法：** 同一个容器（第 3 节的镜像，加装编译本节点的依赖）里运行 PX4 SITL、MAVROS 和本节点：
+
+- 节点用机载的参数文件，只打开调试日志（[`backtrack_sitl.launch`](../../scripts/sitl/backtrack_sitl.launch)）；里程计用 `/mavros/local_position/odom`，遥控和电量话题重映射到场景脚本。
+- [`sitl_scenarios.py`](../../scripts/sitl/sitl_scenarios.py) 扮演飞手、接收机和电池：
+  - 飞手用 `MANUAL_CONTROL` 摇杆（`COM_RC_IN_MODE=1`）在 POSCTL 下起飞到约 3 m，录制开始后向前约 10 m、向右约 8 m；
+  - 接收机以 50 Hz 发 18 个通道，失控时 CH18 = 800、摇杆回中、CH7 保持失控瞬间的值；
+  - 飞手拨开关、地面站切模式用 `/mavros/set_mode` 模拟，本模块卡顿用 `SIGSTOP`、`SIGCONT`。
+- 每个场景重新启动 PX4、MAVROS 和节点；判定看节点的状态话题、`/mavros/state` 和调试日志 `events.jsonl`。
+
+**场景：**
+
+| 场景 | 内容 | 检查 |
+| --- | --- | --- |
+| S1 | 低电量返航中失控 | 不退出；链路丢失后不请求 POSCTL；在返航终点附近降落并上锁 |
+| S4 | 录制中失控 | 第一帧失控帧后 1.5 s 内申请 OFFBOARD；悬停 15 s 后返航；在返航终点附近降落 |
+| S6 | 返航中短按 CH7 | 进入 `Exited`、截断录制、飞控进入 POSCTL；之后不再申请 OFFBOARD |
+| S7 | 返航中链路正常时拨开关 | 进入 `Exited`；之后不再申请 OFFBOARD |
+| S11 | 长按返航，短按退出，手动飞一段后失控 | 开始新任务；经过退出位置；在返航终点附近降落 |
+| S12 | 返航中失控后地面站切出 | 重新申请并回到 OFFBOARD；不退出；在返航终点附近降落 |
+| S13 | 在地面解锁、未起飞时失控、低电量 | 不启动任务、不请求模式、不起飞；告警 `TRIGGER_IGNORED_LANDED` |
+| S15 | 长录制（默认 5 分钟）后失控 | 后台规划完成；OFFBOARD 不因断流回退 |
+| S18 | 降落交接中飞手拨开关 | 模块看到飞手的模式后不再请求 AUTO.LAND，飞机留在飞手的模式 |
+| S21 | 链路丢失时飞控降落中被切到 POSCTL | 重新请求 AUTO.LAND，告警 `AUTOLAND_OVERRIDDEN`；降落并上锁 |
+| S26 | 返航中本节点卡顿 1.3 s | 不退出；在返航终点附近降落 |
+| S27 | 返航开始、OFFBOARD 确认前拨开关到 ALTCTL | 进入 `Exited`；没有申请 OFFBOARD |
+
+返航的场景还记录跟随中离返航轨迹的最大距离（只记录，见下文）。
+
+**运行：**
+
+```bash
+DOCKER="sudo docker" scripts/sitl/run_sitl_checks.sh build              # 首次：编译 PX4 SITL
+DOCKER="sudo docker" scripts/sitl/run_sitl_checks.sh scenarios          # 全部场景
+DOCKER="sudo docker" scripts/sitl/run_sitl_checks.sh scenarios S4 S12   # 指定场景
+```
+
+每个场景约 1.5～2.5 分钟（含 PX4 启动、估计器对准、解锁后 15 s 的录制延时），全部约 27 分钟。S15 的录制时长用环境变量 `S15_MINUTES` 设置。日志在容器的 `/tmp/sitl/<场景>/`：PX4、ROS 的输出，节点的调试日志，以及场景脚本记录的位置、setpoint 和离返航轨迹的距离（`track.csv`、`path.csv`）。
+
+**SIH 的位置保持误差：** OFFBOARD 中 SIH 四旋翼的位置保持误差平均约 0.3 m、最大约 0.7 m，真值与估计值都在晃动，周期约 10 s。这与本模块无关：只发位置 setpoint 时一样，把模拟 GPS 的噪声减小到十分之一也没有改善；同一次飞行中 POSCTL 悬停的误差在 0.1 m 以内。这个误差接近回归阈值（0.5 m）和安全距离（0.7 m），所以 SITL 中跟随时常有回归，偶尔原地保持（`PATH_OFFSET`），飞机晃回安全距离以内后继续。因此"离返航轨迹的最大距离"只作记录，降落位置按 1.5 m 判定。PX4 SIH 偶尔在起飞后传感器超时（`px4.log` 中出现 "No valid data from"），飞控进入失效保护、拒绝 OFFBOARD，这次场景判为无效，脚本自动重跑一次。机载用 SLAM 定位，悬停误差应该小得多；实飞时要记录跟随误差，确认这两个阈值有足够余量（方案第 14.5 节）。
+
+**执行记录：**
+
+| 日期 | 受测代码 | 结果 | 说明 |
+| --- | --- | --- | --- |
+| 2026-10-23 | `ecf3ed9`（节点代码同 `40981ef`） | 12 个场景全部通过 | 要点见下 |
+
+- S1 首次运行时，SIH 在起飞后约 5 s 传感器超时（PX4 报 "No valid data from Baro 0/Compass 0"、"Failsafe: blind land"，自行切到 ALTCTL），之后拒绝 OFFBOARD；节点停在准备阶段，每 1 s 重发申请，符合设计。重跑通过：链路丢失后没有请求 POSCTL，交接直接 AUTO.LAND。
+- S4：第一帧失控帧后 1.33 s 申请 OFFBOARD，悬停 15.00 s。
+- S7：拨开关后 0.05 s 进入 `Exited`。飞控心跳固定 1 Hz，这次恰好紧接着发出；各场景中从请求模式到看到新模式为 0.05～1.05 s，与第 3 节一致。
+- S11：退出后失控开始第二个任务，返航经过退出位置（最近 0.12 m）。
+- S12：被地面站切出后 1.9 s 回到 OFFBOARD，没有退出。
+- S15：5 分钟录制 3080 个点，后台规划 87 ms；悬停和返航开始阶段 OFFBOARD 没有回退、没有断流。
+- S26：节点冻结 1.3 s，ULog 中 OFFBOARD 回退到 POSCTL，节点恢复发布后 0.26 s 自动回到 OFFBOARD。回退只有零点几秒，1 Hz 的飞控状态没有看到，节点也不需要处理（D22），没有当作外部切出重新申请。
+- 降落位置距返航终点 0.54～0.79 m；跟随中离返航轨迹最远 0.46～1.32 m，有的场景出现回归和 `PATH_OFFSET` 原地保持，原因是上面说的 SIH 位置保持误差。
+
+## 5. 规划耗时基准
 
 [`scripts/bench/gen_bench.cpp`](../../scripts/bench/gen_bench.cpp) 用固定随机种子合成出航路径，经 `RecordingBuffer` 录制后调用与 dev 相同的轨迹生成，测量耗时随录制时长的增长。输入构造和完整数据见方案附录 A。
 
