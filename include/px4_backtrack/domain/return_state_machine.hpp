@@ -27,6 +27,13 @@ struct ReturnStateMachineConfig {
   double handover_posctl_timeout_s{};  ///< 交接中 POSCTL 未生效，改为直接请求 AUTO.LAND (s)
   double rejoin_trigger_dist_m{};      ///< 重新接入后横向偏差超过此值进入回归 (m)
   double safe_distance_m{};            ///< 安全距离 (m)：不在录制轨迹上的直线移动上限（D30）
+  // 超时与升级（第 8.1 节）：只在里程计新鲜时计时
+  double prepare_warn_s{};             ///< 准备告警 (s)：规划结果已出后申请或持有 OFFBOARD 的累计时间
+  double prepare_timeout_s{};          ///< 准备超时 (s)
+  double reclaim_timeout_s{};          ///< 重新申请超时 (s)：从进入 reclaiming 算起
+  double stall_min_progress_m{};       ///< 停滞判定：剩余路径至少缩短的距离 (m)
+  double stall_warn_s{};               ///< 停滞告警 (s)
+  double stall_timeout_s{};            ///< 停滞超时 (s)
 };
 
 // ============================================================================

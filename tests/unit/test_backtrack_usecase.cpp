@@ -67,6 +67,12 @@ UseCaseConfig makeConfig() {
   sm.handover_posctl_timeout_s = 3.0;
   sm.rejoin_trigger_dist_m = 0.5;
   sm.safe_distance_m = 0.7;
+  sm.prepare_warn_s = 10.0;
+  sm.prepare_timeout_s = 30.0;
+  sm.reclaim_timeout_s = 10.0;
+  sm.stall_min_progress_m = 0.2;
+  sm.stall_warn_s = 20.0;
+  sm.stall_timeout_s = 60.0;
 
   c.mode_commander_config.request_interval_s = 1.0;
   c.mode_commander_config.request_timeout_s = 3.0;

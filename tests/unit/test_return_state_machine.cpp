@@ -24,6 +24,12 @@ ReturnStateMachineConfig makeConfig() {
   config.handover_posctl_timeout_s = 3.0;
   config.rejoin_trigger_dist_m = 0.5;
   config.safe_distance_m = 0.7;
+  config.prepare_warn_s = 10.0;
+  config.prepare_timeout_s = 30.0;
+  config.reclaim_timeout_s = 10.0;
+  config.stall_min_progress_m = 0.2;
+  config.stall_warn_s = 20.0;
+  config.stall_timeout_s = 60.0;
   return config;
 }
 

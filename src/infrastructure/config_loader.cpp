@@ -78,6 +78,14 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   requireParam(nh, "handover_posctl_timeout_s", sm.handover_posctl_timeout_s);
   requireParam(nh, "safe_distance_m", sm.safe_distance_m);
 
+  // 超时与升级（第 8.1 节）
+  requireParam(nh, "prepare_warn_s", sm.prepare_warn_s);
+  requireParam(nh, "prepare_timeout_s", sm.prepare_timeout_s);
+  requireParam(nh, "reclaim_timeout_s", sm.reclaim_timeout_s);
+  requireParam(nh, "stall_min_progress_m", sm.stall_min_progress_m);
+  requireParam(nh, "stall_warn_s", sm.stall_warn_s);
+  requireParam(nh, "stall_timeout_s", sm.stall_timeout_s);
+
   // 回退判定与模式请求（D22、D24）
   requireParam(nh, "fallback_gap_s", c.fallback_gap_s);
   requireParam(nh, "fallback_window_s", c.fallback_window_s);

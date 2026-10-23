@@ -145,6 +145,26 @@ planning_warn_s: 10.0
 planning_timeout_s: 30.0
 
 # ============================
+# 超时与升级（重构方案第 8.1 节）
+# ============================
+# 各计时只在里程计新鲜时累计。超时后电量正常或读数无效时保持并告警；确认低电量时先继续返航
+# （找点接上、不再等起始对准），仍不能继续才原地降落（D32）
+
+# 准备告警 / 超时 (s) - 准备阶段规划结果已出后，申请或持有 OFFBOARD 的累计时间；
+# 告警 PREPARE_SLOW / PREPARE_TIMEOUT
+prepare_warn_s: 10.0
+prepare_timeout_s: 30.0
+
+# 重新申请超时 (s) - 从进入 reclaiming 算起，告警 RECLAIM_TIMEOUT
+reclaim_timeout_s: 10.0
+
+# 返航进度停滞 - 剩余路径缩短不到 stall_min_progress_m (m) 的累计时间：
+# stall_warn_s 告警 PROGRESS_STALL，stall_timeout_s 超时 (s)
+stall_min_progress_m: 0.2
+stall_warn_s: 20.0
+stall_timeout_s: 60.0
+
+# ============================
 # 退出后新轨迹
 # ============================
 
