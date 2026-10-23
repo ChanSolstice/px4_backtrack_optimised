@@ -36,7 +36,6 @@ struct Harness {
     c.airborne.airborne = true;
     c.airborne.landed_state = LandedState::InAir;
     c.odom_stale = false;
-    c.odom_lost = false;
     c.position = Vec3(10.0, 20.0, 3.0);
     c.yaw = 0.3;
     c.has_min_points = true;

@@ -55,7 +55,6 @@ UseCaseConfig makeConfig() {
   c.airborne_config.airborne_min_height_m = 0.5;
   c.airborne_config.fcu_state_stale_s = 3.0;
   c.odom_stale_s = 0.25;
-  c.odom_timeout_s = 2.0;
   c.fcu_state_stale_s = 3.0;
 
   auto& sm = c.state_machine_config;

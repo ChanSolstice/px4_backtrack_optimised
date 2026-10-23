@@ -189,7 +189,6 @@ domain::Conditions BacktrackUseCase::assembleConditions(double now) const {
   c.airborne = airborne_monitor_.status();
 
   c.odom_stale = !has_odom_ || now - odom_t_ > config_.odom_stale_s;
-  c.odom_lost = !has_odom_ || now - odom_t_ > config_.odom_timeout_s;
   c.position = position_;
   c.yaw = yaw_;
 

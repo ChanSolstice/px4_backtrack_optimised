@@ -188,7 +188,6 @@ const char* alertName(Alert alert) {
     case Alert::PrepareTimeout: return "PREPARE_TIMEOUT";
     case Alert::ProgressStall: return "PROGRESS_STALL";
     case Alert::OdomStale: return "ODOM_STALE";
-    case Alert::OdomLost: return "ODOM_LOST";
     case Alert::HandoverDirectLand: return "HANDOVER_DIRECT_LAND";
     case Alert::AutolandNotAccepted: return "AUTOLAND_NOT_ACCEPTED";
     case Alert::AutolandOverridden: return "AUTOLAND_OVERRIDDEN";
@@ -981,11 +980,7 @@ void ReturnStateMachine::computeAlerts(const Conditions& c, StepOutput& out) {
   if (c.link.ch18_unexpected) alerts.set(Alert::Ch18Unexpected);
   if (c.battery.low) alerts.set(Alert::LowBattery);
   if (c.battery.invalid) alerts.set(Alert::BatteryInvalid);
-  if (c.odom_lost) {
-    alerts.set(Alert::OdomLost);
-  } else if (c.odom_stale) {
-    alerts.set(Alert::OdomStale);
-  }
+  if (c.odom_stale) alerts.set(Alert::OdomStale);
   if (!c.fcu_state_fresh) alerts.set(Alert::FcuStateStale);
   if (c.mode_request_failed) alerts.set(Alert::ModeRequestFailed);
   if (c.debug_log_failed) alerts.set(Alert::DebugLogFailed);
@@ -1063,7 +1058,6 @@ void ReturnStateMachine::emitInputEvents(const Conditions& c, StepOutput& out) {
   addEdge(out, prev_.battery.invalid, c.battery.invalid, "battery_invalid");
   addEdge(out, prev_.airborne.airborne, c.airborne.airborne, "airborne");
   addEdge(out, prev_.odom_stale, c.odom_stale, "odom_stale");
-  addEdge(out, prev_.odom_lost, c.odom_lost, "odom_lost");
   addEdge(out, !prev_.fcu_state_fresh, !c.fcu_state_fresh, "fcu_state_stale");
 
   if (isNewCommand(prev_.pilot.return_request, c.pilot.return_request)) {

@@ -63,7 +63,6 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
 
   // 输入新鲜度与在空中判定（第 5.4、5.5 节）
   requireParam(nh, "odom_stale_s", c.odom_stale_s);
-  requireParam(nh, "odom_timeout_s", c.odom_timeout_s);
   requireParam(nh, "fcu_state_stale_s", c.fcu_state_stale_s);
   requireParam(nh, "airborne_min_height_m", c.airborne_config.airborne_min_height_m);
   c.airborne_config.fcu_state_stale_s = c.fcu_state_stale_s;

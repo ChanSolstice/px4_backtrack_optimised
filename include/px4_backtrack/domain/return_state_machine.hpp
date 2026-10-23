@@ -151,7 +151,6 @@ enum class Alert : uint8_t {
   PrepareTimeout,
   ProgressStall,
   OdomStale,
-  OdomLost,
   HandoverDirectLand,
   AutolandNotAccepted,
   AutolandOverridden,

@@ -49,7 +49,6 @@ struct Conditions {
 
   // 里程计
   bool odom_stale{true};        ///< 距最近一次里程计超过 odom_stale_s
-  bool odom_lost{true};         ///< 距最近一次里程计超过 odom_timeout_s
   Vec3 position = Vec3::Zero(); ///< 最近一次里程计位置 (ENU, m)
   double yaw{0.0};              ///< 最近一次里程计 yaw (rad)
 

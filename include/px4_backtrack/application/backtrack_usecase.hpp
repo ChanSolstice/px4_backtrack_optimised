@@ -44,7 +44,6 @@ struct UseCaseConfig {
   domain::BatteryMonitorConfig battery_config;
   domain::AirborneMonitorConfig airborne_config;
   double odom_stale_s{};       ///< 里程计延迟 (s)
-  double odom_timeout_s{};     ///< 里程计中断 (s)
   double fcu_state_stale_s{};  ///< 飞控状态中断 (s)
 
   // 状态机与模式请求

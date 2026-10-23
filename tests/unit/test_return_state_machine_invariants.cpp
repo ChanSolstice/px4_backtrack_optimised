@@ -267,7 +267,6 @@ public:
     c_.airborne.airborne = true;
     c_.airborne.landed_state = LandedState::InAir;
     c_.odom_stale = false;
-    c_.odom_lost = false;
     c_.has_min_points = true;
     c_.projection_ok = true;
   }
@@ -325,7 +324,6 @@ public:
     c_.trail_gap = chance(0.05);
     c_.stream_gap_recent = chance(0.05);
     c_.odom_stale = chance(0.02);
-    c_.odom_lost = c_.odom_stale && chance(0.3);
     c_.mode_request_failed = chance(0.02);
 
     // CH7 指令：与 PilotInput 一样保留到下一条
