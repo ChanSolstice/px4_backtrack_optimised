@@ -69,7 +69,7 @@
 | --- | --- | --- |
 | `/mavros/setpoint_raw/local` | `mavros_msgs/PositionTarget` | 任务中的保持点、路径目标和回归目标 |
 | `/px4_backtrack/state` | `std_msgs/String` | 状态字符串，含义见[前端对接文档](doc/reference/前端对接开发文档.md)第 3 节 |
-| `/status_rc_loss` | `std_msgs/Bool` | 链路丢失：CH18 失控帧累计 1 s 或 RC 消息中断 0.25 s 时为 `true`，持续正常 2 s 后回到 `false` |
+| `/status_rc_loss` | `std_msgs/Bool` | 链路丢失：CH18 失控帧累计 1 s 或 RC 消息中断 0.35 s 时为 `true`，持续正常 2 s 后回到 `false` |
 | `/px4_backtrack/low_battery` | `std_msgs/Bool` | 低电量，确认后锁存到下一次解锁 |
 | `/px4_backtrack/debug/waypoints` | `visualization_msgs/MarkerArray` | 录制航点可视化（latched，需启用 `debug_enable_rviz_publish`） |
 | `/px4_backtrack/debug/trajectory` | `nav_msgs/Path` | 返航轨迹可视化（latched，需启用 `debug_enable_rviz_publish`） |
@@ -100,7 +100,7 @@
 - RC 消息丢失：`enable_trigger_rc_loss`、`rc_loss_timeout_s`、`rc_loss_debounce_s`
 - 链路恢复与退化：`link_recover_s`、`link_degraded_window_s`
 - 低电量：`enable_trigger_low_battery`、`low_battery_threshold`、`low_battery_confirm_s`
-- 输入新鲜度与在空中判定：`odom_stale_s`、`odom_timeout_s`、`fcu_state_stale_s`、`airborne_min_height_m`
+- 输入新鲜度与在空中判定：`odom_stale_s`、`fcu_state_stale_s`、`airborne_min_height_m`
 - 任务与控制权：`return_pending_max_s`、`pre_offboard_setpoint_count`、`fallback_gap_s`、`fallback_window_s`、`fallback_timeout_s`、`safe_distance_m`、`handover_posctl_timeout_s`、`mode_request_interval_s`、`mode_request_timeout_s`
 - 后台规划：`planning_warn_s`、`planning_timeout_s`
 - 退出后新轨迹：`cursor_window_m`
@@ -164,7 +164,7 @@ roslaunch px4_backtrack_optimised backtrack.launch
 
 ### 调试日志
 
-设置 `debug_log_enable: true` 后，节点每次启动在 `debug_log_dir`（留空为 `~/.ros/backtrack_logs`，非空时必须是绝对路径）下建一个运行目录 `run_YYYYMMDD_HHMMSS/`，把事件一行一个写入 `events.jsonl`：
+设置 `debug_log_enable: true` 后，节点每次启动在 `debug_log_dir`（留空为 `~/.ros/backtrack_logs`，非空时为绝对路径或以 `~/` 开头）下建一个运行目录 `run_YYYYMMDD_HHMMSS/`，把事件一行一个写入 `events.jsonl`：
 
 - 第一行是生效参数和本模块的提交号；
 - 之后是状态转换（带规则编号和原因）、飞控模式和解锁变化、条件边沿、CH7 指令、任务开始与结束、规划的提交、结果、超时和取消、模式请求、自身断流，以及告警的出现和消失；
@@ -267,5 +267,6 @@ catkin_test_results
 ## 已知注意点
 
 - `README` 与 `LLM_MAP` 以当前 C++ 代码为准。
-- 原地悬停等待（离路径超过安全距离、停在轨迹断点处）目前没有超时升级，低电量也不降落，R6 加入。
+- 原地悬停等待（离路径超过安全距离、停在轨迹断点处）目前没有超时升级，低电量也不处理；R6 加入后，低电量时优先返航，无法返航才原地降落（D32）。
+- 设计前提：无人机速度不超过 2 m/s；里程计中断属于本模块不处理的极端情况，延迟时只冻结进度、原地保持（D31）。
 - 单元测试只覆盖少量 ROS adapters，没有 launch 级测试；修改状态机、条件层、轨迹接口或参数装配后，除单测外还要跑闭环场景，涉及与飞控交互时再做 SITL。
