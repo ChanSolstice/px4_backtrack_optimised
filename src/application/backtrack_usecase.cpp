@@ -197,11 +197,9 @@ domain::Conditions BacktrackUseCase::assembleConditions(double now) const {
   c.plan_status = plan_status_;
   c.trail_gap = plan_begin_ > 0;
   if (plan_status_ != domain::PlanStatus::None) {
-    // 找点接上（D33）：停在断点处时，最早的那个点须在断点之前
-    if (const auto anchor = findAnchor()) {
-      c.anchor_ahead = true;
-      c.anchor_past_gap = *anchor < plan_begin_;
-    }
+    // 找点接上（D33）：游标之前、断点之前有没有离飞机不超过安全距离的录制点
+    c.anchor_ahead = findAnchor(cursor_).has_value();
+    c.anchor_past_gap = findAnchor(plan_begin_).has_value();
   }
   c.planning_slow = plan_status_ == domain::PlanStatus::Pending &&
                     now - plan_submit_t_ + kTimeEpsS >= config_.planning_warn_s;
@@ -243,8 +241,10 @@ void BacktrackUseCase::executeCommands(const domain::StepOutput& step, double no
     battery_monitor_.reset();
   }
   if (commands.reanchor) {
-    // 找点接上：丢弃当前规划，录制截断到接上的点，下面从该点重新规划（D33）
-    const size_t anchor = *findAnchor();
+    // 找点接上：丢弃当前规划，录制截断到接上的点，下面从该点重新规划。优先接断点之前的点，
+    // 能越过断点；都取离飞机最近的（D33、R-84）
+    const auto past_gap = findAnchor(plan_begin_);
+    const size_t anchor = past_gap ? *past_gap : *findAnchor(cursor_);
     resetPlan();
     cutTrail(anchor, events);
   }
@@ -427,9 +427,9 @@ void BacktrackUseCase::updateCursor() {
   cursor_ = recording_buffer_.nearestBefore(cursor_, reference, config_.cursor_window_m);
 }
 
-std::optional<size_t> BacktrackUseCase::findAnchor() const {
-  return recording_buffer_.firstWithin(cursor_, position_,
-                                       config_.state_machine_config.safe_distance_m);
+std::optional<size_t> BacktrackUseCase::findAnchor(size_t end) const {
+  return recording_buffer_.nearestWithin(end, position_,
+                                         config_.state_machine_config.safe_distance_m);
 }
 
 void BacktrackUseCase::cutTrail(size_t last, std::vector<domain::StepEvent>& events) {

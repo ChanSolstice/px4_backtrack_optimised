@@ -155,15 +155,15 @@ TEST(RecordingBufferTest, ContinuousFromFindsLastGap) {
   EXPECT_EQ(RecordingBuffer(10.0).continuousFrom(1.0), 0u);
 }
 
-TEST(RecordingBufferTest, FirstWithinReturnsEarliestPointInRange) {
-  // D33：[0, end) 中离参考点不超过半径的点里取最早录制的；往返时去程上的点更早
+TEST(RecordingBufferTest, NearestWithinReturnsNearestPointInRange) {
+  // D33、R-84：[0, end) 中离参考点不超过半径的点里取最近的，距离相同时取更小的索引
   const RecordingBuffer buffer = lineAlongX({0.0, 0.5, 1.0, 1.5, 2.0, 1.5, 1.0});
-  // 最近的是索引 3、5（0.1 m），范围内最早的是索引 2
-  EXPECT_EQ(buffer.firstWithin(7, Vec3(1.5, 0.1, 1.0), 0.7).value_or(99), 2u);
-  EXPECT_EQ(buffer.firstWithin(7, Vec3(1.0, 0.6, 1.0), 0.6).value_or(99), 2u);  // 等于半径也算
-  EXPECT_FALSE(buffer.firstWithin(7, Vec3(1.0, 0.6, 1.0), 0.5));
-  EXPECT_FALSE(buffer.firstWithin(2, Vec3(1.0, 0.6, 1.0), 0.7));  // 不含 end
-  EXPECT_FALSE(buffer.firstWithin(0, Vec3(0.0, 0.0, 1.0), 0.7));
+  // 往返：索引 3、5 一样近（0.14 m），取 3；范围内更早的索引 2 更远（0.41 m）
+  EXPECT_EQ(buffer.nearestWithin(7, Vec3(1.4, 0.1, 1.0), 0.7).value_or(99), 3u);
+  EXPECT_EQ(buffer.nearestWithin(3, Vec3(1.4, 0.1, 1.0), 0.7).value_or(99), 2u);  // 不含 end
+  EXPECT_EQ(buffer.nearestWithin(7, Vec3(1.0, 0.6, 1.0), 0.6).value_or(99), 2u);  // 等于半径也算
+  EXPECT_FALSE(buffer.nearestWithin(7, Vec3(1.0, 0.6, 1.0), 0.5));
+  EXPECT_FALSE(buffer.nearestWithin(0, Vec3(0.0, 0.0, 1.0), 0.7));
 }
 
 }  // namespace

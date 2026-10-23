@@ -113,14 +113,18 @@ size_t RecordingBuffer::nearestBefore(size_t cursor, const Vec3& reference,
   return best;
 }
 
-std::optional<size_t> RecordingBuffer::firstWithin(size_t end, const Vec3& reference,
-                                                   double radius_m) const {
+std::optional<size_t> RecordingBuffer::nearestWithin(size_t end, const Vec3& reference,
+                                                     double radius_m) const {
+  std::optional<size_t> best;
+  double best_distance_sq = 0.0;
   for (size_t i = 0; i < end; ++i) {
-    if ((points_[i].position - reference).squaredNorm() <= radius_m * radius_m) {
-      return i;
+    const double distance_sq = (points_[i].position - reference).squaredNorm();
+    if (distance_sq <= radius_m * radius_m && (!best || distance_sq < best_distance_sq)) {
+      best = i;
+      best_distance_sq = distance_sq;
     }
   }
-  return std::nullopt;
+  return best;
 }
 
 }  // namespace domain

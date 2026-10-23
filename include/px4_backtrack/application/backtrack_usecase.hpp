@@ -164,8 +164,8 @@ private:
   /// 游标跟着跟随进度向起点移动：轨迹用路径投影点，航点降级用飞机位置（第 7.4 节）
   void updateCursor();
 
-  /// 找点接上：游标之前离飞机不超过安全距离的录制点里最早录制的一个（D33）
-  std::optional<size_t> findAnchor() const;
+  /// 找点接上：[0, end) 中离飞机不超过安全距离的录制点里最近的一个（D33、R-84）
+  std::optional<size_t> findAnchor(size_t end) const;
 
   /// 录制截断到 last（含），记录事件
   void cutTrail(size_t last, std::vector<domain::StepEvent>& events);

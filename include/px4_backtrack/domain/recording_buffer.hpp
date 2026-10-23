@@ -79,9 +79,10 @@ public:
   /// 从末点往前，相邻两点间距都不超过 max_gap_m 的连续段的起点索引；没有断点时为 0（D30）
   size_t continuousFrom(double max_gap_m) const;
 
-  /// 找点接上（D33）：[0, end) 中离 reference 不超过 radius_m 的点里最早录制的一个
+  /// 找点接上（D33）：[0, end) 中离 reference 不超过 radius_m 的点里最近的一个，
+  /// 距离相同时取更小的索引
   /// @param end 搜索上限（不含），须不大于 size()
-  std::optional<size_t> firstWithin(size_t end, const Vec3& reference, double radius_m) const;
+  std::optional<size_t> nearestWithin(size_t end, const Vec3& reference, double radius_m) const;
 
 private:
   /// 最大录制频率 (Hz)
