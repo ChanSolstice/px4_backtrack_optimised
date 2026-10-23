@@ -1,4 +1,4 @@
-# PX4 SITL（SIH，无 Gazebo）+ ROS Noetic MAVROS，用于在 SITL 中确认飞控行为。
+# PX4 SITL（SIH，无 Gazebo）+ ROS Noetic MAVROS，用于在 SITL 中确认飞控行为、运行返航节点的场景。
 FROM ros:noetic-ros-base-focal
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -21,5 +21,10 @@ RUN /opt/ros/noetic/lib/mavros/install_geographiclib_datasets.sh
 
 # 源码从主机挂载，属主与容器用户不同；PX4 编译时要用 git describe 取版本
 RUN git config --global --add safe.directory '*'
+
+# 在同一个容器里编译、运行返航节点（SITL 场景，方案第 14.3 节）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ros-noetic-tf2 ros-noetic-visualization-msgs libeigen3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /px4

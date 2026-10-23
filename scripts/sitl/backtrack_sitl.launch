@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!-- SITL 场景（方案第 14.3 节，R-86）：MAVROS 连接 PX4 SIH，返航节点使用机载参数文件，只打开调试日志。
+     遥控和电量由场景脚本发布，里程计用 MAVROS 的本地位置。 -->
+<launch>
+  <arg name="log_dir" />
+
+  <include file="$(find mavros)/launch/px4.launch">
+    <arg name="fcu_url" value="udp://:14540@127.0.0.1:14580" />
+  </include>
+
+  <node name="backtrack_node" pkg="px4_backtrack_optimised" type="backtrack_node" output="screen">
+    <rosparam command="load" file="$(find px4_backtrack_optimised)/config/backtrack_params.yaml" />
+    <param name="trajectory_config_path"
+           value="$(find px4_backtrack_optimised)/config/trajectory_config.yaml" />
+    <param name="debug_log_enable" value="true" />
+    <param name="debug_log_dir" value="$(arg log_dir)" />
+    <param name="debug_enable_csv_dump" value="false" />
+    <param name="debug_csv_output_dir" value="$(arg log_dir)" />
+    <remap from="/Odometry_px4" to="/mavros/local_position/odom" />
+    <remap from="/mavros/rc/in" to="/sitl/rc_in" />
+    <remap from="/mavros/battery" to="/sitl/battery" />
+  </node>
+</launch>
