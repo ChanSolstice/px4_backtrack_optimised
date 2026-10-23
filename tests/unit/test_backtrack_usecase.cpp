@@ -1474,5 +1474,56 @@ TEST(BacktrackUseCaseTest, SwitchOutRightAfterNewMissionReclaimsWithoutFallback)
   EXPECT_EQ(s.out.control, ControlState::Reclaiming);
 }
 
+
+// ============================================================================
+// 超时与升级（R6）
+// ============================================================================
+
+TEST(BacktrackUseCaseTest, StallHoldsUntilLowBatteryThenLandsInPlace) {
+  // S17：链路丢失时返航，定位突跳 3 m 后离路径超过安全距离、找不到点接上，原地保持；
+  // 20 s 告警 PROGRESS_STALL，电量正常时一直保持；确认低电量后原地降落
+  Sim s;
+  s.flyOutbound();
+  s.link_ok = false;
+  ASSERT_TRUE(s.runUntilState("ReturnActive", 20.0));
+  s.run(0.5);
+  s.track = false;
+  s.pos += Vec3(0.0, 3.0, 0.0);
+  const Vec3 hold = s.pos;
+  s.run(21.0);
+  EXPECT_TRUE(s.alert(Alert::PathOffset));
+  EXPECT_TRUE(s.alert(Alert::ProgressStall));
+  s.run(60.0);
+  EXPECT_TRUE(s.in("ReturnActive"));
+  EXPECT_EQ(s.requestsSince("AUTO.LAND", 0.0), 0);
+
+  s.battery = 0.10;
+  ASSERT_TRUE(s.runUntilState("LandingTransition", 2.0));
+  EXPECT_TRUE(s.alert(Alert::EscalatedLand));
+  ASSERT_TRUE(s.runUntilState("IdleDisarmed", 15.0));
+  EXPECT_LT((s.pos - hold).head<2>().norm(), 0.1);  // 原地降落
+}
+
+TEST(BacktrackUseCaseTest, LongReturnRaisesNoProgressStall) {
+  // 停滞判定用执行层的剩余路径：轨迹和航点降级的正常返航超过 20 s 也不告警停滞、不升级
+  for (const bool fallback : {false, true}) {
+    Sim s;
+    s.flyOutbound(45.0);
+    s.hold_planning = fallback;
+    s.battery = 0.10;
+    if (fallback) {
+      ASSERT_TRUE(s.runUntil([&] { return s.alert(Alert::PlanningTimeoutFallback); }, 32.0));
+      s.hold_planning = false;
+    }
+    ASSERT_TRUE(s.runUntilState("ReturnActive", 5.0)) << fallback;
+    const double start_t = s.t;
+    ASSERT_TRUE(s.runUntilState("IdleDisarmed", 120.0)) << fallback;
+    EXPECT_GT(s.t - start_t, 25.0) << fallback;
+    EXPECT_FALSE(hasEvent(s.events, EventType::Alert, "PROGRESS_STALL", "on")) << fallback;
+    EXPECT_FALSE(hasEvent(s.events, EventType::Alert, "ESCALATED_LAND", "on")) << fallback;
+    EXPECT_LT(s.pos.head<2>().norm(), 0.3) << fallback;
+  }
+}
+
 }  // namespace
 }  // namespace px4_backtrack::application

@@ -1661,6 +1661,63 @@ TEST(ReturnStateMachineTest, WaitsFreezeWhileOdomStale) {
   expectEscalated(h);
 }
 
+TEST(ReturnStateMachineTest, ReclaimTimerRestartsOnEachReclaim) {
+  // 第 8.1 节：重新申请从进入 reclaiming 算起，上一次重新申请的时间不累加
+  Harness h;
+  h.toFollow();
+  h.linkLost();
+  h.c.mode = "POSCTL";
+  h.run(8.0);
+  ASSERT_EQ(h.out.control, ControlState::Reclaiming);
+  h.c.mode = "OFFBOARD";
+  h.c.path_target_yaw = h.c.yaw;
+  h.step();
+  ASSERT_EQ(h.out.control, ControlState::Owned);
+
+  h.c.mode = "POSCTL";
+  h.run(9.0);
+  EXPECT_EQ(h.out.control, ControlState::Reclaiming);
+  EXPECT_FALSE(h.out.alerts.has(Alert::ReclaimTimeout));
+  h.run(1.1);
+  expectEscalated(h);
+}
+
+TEST(ReturnStateMachineTest, ReanchorRestartsPrepareAndStallTimers) {
+  // 第 8.1 节：找点接上后重新规划，准备计时归零；之后进入跟随，停滞也重新计时
+  Harness h;
+  h.c.remaining_m = 10.0;
+  h.startPilotMission();
+  h.acquire();
+  h.c.plan_status = PlanStatus::Ready;
+  h.c.path_start_yaw = h.c.yaw + 1.0;  // 准备 20 s 后才对准
+  h.run(20.0);
+  h.c.path_start_yaw = h.c.yaw;
+  h.step();
+  ASSERT_EQ(h.out.phase, MissionPhase::Follow);
+  h.run(50.0);  // 停滞 50 s
+  ASSERT_TRUE(h.out.alerts.has(Alert::ProgressStall));
+  h.c.cross_track_m = 1.5;
+  h.c.anchor_ahead = true;
+  h.step();
+  ASSERT_TRUE(h.out.commands.reanchor);
+
+  // 低电量时准备超时就不再等对准：对不准却一直留在准备阶段，说明准备计时已归零
+  h.c.battery.low = true;
+  h.c.anchor_ahead = false;
+  h.c.cross_track_m = 0.3;
+  h.c.path_start_yaw = h.c.yaw + 1.0;
+  h.run(25.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Prepare);
+
+  h.c.path_start_yaw = h.c.yaw;
+  h.c.remaining_m = 20.0;
+  h.step();
+  ASSERT_EQ(h.out.phase, MissionPhase::Follow);
+  EXPECT_FALSE(h.out.alerts.has(Alert::ProgressStall));
+  h.run(15.0);
+  EXPECT_EQ(h.out.phase, MissionPhase::Follow);  // 停滞重新计时，还没到超时
+}
+
 TEST(ReturnStateMachineTest, StuckWaitsEscalateWithinLimitsAtLowBattery) {
   // SC8：低电量时，返航卡住的每种等待都在超时时升级为原地降落，不提前也不拖延。每种情形
   // 100 条随机序列：里程计、飞控状态随机中断，链路在退化和丢失之间随机切换（不会被当作飞手
