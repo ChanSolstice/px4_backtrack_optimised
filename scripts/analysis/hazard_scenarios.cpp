@@ -302,11 +302,12 @@ struct Metrics {
   bool left_offboard = false;           // 飞手推开飞机：飞控已离开 OFFBOARD（H15、H16）
   double regain_t = -1.0;               // 之后飞控重新进入 OFFBOARD 的时刻
   Vec3 regain_pos = Vec3::Zero();
-  double max_move_after_regain = 0.0;   // 之后飞机离该位置的最大距离
+  double max_move_after_regain = 0.0;   // 之后飞机离该位置的最大水平距离
   double max_x_after_regain = -1e9;     // 之后飞机最东的位置
   double max_trail_dist_after_regain = 0.0;  // 之后 OFFBOARD 中飞机离录制轨迹的最大距离
   bool path_offset_seen = false;        // 出现过 PATH_OFFSET 告警
   bool reanchored = false;              // 出现过找点接上（D33）
+  bool escalated = false;               // 出现过升级降落（R6）
   double max_tick_ms = 0.0;
 };
 
@@ -647,28 +648,32 @@ std::vector<Scenario> buildScenarios() {
                                             fmt("接管后模块又发出 %.0f 次 OFFBOARD/AUTO.LAND 请求", m.fight_requests) +
                                                 "，最终模式 " + w.fcu.nav}};
                }});
-  s.push_back({"H15", "返航中链路时断时续，飞手切出并把飞机推开，模式服务暂时不可用（D30）", 110.0,
+  s.push_back({"H15", "低电量返航中链路时断时续，飞手切出并把飞机推开，模式服务暂时不可用（D30、R6）", 110.0,
                [](double t, World& w) {
                  outbound(t, w);
                  if (t >= 60.0) w.battery = 0.10;
                  // 70 s 起每秒掉线 0.3 s：链路退化，被切出时重新申请，不接受退出
                  w.link_ok = !(t >= 70.0 && std::fmod(t - 70.0, 1.0) >= 0.7);
-                 // 71～81 s 模式服务不可用，模块拿不回 OFFBOARD；飞手拨开关到 ALTCTL，向北推杆 5 s
-                 w.mode_service_down = t >= 71.0 && t < 81.0;
+                 // 71～78 s 模式服务不可用，模块拿不回 OFFBOARD；飞手拨开关到 ALTCTL，向北推杆 5 s。
+                 // 重新申请约 10 s 时超时，电量低，原地降落
+                 w.mode_service_down = t >= 71.0 && t < 78.0;
                  if (t >= 71.0 && !w.pushed_away) {
                    w.pilot.mode_switch = "ALTCTL";
                    w.pushed_away = true;
                  }
                  if (t >= 71.0 && t < 76.0) w.pilot.vel_cmd = Vec3(0.0, 2.0, 0.0);
                },
-               [](const World&, const Metrics& m) {
+               [](const World& w, const Metrics& m) {
                  return std::vector<Check>{
                      {"拿回 OFFBOARD 后原地保持，不直线飞回", m.regain_t > 0.0 && m.max_move_after_regain < 1.0,
                       m.regain_t > 0.0 ? fmt("%.1f s 拿回 OFFBOARD", m.regain_t) +
-                                             fmt("，之后离该位置最远 %.2f m", m.max_move_after_regain)
+                                             fmt("，之后离该位置水平最远 %.2f m", m.max_move_after_regain)
                                        : std::string("没有拿回 OFFBOARD")},
                      {"离路径超过安全距离时告警", m.path_offset_seen,
-                      m.path_offset_seen ? "出现 PATH_OFFSET" : "没有 PATH_OFFSET"}};
+                      m.path_offset_seen ? "出现 PATH_OFFSET" : "没有 PATH_OFFSET"},
+                     {"低电量时重新申请超时，原地降落", m.escalated && !w.fcu.armed && m.max_move_after_regain < 1.0,
+                      std::string(m.escalated ? "升级降落" : "没有升级降落") + "，" +
+                          (w.fcu.armed ? "未上锁" : "已上锁")}};
                }});
   s.push_back({"H16", "往返航线，返航中链路时断时续，飞手切出把飞机推到去程附近（D33 找点接上）", 130.0,
                [](double t, World& w) {
@@ -773,7 +778,8 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
         m.regain_t = t;
         m.regain_pos = w.fcu.pos;
       }
-      m.max_move_after_regain = std::max(m.max_move_after_regain, (w.fcu.pos - m.regain_pos).norm());
+      m.max_move_after_regain =
+          std::max(m.max_move_after_regain, (w.fcu.pos - m.regain_pos).head<2>().norm());
       m.max_x_after_regain = std::max(m.max_x_after_regain, w.fcu.pos.x());
       if (w.fcu.nav == "OFFBOARD") {
         double d = std::numeric_limits<double>::infinity();
@@ -882,6 +888,7 @@ void runScenario(const Scenario& sc, const std::string& traj_cfg, std::vector<st
         m.last_sp_t = t_after;
       }
       m.path_offset_seen = m.path_offset_seen || out.alerts.has(Alert::PathOffset);
+      m.escalated = m.escalated || out.alerts.has(Alert::EscalatedLand);
       if (out.mode_request) {
         // ModeCommander 决定何时发出；服务调用异步，mode_sent 为真（MAVROS 已发出 SET_MODE）
         const std::string& mode = *out.mode_request;
