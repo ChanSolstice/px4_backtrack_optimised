@@ -155,5 +155,16 @@ TEST(RecordingBufferTest, ContinuousFromFindsLastGap) {
   EXPECT_EQ(RecordingBuffer(10.0).continuousFrom(1.0), 0u);
 }
 
+TEST(RecordingBufferTest, FirstWithinReturnsEarliestPointInRange) {
+  // D33：[0, end) 中离参考点不超过半径的点里取最早录制的；往返时去程上的点更早
+  const RecordingBuffer buffer = lineAlongX({0.0, 0.5, 1.0, 1.5, 2.0, 1.5, 1.0});
+  // 最近的是索引 3、5（0.1 m），范围内最早的是索引 2
+  EXPECT_EQ(buffer.firstWithin(7, Vec3(1.5, 0.1, 1.0), 0.7).value_or(99), 2u);
+  EXPECT_EQ(buffer.firstWithin(7, Vec3(1.0, 0.6, 1.0), 0.6).value_or(99), 2u);  // 等于半径也算
+  EXPECT_FALSE(buffer.firstWithin(7, Vec3(1.0, 0.6, 1.0), 0.5));
+  EXPECT_FALSE(buffer.firstWithin(2, Vec3(1.0, 0.6, 1.0), 0.7));  // 不含 end
+  EXPECT_FALSE(buffer.firstWithin(0, Vec3(0.0, 0.0, 1.0), 0.7));
+}
+
 }  // namespace
 }  // namespace px4_backtrack::domain

@@ -113,5 +113,15 @@ size_t RecordingBuffer::nearestBefore(size_t cursor, const Vec3& reference,
   return best;
 }
 
+std::optional<size_t> RecordingBuffer::firstWithin(size_t end, const Vec3& reference,
+                                                   double radius_m) const {
+  for (size_t i = 0; i < end; ++i) {
+    if ((points_[i].position - reference).squaredNorm() <= radius_m * radius_m) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
 }  // namespace domain
 }  // namespace px4_backtrack
