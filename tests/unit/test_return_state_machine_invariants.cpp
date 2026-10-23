@@ -23,7 +23,7 @@ namespace {
 constexpr double kDt = 0.05;
 const char* const kModes[] = {"OFFBOARD", "POSCTL", "AUTO.LAND", "ALTCTL"};
 
-constexpr double kSafeDistanceM = 1.0;
+constexpr double kSafeDistanceM = 0.7;
 
 ReturnStateMachineConfig makeConfig() {
   ReturnStateMachineConfig config{};

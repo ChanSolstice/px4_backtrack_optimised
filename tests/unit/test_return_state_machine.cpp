@@ -23,7 +23,7 @@ ReturnStateMachineConfig makeConfig() {
   config.fallback_timeout_s = 3.0;
   config.handover_posctl_timeout_s = 3.0;
   config.rejoin_trigger_dist_m = 0.5;
-  config.safe_distance_m = 1.0;
+  config.safe_distance_m = 0.7;
   return config;
 }
 
@@ -651,7 +651,7 @@ TEST(ReturnStateMachineTest, SwitchOutWhileLinkLostReclaims) {
 }
 
 TEST(ReturnStateMachineTest, ReclaimChecksYawAndOffset) {
-  // S12：0.5～1.0 m 进入 Rejoin；超过 1.0 m 或投影失败时保持并告警
+  // S12：0.5～0.7 m 进入 Rejoin；超过 0.7 m 或投影失败时保持并告警
   Harness h;
   h.toFollow();
   h.linkLost();
@@ -675,7 +675,7 @@ TEST(ReturnStateMachineTest, ReclaimChecksYawAndOffset) {
 
   // yaw 未对准：等待，不算偏差超限
   h.c.projection_ok = true;
-  h.c.cross_track_m = 0.7;
+  h.c.cross_track_m = 0.6;
   h.c.yaw = 0.3 + 0.5;
   h.step();
   EXPECT_EQ(h.out.control, ControlState::Reclaiming);
@@ -872,7 +872,7 @@ TEST(ReturnStateMachineTest, FollowHoldsWhenOffsetExceedsSafeDistance) {
 
   // 回到安全距离内：偏差超过回归阈值时进入回归
   h.c.projection_ok = true;
-  h.c.cross_track_m = 0.7;
+  h.c.cross_track_m = 0.6;
   h.step();
   EXPECT_EQ(h.out.follow, FollowMode::Rejoin);
   EXPECT_EQ(h.out.setpoint, SetpointKind::PathTargetRejoin);

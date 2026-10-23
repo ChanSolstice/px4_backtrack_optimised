@@ -355,7 +355,7 @@ UseCaseConfig productionConfig(const std::string& traj_cfg) {
   sm.fallback_timeout_s = 3.0;
   sm.handover_posctl_timeout_s = 3.0;
   sm.rejoin_trigger_dist_m = 0.5;
-  sm.safe_distance_m = 1.0;
+  sm.safe_distance_m = 0.7;
   c.mode_commander_config.request_interval_s = 1.0;
   c.mode_commander_config.request_timeout_s = 3.0;
   c.fallback_gap_s = 0.5;

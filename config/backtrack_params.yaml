@@ -121,8 +121,9 @@ fallback_window_s: 3.0
 fallback_timeout_s: 3.0
 
 # 安全距离 (m) - 不在录制轨迹上的直线移动上限（D30）：重新接入、开始跟随的偏差，
-# 跟随中的偏离，以及录制轨迹相邻两点的间隔，超过时原地保持并告警，不直线飞过去
-safe_distance_m: 1.0
+# 跟随中的偏离，以及录制轨迹相邻两点的间隔，超过时原地保持并告警，不直线飞过去。
+# 须大于 rejoin_trigger_dist_m，两者之间的偏离由回归处理
+safe_distance_m: 0.7
 
 # 降落交接中POSCTL未生效时改为直接请求AUTO.LAND (s)
 handover_posctl_timeout_s: 3.0

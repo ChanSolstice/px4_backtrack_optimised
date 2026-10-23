@@ -66,7 +66,7 @@ UseCaseConfig makeConfig() {
   sm.fallback_timeout_s = 3.0;
   sm.handover_posctl_timeout_s = 3.0;
   sm.rejoin_trigger_dist_m = 0.5;
-  sm.safe_distance_m = 1.0;
+  sm.safe_distance_m = 0.7;
 
   c.mode_commander_config.request_interval_s = 1.0;
   c.mode_commander_config.request_timeout_s = 3.0;
@@ -618,8 +618,8 @@ TEST(BacktrackUseCaseTest, ReclaimAfterSwitchOutWhileLinkLost) {
 }
 
 TEST(BacktrackUseCaseTest, ReclaimWithMediumOffsetRejoinsAndLargeOffsetHolds) {
-  // S12：偏差 0.5～1.0 m 进入 Rejoin；超过 1.0 m 保持并告警 PATH_OFFSET
-  for (const double offset : {0.7, 1.3}) {
+  // S12：偏差 0.5～0.7 m 进入 Rejoin；超过 0.7 m 保持并告警 PATH_OFFSET
+  for (const double offset : {0.6, 1.3}) {
     Sim s;
     s.startLowBatteryReturn();
     s.link_ok = false;
@@ -633,7 +633,7 @@ TEST(BacktrackUseCaseTest, ReclaimWithMediumOffsetRejoinsAndLargeOffsetHolds) {
     s.yaw = kPi;          // 已对准路径切向
     s.reject_offboard = false;
     s.run(2.0);
-    if (offset < 1.0) {
+    if (offset < 0.7) {
       EXPECT_EQ(s.out.control, ControlState::Owned) << offset;
       EXPECT_TRUE(s.in("ReturnRejoin")) << offset;
     } else {
@@ -1181,7 +1181,7 @@ TEST(BacktrackUseCaseTest, RejoinUsesPathYawAndWaitsForVelocityConvergence) {
   s.startLowBatteryReturn();
   s.track = false;
 
-  s.pos = Vec3(2.9, 0.8, 2.0);
+  s.pos = Vec3(2.9, 0.6, 2.0);  // 回归阈值与安全距离之间
   Vec3 previous_velocity = s.out.setpoint->velocity;
   ASSERT_TRUE(s.runUntil([&] {
     // 进入 Rejoin 前后，相邻两拍目标速度的变化不超过 0.3 m/s
