@@ -10,7 +10,7 @@
 4. 所有状态转移都在 [`return_state_machine.cpp`](src/domain/return_state_machine.cpp) 的 `step()` 中完成，规则编号对应方案第 6.3 节。不要在 UseCase 里改状态或加分支。
 5. 条件层（`link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor`）只做检测，输出电平和带编号的按键指令，是否响应由状态机决定。
 6. 设计变化先改方案文档，并在第 15 节记一条审核记录（R-xx），再改代码；用户已确认的决策是 D1–D33。
-7. 本分支实施到 R5c（D30 安全距离、D33 找点接上）。超时升级（R6）、JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+7. 本分支实施到 R6（D30 安全距离、D33 找点接上、第 8.1 节超时升级）。JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
 8. 参数全部在 [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 中必填，代码中没有默认值；新增参数要同时改 config 结构体、[`config_loader.cpp`](src/infrastructure/config_loader.cpp) 和 YAML。
 9. 用户要求整体简洁、避免过度防御：不加初值已保证的标志、不重复复位、不为小概率场景堆保护；不了解下方环境时，悬停优先于降落。
 
@@ -68,7 +68,7 @@
 ### Scripts
 
 - [`scripts/docker/run_tests.sh`](scripts/docker/run_tests.sh)：在全新的 ROS Noetic 容器中编译并运行全部单测。
-- [`scripts/analysis/`](scripts/analysis/)：闭环危害场景（假飞控驱动真实 UseCase，H01–H14）和错误注入检查，复用上面的容器。
+- [`scripts/analysis/`](scripts/analysis/)：闭环危害场景（假飞控驱动真实 UseCase，H01–H16）和错误注入检查，复用上面的容器。
 - [`scripts/bench/`](scripts/bench/)：轨迹生成耗时基准。
 - [`scripts/sitl/`](scripts/sitl/)：PX4 v1.15.4 SITL（SIH）中确认方案依赖的飞控行为。
 - [`scripts/plot_debug_csv.py`](scripts/plot_debug_csv.py)：规划 CSV 绘图。
@@ -117,11 +117,15 @@
 
 ### 9. 起始对准
 
-准备阶段保持触发位置，yaw 设为路径起始切向，误差 ≤ 15° 且已持有控制权才开始跟随；没有 yaw 斜坡，原地转速由 PX4（`MC_YAWRATE_MAX`）限制。航点降级没有切向，不要求对准。
+准备阶段保持触发位置，yaw 设为路径起始切向，误差 ≤ 15° 且已持有控制权才开始跟随（低电量且准备超时后不再等对准，R-85）；没有 yaw 斜坡，原地转速由 PX4（`MC_YAWRATE_MAX`）限制。航点降级没有切向，不要求对准。
 
 ### 10. 安全距离（D30）
 
 只沿录制轨迹飞行，不在录制轨迹上的直线移动不超过 `safe_distance_m`（0.7 m），超过就原地保持并告警：保持点都取飞机所在的位置（重新申请期间跟着飞机，拿回 OFFBOARD 后固定）；开始和恢复跟随前检查偏差；跟随中投影失败或偏差超限时不回归；录制轨迹中相邻两点超过安全距离即为断点，规划不跨越，返航停在断点处悬停、不降落。用户明确要求杜绝直线飞向起点（2026-10-22），原地悬停时找点接上（D33）：在游标之前（停在断点处时为断点之前）找离飞机不超过安全距离、最近的录制点，截断到该点并重新规划，回到准备阶段。改这些逻辑前先读方案第 7.8 节。
+
+### 11. 超时与升级（R6）
+
+准备（30 s）、重新申请（10 s）、进度停滞（60 s，含停在断点处的到点悬停）三个等待由 `updateWaits` 每拍按上一拍的状态累计，只在里程计新鲜时计时（D31），重新申请期间准备和停滞冻结。升级（规则 6）放在各阶段的规则之后：先继续返航（找点接上、低电量时不再等起始对准），仍不能继续、等待超时且确认低电量，才原地降落（交接原因 `ESCALATED`，直接 AUTO.LAND）。电量正常或读数无效时只保持并告警（D11），不要加"超时就降落"；退出后低电量只告警（D1）。改这部分先读方案第 8.1 节和 R-85。
 
 ## 常见改动应该改哪里
 
@@ -142,7 +146,7 @@
 3. [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)：当前实现的说明
 4. [`doc/testing/`](doc/testing/)：测试方法和执行记录
 
-重构要达到的行为（R6–R8 还没有实现）以方案为准。`doc/testing/` 中注明"只适用于 dev"的文档不描述当前行为。
+重构要达到的行为（R7、R8 还没有实现）以方案为准。`doc/testing/` 中注明"只适用于 dev"的文档不描述当前行为。
 
 ## 容易踩坑的地方
 

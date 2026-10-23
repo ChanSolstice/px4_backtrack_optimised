@@ -14,6 +14,7 @@
 - 按实际位置在路径上的局部投影推进进度，不依赖 wall time；偏离超过 0.5 m 时沿路径低速回归。
 - 控制权由状态机管理：预发 setpoint 后申请 OFFBOARD；本模块断流引起的飞控回退不算接管，等飞控自动回到 OFFBOARD；链路正常时飞手拨开关或短按 CH7 退出返航，链路丢失或不稳定时被切出则重新申请控制权。
 - 只沿录制轨迹飞行（D30）：离路径超过安全距离（0.7 m）、重新拿到控制权时飞机已被移开、或录制轨迹中有超过安全距离的跳变时，原地悬停并告警，不直线飞过去；悬停时在录制轨迹上找离飞机不超过安全距离的点，找到就从那里继续返航（D33）。
+- 返航卡住时按超时升级（方案第 8.1 节）：准备 30 s、重新申请 10 s、进度停滞 60 s。超时后电量正常时保持并告警；确认低电量时先尝试继续返航，仍不能继续才原地降落（D32）。计时只在里程计新鲜时累计。
 - 到点悬停 5 s 后降落交接：链路正常时经 POSCTL 请求 AUTO.LAND，链路丢失时直接请求；飞控进入 AUTO.LAND 后让步到上锁。
 - 模式请求在单独线程中异步调用，未生效时每 1 s 重发，3 s 未生效告警。
 - 发布状态字符串、链路丢失和低电量；事件写 rosout，可选写入调试日志（`events.jsonl`）。
@@ -23,7 +24,7 @@
 
 当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。
 
-本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线、R4 后台规划、R5 退出后截断轨迹、R5b 安全距离（D30）、R5c 原地悬停时找点接上（D33）已完成，节点运行的是新状态机，dev 的暂停/恢复语义已删除。R6 超时与升级、R7 上报与调试日志完善、R8 文档与部署还没有实施，现在与方案的差距见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线、R4 后台规划、R5 退出后截断轨迹、R5b 安全距离（D30）、R5c 原地悬停时找点接上（D33）、R6 超时与升级已完成，节点运行的是新状态机，dev 的暂停/恢复语义已删除。R7 上报与调试日志完善、R8 文档与部署还没有实施，现在与方案的差距见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
 
 本分支还没有实飞。按方案，R6 完成后做完整 SITL，R7 完成并通过台架检查后再上实飞。
 
@@ -103,6 +104,7 @@
 - 输入新鲜度与在空中判定：`odom_stale_s`、`fcu_state_stale_s`、`airborne_min_height_m`
 - 任务与控制权：`return_pending_max_s`、`pre_offboard_setpoint_count`、`fallback_gap_s`、`fallback_window_s`、`fallback_timeout_s`、`safe_distance_m`、`handover_posctl_timeout_s`、`mode_request_interval_s`、`mode_request_timeout_s`
 - 后台规划：`planning_warn_s`、`planning_timeout_s`
+- 超时与升级：`prepare_warn_s`、`prepare_timeout_s`、`reclaim_timeout_s`、`stall_min_progress_m`、`stall_warn_s`、`stall_timeout_s`
 - 退出后新轨迹：`cursor_window_m`
 - 回归：`rejoin_trigger_dist_m`、`rejoin_success_dist_m`、`rejoin_v_max_m_s`、`rejoin_lookahead_time_s`、`rejoin_trigger_hold_s`、`rejoin_success_hold_s`
 - 降落：`landing_hover_s`
@@ -258,7 +260,7 @@ catkin_test_results
 
 - [文档导航](doc/README.md)：按用途分类的完整索引。
 - [返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)：当前开发的依据。
-- [系统总览](doc/reference/SYSTEM_OVERVIEW.md)：实施到 R5c 的接口、模块划分、处理顺序、状态机和执行层，以及与方案的差距。
+- [系统总览](doc/reference/SYSTEM_OVERVIEW.md)：实施到 R6 的接口、模块划分、处理顺序、状态机和执行层，以及与方案的差距。
 - [前端对接开发文档](doc/reference/前端对接开发文档.md)：状态字符串、话题语义和 UI 建议。
 - [返航程序系统性分析（2026-10-20）](doc/reviews/返航程序系统性分析_2026-10-20.md)：危害分析、PX4 源码核对、闭环仿真和 SITL 确认。
 - [单元测试文档](doc/testing/单元测试文档.md)、[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)：测试方法与执行记录。
@@ -267,6 +269,6 @@ catkin_test_results
 ## 已知注意点
 
 - `README` 与 `LLM_MAP` 以当前 C++ 代码为准。
-- 原地悬停等待（离路径超过安全距离、停在轨迹断点处，又找不到点接上）目前没有超时升级，低电量也不处理；R6 加入后，低电量时找不到点即原地降落（D32、D33）。
+- 电量正常或读数无效时，返航卡住只保持并告警，不会降落（D11）；电量读数无效时电池耗尽前没有降落兜底，起飞前要确认没有 `BATTERY_INVALID`。
 - 设计前提：无人机速度不超过 2 m/s；里程计中断属于本模块不处理的极端情况，延迟时只冻结进度、原地保持（D31）。
 - 单元测试只覆盖少量 ROS adapters，没有 launch 级测试；修改状态机、条件层、轨迹接口或参数装配后，除单测外还要跑闭环场景，涉及与飞控交互时再做 SITL。
