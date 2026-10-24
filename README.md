@@ -26,7 +26,7 @@
 
 本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线、R4 后台规划、R5 退出后截断轨迹、R5b 安全距离（D30）、R5c 原地悬停时找点接上（D33）、R6 超时与升级、R7 上报与调试日志、R8 文档与部署已完成（2026-10-23），节点运行的是新状态机，dev 的暂停/恢复语义已删除。
 
-本分支还没有实飞，实飞版本仍是 dev。完整 SITL 已完成（PX4 v1.15.4 SIH，12 个场景全部通过，见[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)第 4 节）；上机按[部署说明](doc/reference/部署说明.md)部署，按[实飞测试清单](doc/testing/实飞测试清单.md)先做台架检查，再逐项实飞。
+本分支还没有实飞，实飞版本仍是 dev。完整 SITL 已完成（PX4 v1.15.4 SIH，14 个场景全部通过，含 F8，见[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)第 4 节）；上机按[部署说明](doc/reference/部署说明.md)部署，按[实飞测试清单](doc/testing/实飞测试清单.md)先做台架检查，再逐项实飞。
 
 ## 架构概览
 
@@ -239,7 +239,7 @@ python3 scripts/plot_debug_csv.py --dir ~/Projects/backtrack_ws/debug/run_202610
 | 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误（90 种） |
 | 闭环危害场景 | `scripts/analysis/run_hazard_scenarios.sh amd64` | 假飞控驱动真实 `BacktrackUseCase`，场景 H01–H16 |
 | 规划耗时 | `scripts/bench/run_gen_bench.sh amd64 10 30` | 轨迹生成耗时随录制时长的增长 |
-| SITL | `scripts/sitl/run_sitl_checks.sh [check\|scenarios]` | PX4 v1.15.4 SITL 中确认方案依赖的飞控行为（N1、N2），运行本节点回放 12 个返航场景 |
+| SITL | `scripts/sitl/run_sitl_checks.sh [check\|scenarios]` | PX4 v1.15.4 SITL 中确认方案依赖的飞控行为（N1、N2），运行本节点回放 14 个返航场景（含 F8） |
 
 本机需要 sudo 运行 Docker 时设置 `DOCKER="sudo docker"`。后三类复用单元测试留下的容器，先跑一次单元测试。方法与执行记录见[单元测试文档](doc/testing/单元测试文档.md)和[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)。
 
