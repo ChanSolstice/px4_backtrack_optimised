@@ -8,7 +8,8 @@
   CH18 = 800，CH7 保持失控瞬间的值，摇杆回中；
 - 电池：1 Hz 向 /sitl/battery 发电量。
 backtrack_sitl.launch 把节点的 /mavros/rc/in、/mavros/battery 重映射到这两个话题，里程计用
-/mavros/local_position/odom。判定看节点的状态话题、/mavros/state 和调试日志 events.jsonl。
+/mavros/local_position/odom。判定看节点的状态话题、/mavros/state 和调试日志 events.jsonl；每个场景
+还检查 JSON 状态话题与 /px4_backtrack/state 一致、逐拍记录 trace.csv 每行的列数与表头一致。
 
 用法：sitl_scenarios.py <场景编号> <调试日志目录>，由 scripts/sitl/run_sitl_checks.sh scenarios 调用。
 退出码：0 检查全部通过；1 有检查失败；2 起飞等准备失败。
@@ -78,6 +79,8 @@ class World:
         self.fcu = State()
         self.position = None  # ENU (x, y, z)
         self.module_state = ""
+        self.states = []       # /px4_backtrack/state 依次出现的状态
+        self.status_states = []  # /px4_backtrack/status 中依次出现的 state
         self.path = []        # 节点发布的返航轨迹（规划完成时）
         self.max_offset = 0.0  # 跟随中离返航轨迹的最大距离
         self.setpoint = None   # 节点最近一次发布的 setpoint（位置、速度）
@@ -91,6 +94,7 @@ class World:
         rospy.Subscriber("/mavros/state", State, self._on_state)
         rospy.Subscriber("/mavros/local_position/pose", PoseStamped, self._on_pose)
         rospy.Subscriber("/px4_backtrack/state", String, self._on_module_state)
+        rospy.Subscriber("/px4_backtrack/status", String, self._on_status)
         rospy.Subscriber("/px4_backtrack/debug/trajectory", Path, self._on_path)
         rospy.Subscriber("/mavros/setpoint_raw/local", PositionTarget, self._on_setpoint)
         self._stick_pub = rospy.Publisher("/mavros/manual_control/send", ManualControl, queue_size=10)
@@ -138,7 +142,13 @@ class World:
     def _on_module_state(self, msg):
         if msg.data != self.module_state:
             self.log(f"节点 {msg.data}")
+            self.states.append(msg.data)
         self.module_state = msg.data
+
+    def _on_status(self, msg):
+        state = json.loads(msg.data)["state"]
+        if not self.status_states or self.status_states[-1] != state:
+            self.status_states.append(state)
 
     def wait_state(self, state, timeout_s):
         return wait_until(lambda: self.module_state == state, timeout_s)
@@ -237,6 +247,21 @@ def ulog_modes():
         if not modes or modes[-1] != name:
             modes.append(name)
     return modes
+
+
+def check_reports(w, c, log_dir):
+    """每个场景都检查：状态话题与 /px4_backtrack/state 一致；trace.csv 每行的列数与表头一致"""
+    time.sleep(0.5)  # 两个话题的最后一条都已收到
+    c.add("状态话题的 state 与 /px4_backtrack/state 一致", w.status_states == w.states,
+          f"状态 {len(w.states)} 个：{' → '.join(w.status_states[-4:])}")
+    rows = bad = 0
+    for path in glob.glob(os.path.join(log_dir, "run_*", "trace.csv")):
+        with open(path, encoding="utf-8") as f:
+            columns = f.readline().count(",")
+            for line in f:
+                rows += 1
+                bad += line.count(",") != columns
+    c.add("逐拍记录每行的列数与表头一致", rows > 0 and bad == 0, f"{rows} 行，列数不符 {bad} 行")
 
 
 class Checks:
@@ -578,6 +603,7 @@ def main():
     c = Checks()
     try:
         SCENARIOS[name](w, c, log_dir)
+        check_reports(w, c, log_dir)
     except PrepareError as e:
         print(f"\n## {name}：准备失败：{e}")
         return 2
