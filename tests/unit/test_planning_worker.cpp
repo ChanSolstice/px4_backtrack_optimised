@@ -197,10 +197,6 @@ TEST(PlanningWorkerTest, PlanReturnClassifiesResults) {
   EXPECT_EQ(too_close.status, PlanStatus::FailedTooClose);
   EXPECT_FALSE(too_close.trajectory);
 
-  PlanningInput invalid = inputWithPoints(31);
-  invalid.config.v_end_max = invalid.config.v_max + 1.0;
-  EXPECT_EQ(planReturn(invalid).status, PlanStatus::FailedConfig);
-
   // 其他失败（点数不足）改为航点降级，降级也构建不了
   EXPECT_EQ(planReturn(inputWithPoints(1)).status, PlanStatus::FailedFallback);
 

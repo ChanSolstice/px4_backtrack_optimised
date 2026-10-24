@@ -39,7 +39,7 @@ struct PlanningInput {
 
 /// 一次规划的结果，失败已按第 7.5 节处理
 struct PlanningResult {
-  /// Ready / ReadyFallback / FailedTooClose / FailedConfig / FailedFallback
+  /// Ready / ReadyFallback / FailedTooClose / FailedFallback
   domain::PlanStatus status{domain::PlanStatus::None};
   std::unique_ptr<domain::TrajectorySession> trajectory;  ///< Ready 时有效
   domain::WaypointFallbackSession fallback;               ///< ReadyFallback 时有效
@@ -47,8 +47,7 @@ struct PlanningResult {
   double cost_ms{0.0};                                    ///< 轨迹生成耗时 (ms)
 };
 
-/// 规划（重构方案第 7.5 节）：生成轨迹；点过近、配置非法直接返回失败，
-/// 其他失败改为航点降级
+/// 规划（重构方案第 7.5 节）：生成轨迹；点过近直接返回失败，其他失败改为航点降级
 PlanningResult planReturn(const PlanningInput& input);
 
 /// 航点降级：逆序稀疏航点，O(n)；规划超时时在控制线程直接调用

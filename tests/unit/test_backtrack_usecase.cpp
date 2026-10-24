@@ -1204,22 +1204,6 @@ TEST(BacktrackUseCaseTest, TooCloseTrajectoryLandsDirectly) {
   EXPECT_GT(s.requestsSince("AUTO.LAND", 0.0), 0);
 }
 
-TEST(BacktrackUseCaseTest, InvalidTrajectoryConfigHoldsWithoutFallback) {
-  auto config = makeConfig();
-  config.trajectory_config.v_end_max = config.trajectory_config.v_max + 1.0;
-  Sim s(config);
-  s.flyOutbound();
-  const Vec3 trigger = s.pos;
-  s.battery = 0.10;
-  ASSERT_TRUE(s.runUntilState("ReturnPreOffboard", 2.0));
-  s.run(3.0);
-  EXPECT_TRUE(s.in("ReturnPreOffboard"));
-  ASSERT_TRUE(s.out.setpoint);
-  EXPECT_TRUE(s.out.setpoint->position.isApprox(trigger, 1e-6));
-  EXPECT_TRUE(s.out.setpoint->velocity.isZero());
-  EXPECT_TRUE(hasEvent(s.events, EventType::Planning, "failed"));
-}
-
 TEST(BacktrackUseCaseTest, AlignsStartYawBeforeHorizontalReturn) {
   // 规划就绪后先保持触发位置并对准路径起始切向，误差 ≤ 15° 才开始水平返航
   Sim s;

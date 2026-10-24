@@ -82,12 +82,6 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
                                   const trajectory_core::TrajectoryConfig& config) {
   last_failure_kind_ = FailureKind::None;
 
-  if (!config.validate()) {
-    ROS_ERROR("[TrajectorySession] Invalid trajectory configuration");
-    last_failure_kind_ = FailureKind::InvalidConfig;
-    return false;
-  }
-
   // 检查输入点数
   if (points.size() < 2) {
     ROS_ERROR("[TrajectorySession] Not enough points to generate trajectory: %zu", points.size());
@@ -161,9 +155,6 @@ bool TrajectorySession::generate(const std::vector<RecordPoint>& points,
     if (result.code == trajectory_core::StatusCode::INVALID_INPUT &&
         result.message.find("too close together") != std::string::npos) {
       last_failure_kind_ = FailureKind::TooCloseGeometry;
-    } else if (result.code == trajectory_core::StatusCode::INVALID_INPUT &&
-               result.message.find("configuration") != std::string::npos) {
-      last_failure_kind_ = FailureKind::InvalidConfig;
     } else {
       last_failure_kind_ = FailureKind::Other;
     }

@@ -22,17 +22,11 @@ PlanningResult planReturn(const PlanningInput& input) {
     return result;
   }
 
-  switch (result.trajectory->getLastFailureKind()) {
-    case domain::TrajectorySession::FailureKind::TooCloseGeometry:
-      result.status = domain::PlanStatus::FailedTooClose;
-      result.trajectory.reset();
-      return result;
-    case domain::TrajectorySession::FailureKind::InvalidConfig:
-      result.status = domain::PlanStatus::FailedConfig;
-      result.trajectory.reset();
-      return result;
-    default:
-      break;
+  if (result.trajectory->getLastFailureKind() ==
+      domain::TrajectorySession::FailureKind::TooCloseGeometry) {
+    result.status = domain::PlanStatus::FailedTooClose;
+    result.trajectory.reset();
+    return result;
   }
 
   // 其他失败：航点降级；降级也构建失败则原地降落

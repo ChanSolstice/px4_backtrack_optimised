@@ -1076,7 +1076,7 @@ TEST(ReturnStateMachineTest, TrailGapReanchorsOnlyPastGap) {
   }
 }
 
-TEST(ReturnStateMachineTest, PlanFailuresLandOrHold) {
+TEST(ReturnStateMachineTest, FallbackFailureLands) {
   Harness t;
   t.startLowBatteryMission();
   t.acquire();
@@ -1088,15 +1088,6 @@ TEST(ReturnStateMachineTest, PlanFailuresLandOrHold) {
   EXPECT_FALSE(t.sm.handoverDirect());
   EXPECT_EQ(t.out.mode_intent, ModeIntent::Posctl);
   EXPECT_EQ(t.out.setpoint, SetpointKind::Hold);
-
-  // 配置非法：保持并等待（由 R6 的准备超时兜底）
-  Harness cfg;
-  cfg.startLowBatteryMission();
-  cfg.acquire();
-  cfg.c.plan_status = PlanStatus::FailedConfig;
-  cfg.run(5.0);
-  EXPECT_EQ(cfg.out.phase, MissionPhase::Prepare);
-  EXPECT_EQ(cfg.out.setpoint, SetpointKind::Hold);
 }
 
 TEST(ReturnStateMachineTest, FollowSwitchesBetweenPathAndRejoin) {
@@ -1721,10 +1712,10 @@ TEST(ReturnStateMachineTest, StuckWaitsEscalateWithinLimitsAtLowBattery) {
   // SC8：低电量时，返航卡住的每种等待都在超时时升级为原地降落，不提前也不拖延。每种情形
   // 100 条随机序列：里程计、飞控状态随机中断，链路在退化和丢失之间随机切换（不会被当作飞手
   // 退出）；里程计延迟的时间不计入等待（D31）
-  enum class Stuck { OffboardRejected, InvalidConfig, PathOffset, Reclaim, Stall, TrailGap };
+  enum class Stuck { OffboardRejected, PathOffset, Reclaim, Stall, TrailGap };
   const std::pair<Stuck, double> cases[] = {
-      {Stuck::OffboardRejected, 30.0}, {Stuck::InvalidConfig, 30.0}, {Stuck::PathOffset, 30.0},
-      {Stuck::Reclaim, 10.0}, {Stuck::Stall, 60.0}, {Stuck::TrailGap, 60.0}};
+      {Stuck::OffboardRejected, 30.0}, {Stuck::PathOffset, 30.0}, {Stuck::Reclaim, 10.0},
+      {Stuck::Stall, 60.0}, {Stuck::TrailGap, 60.0}};
   for (const auto& [stuck, limit_s] : cases) {
     for (unsigned seed = 0; seed < 100; ++seed) {
       Harness h;
@@ -1732,11 +1723,6 @@ TEST(ReturnStateMachineTest, StuckWaitsEscalateWithinLimitsAtLowBattery) {
         case Stuck::OffboardRejected:
           h.startLowBatteryMission();
           h.c.plan_status = PlanStatus::Ready;
-          break;
-        case Stuck::InvalidConfig:
-          h.startLowBatteryMission();
-          h.acquire();
-          h.c.plan_status = PlanStatus::FailedConfig;
           break;
         case Stuck::PathOffset:
           h.startLowBatteryMission();

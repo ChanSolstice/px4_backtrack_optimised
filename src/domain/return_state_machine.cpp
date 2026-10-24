@@ -430,7 +430,7 @@ void ReturnStateMachine::stepPrepare(const Conditions& c, StepOutput& out) {
     case PlanStatus::ReadyFallback:
       break;
     default:
-      // 规划中或配置非法：保持；配置非法由准备超时兜底（第 8.1 节）
+      // 规划中：保持
       return;
   }
 

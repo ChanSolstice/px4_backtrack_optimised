@@ -17,7 +17,6 @@ public:
   enum class FailureKind {
     None,
     TooCloseGeometry,
-    InvalidConfig,
     Other,
   };
 

@@ -333,10 +333,6 @@ void BacktrackUseCase::applyPlanningResult(PlanningResult result,
       events.push_back(makeEvent(domain::EventType::Planning, "failed", "TOO_CLOSE",
                                  point_count));
       break;
-    case domain::PlanStatus::FailedConfig:
-      events.push_back(makeEvent(domain::EventType::Planning, "failed", "INVALID_CONFIG",
-                                 point_count));
-      break;
     default:
       events.push_back(makeEvent(domain::EventType::Planning, "failed", "FALLBACK_FAILED",
                                  point_count));
