@@ -24,33 +24,33 @@
 
 当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。
 
-本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线、R4 后台规划、R5 退出后截断轨迹、R5b 安全距离（D30）、R5c 原地悬停时找点接上（D33）、R6 超时与升级、R7 上报与调试日志已完成，节点运行的是新状态机，dev 的暂停/恢复语义已删除。R8 文档与部署还没有实施，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线、R4 后台规划、R5 退出后截断轨迹、R5b 安全距离（D30）、R5c 原地悬停时找点接上（D33）、R6 超时与升级、R7 上报与调试日志、R8 文档与部署已完成（2026-10-23），节点运行的是新状态机，dev 的暂停/恢复语义已删除。
 
-本分支还没有实飞。完整 SITL 已完成（PX4 v1.15.4 SIH，12 个场景全部通过，见[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)第 4 节）；按方案，通过台架检查（方案第 14.4 节）后再上实飞。
+本分支还没有实飞，实飞版本仍是 dev。完整 SITL 已完成（PX4 v1.15.4 SIH，12 个场景全部通过，见[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)第 4 节）；上机按[部署说明](doc/reference/部署说明.md)部署，按[实飞测试清单](doc/testing/实飞测试清单.md)先做台架检查，再逐项实飞。
 
 ## 架构概览
 
 仓库按“入口 + Application + Domain + Adapters + Infrastructure”组织：
 
 - `src/backtrack_node.cpp`
-  加载参数，创建订阅、发布、服务客户端和 `BacktrackUseCase`，按 `publish_hz` 驱动控制周期，把事件写到 rosout 和调试日志
+  加载参数，创建订阅、发布、服务客户端和 `BacktrackUseCase`，按 `publish_hz` 驱动控制周期，发布状态话题，把事件和逐拍记录写到 rosout 和调试日志
 - `include/px4_backtrack/application` / `src/application`
-  `BacktrackUseCase` 组装条件、调用状态机、执行命令、计算 setpoint，不访问 ROS；`ModeCommander` 负责模式请求的发送、重发和失败告警；`PlanningWorker` 在后台线程规划
+  `BacktrackUseCase` 组装条件、调用状态机、执行命令、计算 setpoint，不访问 ROS；`ModeCommander` 负责模式请求的发送、重发和失败告警；`PlanningWorker` 在后台线程规划；`tick_report` 生成状态话题的 JSON 和逐拍记录的行
 - `include/px4_backtrack/domain` / `src/domain`
   条件层（链路、CH7、电量、在空中）、`ReturnStateMachine`（任务阶段、控制权、跟随方式三个区域），以及录制、轨迹会话、航点降级、回归限速、切向 yaw 等执行组件
 - `include/px4_backtrack/adapters` / `src/adapters`
   ROS 消息转换、异步 `set_mode`、可视化发布
 - `include/px4_backtrack/infrastructure` / `src/infrastructure`
-  参数加载（全部必填）、调试日志、规划 CSV 导出
+  参数加载（全部必填，启动时校验 `trajectory_core` 配置）、调试日志、规划 CSV 导出
 
 各模块的职责和每个控制周期的处理顺序见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 3 节。
 
 ## 主要执行流程
 
-1. 启动时 `ConfigLoader` 从参数服务器读取返航参数（缺少任何一项即启动失败），再加载 `trajectory_config.yaml`；打开调试日志时，先写入生效参数。
+1. 启动时 `ConfigLoader` 从参数服务器读取返航参数（缺少任何一项即启动失败），再加载并校验 `trajectory_config.yaml`（非法即启动失败）；打开调试日志时，先写入生效参数和版本。
 2. 订阅回调把飞控状态、落地状态、里程计、RC 和电池数据连同接收时间送入 `BacktrackUseCase`。
 3. 每个控制周期（20 Hz）：条件层推进到当前时间 → 组装 `Conditions` 快照 → `ReturnStateMachine::step()` 给出命令、setpoint 策略和模式意图 → UseCase 执行命令（新飞行周期复位、提交或取消后台规划）、推进路径进度、计算 setpoint；规划结果在之后的周期中取回 → `ModeCommander` 决定本拍要发出的模式请求。
-4. 节点发布状态和 setpoint，在单独线程中调用 `/mavros/set_mode`，并把事件写到 rosout 和调试日志。
+4. 节点发布状态（含 JSON 状态话题）和 setpoint，在单独线程中调用 `/mavros/set_mode`，并把事件写到 rosout 和调试日志；打开逐拍记录时每拍再写一行。
 
 ## ROS 接口
 
@@ -135,14 +135,16 @@
 - ROS1 `catkin`
 - `roscpp`
 - `std_msgs`
+- `sensor_msgs`
 - `nav_msgs`
 - `geometry_msgs`
 - `mavros_msgs`
 - `visualization_msgs`
+- `tf2`
 - `trajectory_core`
 - `Eigen3`
 
-`trajectory_core` 必须已经存在于同一个 catkin 工作空间，或已经通过环境正确导出。
+`trajectory_core` 必须已经存在于同一个 catkin 工作空间，或已经通过环境正确导出。机载固定用 `origin/dev` 的 `f27f3ad`（D13），部署步骤见[部署说明](doc/reference/部署说明.md)。
 
 ### 构建
 
@@ -222,7 +224,7 @@ python3 scripts/plot_debug_csv.py --dir ~/Projects/backtrack_ws/debug/run_202610
 │   └── plot_debug_csv.py        # 规划 CSV 绘图
 └── doc/
     ├── README.md                # 文档导航
-    ├── reference/               # 系统说明、前端对接
+    ├── reference/               # 系统说明、前端对接、部署说明
     ├── design/                  # 设计方案
     ├── testing/                 # 测试方法、清单和执行记录
     ├── reviews/                 # 审核与分析
@@ -253,10 +255,12 @@ catkin_test_results
 
 - [文档导航](doc/README.md)：按用途分类的完整索引。
 - [返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)：当前开发的依据。
-- [系统总览](doc/reference/SYSTEM_OVERVIEW.md)：实施到 R6 的接口、模块划分、处理顺序、状态机和执行层，以及与方案的差距。
-- [前端对接开发文档](doc/reference/前端对接开发文档.md)：状态字符串、话题语义和 UI 建议。
+- [系统总览](doc/reference/SYSTEM_OVERVIEW.md)：当前实现的接口、模块划分、处理顺序、状态机、执行层、调试与观测。
+- [前端对接开发文档](doc/reference/前端对接开发文档.md)：状态字符串、话题语义、状态话题的 JSON、告警码和 UI 建议。
+- [部署说明](doc/reference/部署说明.md)：机载环境、固定 `trajectory_core` 版本、编译、配置、起飞前检查、日志位置、更新与回退。
 - [返航程序系统性分析（2026-10-20）](doc/reviews/返航程序系统性分析_2026-10-20.md)：危害分析、PX4 源码核对、闭环仿真和 SITL 确认。
 - [单元测试文档](doc/testing/单元测试文档.md)、[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)：测试方法与执行记录。
+- [实飞测试清单](doc/testing/实飞测试清单.md)：上机前的 SITL、台架检查和实飞项目。
 - `trajectory_core` 的接口说明见该仓库的 `doc/reference/API接口文档.md`。
 
 ## 已知注意点
@@ -264,4 +268,5 @@ catkin_test_results
 - `README` 与 `LLM_MAP` 以当前 C++ 代码为准。
 - 电量正常或读数无效时，返航卡住只保持并告警，不会降落（D11）；电量读数无效时电池耗尽前没有降落兜底，起飞前要确认没有 `BATTERY_INVALID`。
 - 设计前提：无人机速度不超过 2 m/s；里程计中断属于本模块不处理的极端情况，延迟时只冻结进度、原地保持（D31）。
-- 单元测试只覆盖少量 ROS adapters，没有 launch 级测试；修改状态机、条件层、轨迹接口或参数装配后，除单测外还要跑闭环场景，涉及与飞控交互时再做 SITL。
+- 单元测试只覆盖少量 ROS adapters，没有 launch 级测试（SITL 场景用机载参数文件启动节点）；修改状态机、条件层、轨迹接口或参数装配后，除单测外还要跑闭环场景，涉及与飞控交互时再做 SITL。
+- 航线模块和本模块都发 setpoint，两者之间还没有仲裁；测试返航时不要让航线模块处于回放状态（方案第 16 节）。

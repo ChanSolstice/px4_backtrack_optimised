@@ -5,12 +5,12 @@
 ## 先记住这些
 
 1. ROS1 `catkin` 工程（Noetic），不是 ROS2。本机没有 ROS，编译和测试都在 Docker 中。
-2. 入口 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)：单线程 `ros::spin`，20 Hz 定时器驱动控制周期。另有两个后台线程：异步 `set_mode`（[`ros_services.cpp`](src/adapters/ros_services.cpp)）和调试日志写盘（[`debug_log.cpp`](src/infrastructure/debug_log.cpp)）。
+2. 入口 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)：单线程 `ros::spin`，20 Hz 定时器驱动控制周期。另有三个后台线程：异步 `set_mode`（[`ros_services.cpp`](src/adapters/ros_services.cpp)）、后台规划（[`planning_worker.cpp`](src/application/planning_worker.cpp)）和调试日志写盘（[`debug_log.cpp`](src/infrastructure/debug_log.cpp)）。
 3. 编排在 [`src/application/backtrack_usecase.cpp`](src/application/backtrack_usecase.cpp)：组装 `Conditions` → `ReturnStateMachine::step()` → 执行命令、计算 setpoint。UseCase 不访问 ROS，所有输入的接收时间由节点传入，所以可以在单测里完全控制时间。
 4. 所有状态转移都在 [`return_state_machine.cpp`](src/domain/return_state_machine.cpp) 的 `step()` 中完成，规则编号对应方案第 6.3 节。不要在 UseCase 里改状态或加分支。
 5. 条件层（`link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor`）只做检测，输出电平和带编号的按键指令，是否响应由状态机决定。
 6. 设计变化先改方案文档，并在第 15 节记一条审核记录（R-xx），再改代码；用户已确认的决策是 D1–D33。
-7. 本分支实施到 R7（D30 安全距离、D33 找点接上、第 8.1 节超时升级、JSON 状态话题和调试日志完善）。剩下 R8 文档与部署，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+7. 本分支已实施完方案的 R1–R8（D30 安全距离、D33 找点接上、第 8.1 节超时升级、JSON 状态话题和调试日志）。还没有实飞，实飞版本仍是 dev；部署和上机测试见[部署说明](doc/reference/部署说明.md)、[实飞测试清单](doc/testing/实飞测试清单.md)，后续工作见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
 8. 参数全部在 [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 中必填，代码中没有默认值；新增参数要同时改 config 结构体、[`config_loader.cpp`](src/infrastructure/config_loader.cpp) 和 YAML。`trajectory_core` 的配置在启动时校验，非法则节点退出，运行时不处理配置非法。
 9. 用户要求整体简洁、避免过度防御：不加初值已保证的标志、不重复复位、不为小概率场景堆保护；不了解下方环境时，悬停优先于降落。
 
@@ -22,7 +22,7 @@
 - 规划中时先取规划线程的结果，超时则改为航点降级；
 - 用执行层"最近一次"的结果组装条件、调用 `step()`，之后才推进跟随进度、计算 setpoint（执行事实晚一拍，R-71）；
 - 模式意图交给 `ModeCommander`，由它决定本拍是否发出请求；
-- 事件（区域转换、条件边沿、任务、规划、模式请求、断流）随 `TickOutput` 返回，节点写到 rosout 和调试日志。
+- 事件（区域转换、条件边沿、任务、规划、模式请求、断流）随 `TickOutput` 返回，节点写到 rosout 和调试日志；状态话题的 JSON 和逐拍记录的行由 `tick_report` 生成。
 
 ## 文件地图
 
@@ -140,6 +140,7 @@
 | 改话题名或消息类型 | `ros_subscribers`、`ros_publishers`、`backtrack_node.cpp`、`launch/backtrack.launch`，并同步前端对接文档 |
 | 改参数 | 对应 config 结构体、`config_loader.cpp`、`backtrack_params.yaml`；闭环场景的 `productionConfig()` 和单测的 `makeConfig()` |
 | 改调试日志 | `debug_log.cpp`、`backtrack_node.cpp`；逐拍记录和状态话题的格式在 `tick_report.cpp`，同步前端对接文档 |
+| 改启动文件或部署方式 | `launch/backtrack.launch`，同步[部署说明](doc/reference/部署说明.md)和[实飞测试清单](doc/testing/实飞测试清单.md) |
 
 ## 文档可信度排序
 
@@ -148,7 +149,7 @@
 3. [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)：当前实现的说明
 4. [`doc/testing/`](doc/testing/)：测试方法和执行记录
 
-重构要达到的行为（R8 还没有实现）以方案为准。`doc/testing/` 中注明"只适用于 dev"的文档不描述当前行为。
+规则的依据以方案为准。`doc/testing/` 中注明"只适用于 dev"的文档不描述当前行为。
 
 ## 容易踩坑的地方
 
@@ -160,11 +161,11 @@
 
 ## 测试地图
 
-用例逐条说明见 [`doc/testing/单元测试文档.md`](doc/testing/单元测试文档.md)，闭环场景、SITL 和基准见 [`doc/testing/闭环仿真与SITL测试.md`](doc/testing/闭环仿真与SITL测试.md)。
+用例逐条说明见 [`doc/testing/单元测试文档.md`](doc/testing/单元测试文档.md)，闭环场景、SITL 和基准见 [`doc/testing/闭环仿真与SITL测试.md`](doc/testing/闭环仿真与SITL测试.md)，上机的台架检查和实飞项目见 [`doc/testing/实飞测试清单.md`](doc/testing/实飞测试清单.md)。
 
 - [`test_link_monitor`](tests/unit/test_link_monitor.cpp)、[`test_pilot_input`](tests/unit/test_pilot_input.cpp)、[`test_battery_monitor`](tests/unit/test_battery_monitor.cpp)、[`test_airborne_monitor`](tests/unit/test_airborne_monitor.cpp)：条件层
 - [`test_return_state_machine`](tests/unit/test_return_state_machine.cpp)：状态机场景
-- [`test_return_state_machine_invariants`](tests/unit/test_return_state_machine_invariants.cpp)：随机游走和单步穷举，检查安全约束 SC1–SC7、SC9
+- [`test_return_state_machine_invariants`](tests/unit/test_return_state_machine_invariants.cpp)：随机游走和单步穷举，检查安全约束 SC1–SC7、SC9–SC12（SC8 的随机序列在 `test_return_state_machine` 中）
 - [`test_backtrack_usecase`](tests/unit/test_backtrack_usecase.cpp)：UseCase 闭环场景，用简化的飞控与链路模型覆盖方案第 11 节的场景；也包括状态话题的 JSON（S22）和逐拍记录回放（S31）
 - [`test_mode_commander`](tests/unit/test_mode_commander.cpp)、[`test_planning_worker`](tests/unit/test_planning_worker.cpp)、[`test_debug_log`](tests/unit/test_debug_log.cpp)、[`test_config_loader`](tests/unit/test_config_loader.cpp)：模式请求、后台规划、调试日志、配置校验
 - [`test_trajectory_session`](tests/unit/test_trajectory_session.cpp)、[`test_rejoin_policy`](tests/unit/test_rejoin_policy.cpp)、[`test_waypoint_fallback_session`](tests/unit/test_waypoint_fallback_session.cpp)、[`test_recording_buffer`](tests/unit/test_recording_buffer.cpp)、[`test_path_yaw`](tests/unit/test_path_yaw.cpp)、[`test_ros_subscribers`](tests/unit/test_ros_subscribers.cpp)：执行层与适配
