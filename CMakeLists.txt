@@ -18,6 +18,7 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   mavros_msgs
   visualization_msgs
+  tf2
   trajectory_core
 )
 
@@ -38,6 +39,7 @@ catkin_package(
     geometry_msgs
     mavros_msgs
     visualization_msgs
+    tf2
     trajectory_core
   DEPENDS
     EIGEN3

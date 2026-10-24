@@ -25,11 +25,11 @@
   <!-- Visualization -->
   <depend>visualization_msgs</depend>
 
+  <!-- 四元数与旋转（里程计 yaw、速度坐标转换） -->
+  <depend>tf2</depend>
+
   <!-- Trajectory generation library -->
   <depend>trajectory_core</depend>
-
-  <!-- Build dependencies -->
-  <build_depend>roslib</build_depend>
 
   <!-- Export settings -->
   <export>
