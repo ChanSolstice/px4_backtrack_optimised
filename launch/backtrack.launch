@@ -1,5 +1,10 @@
 <?xml version="1.0"?>
 <launch>
+  <!-- 可选：录原始话题（重构方案第 9.2 节）。bag_dir 须已存在（rosbag 不建目录），默认 ~/.ros；
+       每 1 GB 分一个文件，不计入调试日志保留的运行目录个数 -->
+  <arg name="record_bag" default="false" />
+  <arg name="bag_dir" default="$(env HOME)/.ros" />
+
   <!-- 返航节点 -->
   <node name="backtrack_node" pkg="px4_backtrack_optimised" type="backtrack_node" output="screen">
     <!-- 加载参数文件 -->
@@ -12,6 +17,12 @@
     <!-- 可选：调试输出级别 -->
     <!-- <env name="ROSCONSOLE_CONFIG_FILE" value="$(find px4_backtrack_optimised)/config/rosconsole.conf"/> -->
   </node>
+
+  <node if="$(arg record_bag)" name="backtrack_bag" pkg="rosbag" type="record"
+        args="-o $(arg bag_dir)/backtrack --split --size=1024
+              /mavros/rc/in /mavros/state /mavros/extended_state /mavros/battery /Odometry_px4
+              /mavros/setpoint_raw/local /px4_backtrack/state /px4_backtrack/status
+              /px4_backtrack/low_battery /status_rc_loss" />
 
   <!-- 可选：启动 MAVROS (如果未在其他地方启动) -->
   <!-- <include file="$(find mavros)/launch/px4.launch">
