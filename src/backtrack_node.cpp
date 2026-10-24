@@ -8,6 +8,7 @@
 #include "px4_backtrack/adapters/ros_services.hpp"
 #include "px4_backtrack/adapters/debug_publishers.hpp"
 #include <ros/ros.h>
+#include <chrono>
 #include <ctime>
 #include <memory>
 #include <sstream>
@@ -171,6 +172,7 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
   if (debug_log_->enabled()) {
     debug_log_->writeConfig(ros::Time::now().toSec(), privateParams(nh_private_),
                             BACKTRACK_GIT_REV, "unknown");
+    debug_log_->writeTrace(ros::Time::now().toSec(), application::traceHeader());
     ROS_INFO("[BacktrackNode] Debug log: %s%s", debug_log_->runDir().c_str(),
              debug_log_->failed() ? " (FAILED)" : "");
   }
@@ -237,7 +239,10 @@ void BacktrackNode::timerCallback(const ros::TimerEvent&) {
   }
   usecase_->setDebugLogFailed(debug_log_->failed());
 
+  const auto tick_start = std::chrono::steady_clock::now();
   const application::TickOutput out = usecase_->tick(now);
+  const double tick_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - tick_start).count();
 
   status_pub_->publishState(out.state);
   status_pub_->publishRCLoss(out.link_lost);
@@ -253,6 +258,9 @@ void BacktrackNode::timerCallback(const ros::TimerEvent&) {
   for (const auto& event : out.events) {
     logToRosout(event);
     debug_log_->write({now, out.flight_id, out.mission_id, event});
+  }
+  if (debug_log_->tracing()) {
+    debug_log_->writeTrace(now, application::traceRow(out, tick_ms));
   }
 }
 

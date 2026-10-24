@@ -73,6 +73,7 @@ struct TickOutput {
   std::string state;                              ///< 上报的状态字符串（第 6.1 节）
   domain::ControlState control{domain::ControlState::None};  ///< 区域 B
   std::optional<domain::SetpointTarget> setpoint; ///< 本拍发布的 setpoint；为空不发布
+  domain::SetpointKind setpoint_kind{domain::SetpointKind::None};  ///< 状态机的 setpoint 策略
   std::optional<std::string> mode_request;        ///< 本拍要发出的模式（异步调用）
   bool link_lost{false};                          ///< 链路丢失（/status_rc_loss）
   bool low_battery{false};                        ///< 低电量（/px4_backtrack/low_battery）
@@ -82,6 +83,7 @@ struct TickOutput {
   domain::MissionReason mission_reason{domain::MissionReason::None};  ///< 该任务的原因
   ModeRequestStatus mode_status;                  ///< 模式请求：当前意图和结果
   std::vector<domain::StepEvent> events;          ///< 本拍事件（状态机、规划、断流、模式请求）
+  domain::Conditions conditions;                  ///< 本拍的条件快照（逐拍记录）
 };
 
 // ============================================================================

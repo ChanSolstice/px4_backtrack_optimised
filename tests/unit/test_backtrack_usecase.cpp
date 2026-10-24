@@ -143,6 +143,8 @@ public:
   std::vector<StepEvent> events;
   std::vector<std::pair<double, StepEvent>> timed_events;
   double first_failsafe_t = -1.0;
+  bool tracing = false;             ///< 为真时每拍记一行逐拍记录
+  std::vector<std::string> trace;
 
   void step() {
     deliverInputs();
@@ -156,6 +158,9 @@ public:
     for (const auto& event : out.events) {
       events.push_back(event);
       timed_events.push_back({t, event});
+    }
+    if (tracing) {
+      trace.push_back(traceRow(out, 0.0));
     }
     actuate();
     t += kDt;
@@ -1564,6 +1569,48 @@ TEST(BacktrackUseCaseTest, StatusReportsCh18UnexpectedValue) {
   s.ch18_normal = 1400;
   s.step();
   EXPECT_EQ(statusJson(s.t, s.out).find("CH18_UNEXPECTED"), std::string::npos);
+}
+
+// ============================================================================
+// 逐拍记录（R7，第 9.2 节）
+// ============================================================================
+
+TEST(BacktrackUseCaseTest, TraceReplaysToSameDecisions) {
+  // S31：逐拍记录回放到 step()，每拍的上报状态、控制权、模式意图、setpoint 种类和告警都与记录
+  // 一致。场景：低电量返航中短按退出，手动飞一段后失控，悬停后返航降落
+  Sim s;
+  s.tracing = true;
+  s.startLowBatteryReturn();
+  s.run(1.0);
+  s.ch7 = true;
+  s.run(0.5);
+  s.ch7 = false;
+  ASSERT_TRUE(s.runUntilState("Exited", 1.0));
+  for (int i = 0; i < 15; ++i) {
+    s.pos += Vec3(0.0, 0.1, 0.0);
+    s.step();
+  }
+  s.link_ok = false;
+  ASSERT_TRUE(s.runUntilState("IdleDisarmed", 80.0));
+  for (const char* state : {"Exited", "Ch18HoverWait", "ReturnActive", "AutoLandYield"}) {
+    ASSERT_TRUE(s.everIn(state)) << state;
+  }
+
+  const auto columns = [](const std::string& line) {
+    return std::count(line.begin(), line.end(), ',');
+  };
+  domain::ReturnStateMachine replay(makeConfig().state_machine_config);
+  for (std::size_t k = 0; k < s.trace.size(); ++k) {
+    const std::string tick = "第 " + std::to_string(k) + " 拍";
+    ASSERT_EQ(columns(s.trace[k]), columns(traceHeader())) << tick;
+    const TraceRecord record = parseTraceRow(s.trace[k]);
+    const domain::StepOutput out = replay.step(record.conditions);
+    ASSERT_EQ(domain::reportedStateName(out.phase, out.follow), record.state) << tick;
+    ASSERT_EQ(domain::controlName(out.control), record.control) << tick;
+    ASSERT_EQ(domain::modeIntentName(out.mode_intent), record.mode_intent) << tick;
+    ASSERT_EQ(out.setpoint, record.setpoint) << tick;
+    ASSERT_EQ(out.alerts.bits(), record.alerts) << tick;
+  }
 }
 
 }  // namespace

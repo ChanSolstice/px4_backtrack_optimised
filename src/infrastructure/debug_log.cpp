@@ -89,7 +89,10 @@ DebugLog::DebugLog(const DebugLogConfig& config, const std::string& run_name,
   removeOldRuns(base, dir, config_.keep_runs);
   run_dir_ = dir.string();
   file_.open(dir / "events.jsonl", std::ios::out | std::ios::app);
-  if (!file_) {
+  if (config_.trace) {
+    trace_file_.open(dir / "trace.csv", std::ios::out | std::ios::app);
+  }
+  if (!file_ || (config_.trace && !trace_file_)) {
     failed_ = true;
     return;
   }
@@ -127,14 +130,21 @@ void DebugLog::writeConfig(
     out << (i ? "," : "") << jsonString(params[i].first) << ":" << params[i].second;
   }
   out << "}}";
-  enqueue(out.str(), t);
+  enqueue(false, out.str(), t);
 }
 
 void DebugLog::write(const LogRecord& record) {
   if (!config_.enable) {
     return;
   }
-  enqueue(formatRecord(record), record.t);
+  enqueue(false, formatRecord(record), record.t);
+}
+
+void DebugLog::writeTrace(double t, std::string line) {
+  if (!tracing()) {
+    return;
+  }
+  enqueue(true, std::move(line), t);
 }
 
 void DebugLog::flush() {
@@ -143,7 +153,7 @@ void DebugLog::flush() {
     drained_cv_.wait(lock, [this] { return queue_.empty() && !writing_; });
     return;
   }
-  std::deque<std::string> lines;
+  std::deque<Line> lines;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     lines.swap(queue_);
@@ -177,7 +187,7 @@ std::string DebugLog::jsonString(const std::string& text) {
   return out + "\"";
 }
 
-void DebugLog::enqueue(std::string line, double t) {
+void DebugLog::enqueue(bool trace, std::string text, double t) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     // run_dir_ 只在构造时设置；文件只由写线程访问
@@ -191,25 +201,28 @@ void DebugLog::enqueue(std::string line, double t) {
       return;
     }
     if (dropped_ > 0) {
-      queue_.push_back("{\"t\":" + formatTime(t) +
-                       ",\"type\":\"log_dropped\",\"count\":" +
-                       std::to_string(dropped_) + "}");
+      queue_.push_back({false, "{\"t\":" + formatTime(t) +
+                                   ",\"type\":\"log_dropped\",\"count\":" +
+                                   std::to_string(dropped_) + "}"});
       dropped_ = 0;
     }
-    queue_.push_back(std::move(line));
+    queue_.push_back({trace, std::move(text)});
   }
   cv_.notify_one();
 }
 
-void DebugLog::writeLines(std::deque<std::string>& lines) {
+void DebugLog::writeLines(std::deque<Line>& lines) {
   if (lines.empty()) {
     return;
   }
   for (const auto& line : lines) {
-    file_ << line << '\n';
+    (line.trace ? trace_file_ : file_) << line.text << '\n';
   }
   file_.flush();
-  if (!file_) {
+  if (config_.trace) {
+    trace_file_.flush();
+  }
+  if (!file_ || (config_.trace && !trace_file_)) {
     std::lock_guard<std::mutex> lock(mutex_);
     failed_ = true;
     queue_.clear();
@@ -224,7 +237,7 @@ void DebugLog::writerLoop() {
     if (queue_.empty()) {
       break;  // stop_ 且已写完
     }
-    std::deque<std::string> lines;
+    std::deque<Line> lines;
     lines.swap(queue_);
     writing_ = true;
     lock.unlock();

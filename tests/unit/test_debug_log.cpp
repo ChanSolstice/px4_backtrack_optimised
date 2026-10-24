@@ -145,6 +145,27 @@ TEST_F(DebugLogTest, RestartWithinSameSecondGetsNewDirectory) {
   EXPECT_EQ(log.runDir(), (base_ / "run_20261021_101500_2").string());
 }
 
+TEST_F(DebugLogTest, TraceLinesGoToTraceCsv) {
+  DebugLogConfig c = config(true);
+  c.trace = true;
+  DebugLog log(c, "run_trace", 4096, false);
+  EXPECT_TRUE(log.tracing());
+  log.writeTrace(0.0, "now,state");
+  log.write(stateRecord(1.0));
+  log.writeTrace(1.0, "1,Exited");
+  log.flush();
+  EXPECT_EQ(readLines(log.runDir() + "/trace.csv"),
+            (std::vector<std::string>{"now,state", "1,Exited"}));
+  EXPECT_EQ(readLines(log.runDir() + "/events.jsonl").size(), 1u);
+
+  // 不打开逐拍记录时不建 trace.csv
+  DebugLog plain(config(true), "run_plain", 4096, false);
+  EXPECT_FALSE(plain.tracing());
+  plain.writeTrace(0.0, "now,state");
+  plain.flush();
+  EXPECT_FALSE(fs::exists(plain.runDir() + "/trace.csv"));
+}
+
 TEST_F(DebugLogTest, KeepsOnlyRecentRuns) {
   for (int i = 1; i <= 5; ++i) {
     fs::create_directories(base_ / ("run_20261020_00000" + std::to_string(i)));

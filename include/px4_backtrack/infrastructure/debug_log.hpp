@@ -25,6 +25,7 @@ struct DebugLogConfig {
   bool enable{};    ///< 是否写调试日志
   std::string dir;  ///< 日志根目录；空为 ~/.ros/backtrack_logs，非空必须是绝对路径
   int keep_runs{};  ///< 保留的运行目录个数（含本次）
+  bool trace{};     ///< 逐拍记录 trace.csv
 };
 
 /// 写入 events.jsonl 的一条事件
@@ -41,8 +42,8 @@ struct LogRecord {
 
 /// 调试日志（重构方案第 9.2 节，D29）
 ///
-/// 每次节点启动建一个运行目录，事件一行一个写入 events.jsonl；只保留最近 keep_runs 个
-/// 运行目录（按目录名排序，本次的不删除）。写盘在后台线程，
+/// 每次节点启动建一个运行目录，事件一行一个写入 events.jsonl，打开逐拍记录时每拍一行写入
+/// trace.csv；只保留最近 keep_runs 个运行目录（按目录名排序，本次的不删除）。写盘在后台线程，
 /// 控制线程只把一行文本放进有界队列；队列满时丢弃并计数，之后补写一条
 /// log_dropped。建目录或写文件失败时停止写日志（failed 为真），返航不受影响。
 /// 关闭时不建目录、不写文件。
@@ -81,6 +82,13 @@ public:
   /// 写入一条事件（不阻塞）
   void write(const LogRecord& record);
 
+  /// 是否写逐拍记录
+  bool tracing() const { return config_.enable && config_.trace; }
+
+  /// 写入 trace.csv 的一行（不阻塞）；第一行为表头
+  /// @param t 时间 (s)，队列满时用于补写的 log_dropped
+  void writeTrace(double t, std::string line);
+
   /// 等待队列写完
   void flush();
 
@@ -91,11 +99,17 @@ public:
   static std::string jsonString(const std::string& text);
 
 private:
+  /// 队列中的一行
+  struct Line {
+    bool trace;        ///< 写入 trace.csv，否则写入 events.jsonl
+    std::string text;
+  };
+
   /// 把一行放进队列；队列满时丢弃并计数
-  void enqueue(std::string line, double t);
+  void enqueue(bool trace, std::string text, double t);
 
   /// 把队列中的行写入文件（调用时不持锁）
-  void writeLines(std::deque<std::string>& lines);
+  void writeLines(std::deque<Line>& lines);
 
   /// 后台写线程
   void writerLoop();
@@ -108,13 +122,14 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable cv_;
   std::condition_variable drained_cv_;
-  std::deque<std::string> queue_;
+  std::deque<Line> queue_;
   std::size_t dropped_{0};   ///< 尚未写出 log_dropped 的丢弃行数
   bool writing_{false};      ///< 写线程正持有一批行
   bool stop_{false};
   bool failed_{false};
 
-  std::ofstream file_;
+  std::ofstream file_;        ///< events.jsonl
+  std::ofstream trace_file_;  ///< trace.csv
   std::thread writer_;
 };
 

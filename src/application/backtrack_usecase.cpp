@@ -164,6 +164,7 @@ TickOutput BacktrackUseCase::tick(double now) {
   record_ = step.record;
 
   out.state = domain::reportedStateName(step.phase, step.follow);
+  out.setpoint_kind = step.setpoint;
   out.control = step.control;
   out.link_lost = c.link.lost;
   out.low_battery = c.battery.low;
@@ -172,6 +173,7 @@ TickOutput BacktrackUseCase::tick(double now) {
   out.mission_id = step.mission_id;
   out.mission_reason = state_machine_.mission().reason;
   out.mode_status = mode_commander_.status();
+  out.conditions = c;
   return out;
 }
 
