@@ -187,9 +187,10 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
 
   // 4. UseCase
   usecase_ = std::make_unique<application::BacktrackUseCase>(config);
-  if (config.debug_enable_csv_dump) {
+  if (!debug_log_->runDir().empty()) {
+    // 规划 CSV 跟随调试日志，写到运行目录（第 9.2 节）
     usecase_->setDebugDumper(
-        std::make_shared<infrastructure::DebugDumper>(config.debug_csv_output_dir));
+        std::make_shared<infrastructure::DebugDumper>(debug_log_->runDir()));
   }
   if (config.debug_enable_rviz_publish) {
     usecase_->setDebugPublisher(std::make_shared<adapters::DebugPublisher>(nh_));

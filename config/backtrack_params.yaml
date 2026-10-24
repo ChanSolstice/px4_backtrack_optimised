@@ -211,19 +211,14 @@ trajectory_config_path: "$(find px4_backtrack_optimised)/config/trajectory_confi
 # Debug/可视化参数
 # ============================
 
-# 是否启用CSV文件导出（轨迹生成成功后自动导出录制点和生成轨迹）
-debug_enable_csv_dump: true
-
-# CSV导出目录路径（留空则默认 ~/.ros/backtrack_debug/；可以用 ~/ 开头）
-debug_csv_output_dir: "~/Projects/backtrack_ws/debug/"
-
-# 轨迹采样步长 (s) - 用于CSV导出和ROS可视化
+# 轨迹采样步长 (s) - 用于规划 CSV 和ROS可视化
 debug_trajectory_sample_dt: 0.1
 
 # 是否启用ROS可视化话题发布（录制航迹点+返航轨迹）
 debug_enable_rviz_publish: true
 
-# 是否写调试日志（每次启动一个运行目录，events.jsonl）；试飞期间建议打开
+# 是否写调试日志（每次启动一个运行目录：events.jsonl，以及规划输入和轨迹 plan_<n>_*.csv）；
+# 试飞期间建议打开
 debug_log_enable: false
 
 # 调试日志根目录；留空为 ~/.ros/backtrack_logs，非空时为绝对路径或以 ~/ 开头

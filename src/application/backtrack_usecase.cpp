@@ -279,6 +279,7 @@ void BacktrackUseCase::submitPlanning(double now, std::vector<domain::StepEvent>
   PlanningInput input;
   input.points.assign(points.begin() + static_cast<std::ptrdiff_t>(plan_begin_), points.end());
   input.config = config_.trajectory_config;
+  input.plan = ++plan_count_;
   input.debug_sample_dt = config_.debug_trajectory_sample_dt;
   input.dumper = debug_dumper_;
   input.publisher = debug_publisher_;
@@ -286,7 +287,8 @@ void BacktrackUseCase::submitPlanning(double now, std::vector<domain::StepEvent>
       ? 0.0 : input.points.back().timestamp - input.points.front().timestamp;
   events.push_back(makeEvent(
       domain::EventType::Planning, "submitted", "",
-      "points=" + std::to_string(input.points.size()) + " duration_s=" + formatSeconds(duration) +
+      "plan=" + std::to_string(input.plan) + " points=" + std::to_string(input.points.size()) +
+          " duration_s=" + formatSeconds(duration) +
           (plan_begin_ > 0 ? " gap_at=" + std::to_string(plan_begin_) : "")));
   planning_worker_->request(std::move(input));
   plan_status_ = domain::PlanStatus::Pending;

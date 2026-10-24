@@ -8,31 +8,23 @@
 namespace px4_backtrack {
 namespace infrastructure {
 
-/// CSV debug dumper — 将录制航点和采样轨迹写入带时间戳的 CSV 文件
+/// 规划 CSV：把规划输入和采样后的轨迹写到调试日志的运行目录（重构方案第 9.2 节）
+///
+/// 文件名按本次运行的第几次规划编号：plan_<n>_input.csv、plan_<n>_trajectory.csv。
 class DebugDumper {
 public:
   /// 构造函数
-  /// @param output_dir 输出目录，空字符串则默认 ~/.ros/backtrack_debug/
-  explicit DebugDumper(const std::string& output_dir = "");
+  /// @param dir 输出目录（调试日志的运行目录，已存在）
+  explicit DebugDumper(std::string dir);
 
-  /// 导出录制航点到 CSV
-  /// @param points 录制点序列
-  /// @return 写入的文件路径，失败返回空字符串
-  std::string dumpWaypoints(const std::vector<domain::RecordPoint>& points);
+  /// 规划输入（录制点）
+  void dumpInput(int plan, const std::vector<domain::RecordPoint>& points) const;
 
-  /// 导出采样轨迹到 CSV
-  /// @param states 采样后的轨迹状态序列
-  /// @return 写入的文件路径，失败返回空字符串
-  std::string dumpTrajectory(const std::vector<trajectory_core::TrajectoryState>& states);
+  /// 采样后的轨迹
+  void dumpTrajectory(int plan, const std::vector<trajectory_core::TrajectoryState>& states) const;
 
 private:
-  std::string output_dir_;
-
-  /// 确保输出目录存在
-  bool ensureDirectory();
-
-  /// 生成带时间戳的文件名
-  std::string makeFilename(const std::string& prefix) const;
+  std::string dir_;
 };
 
 }  // namespace infrastructure

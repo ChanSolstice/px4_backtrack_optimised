@@ -4,10 +4,10 @@ PX4 Backtrack Debug 可视化工具
 
 用法:
   # 指定文件
-  python3 plot_debug_csv.py waypoints.csv trajectory.csv
+  python3 plot_debug_csv.py plan_1_input.csv plan_1_trajectory.csv
 
-  # 自动选取目录下最新的一组文件
-  python3 plot_debug_csv.py --dir ~/.ros/backtrack_debug/ --latest
+  # 调试日志的运行目录中最近一次有轨迹的规划
+  python3 plot_debug_csv.py --dir ~/Projects/backtrack_ws/debug/run_20261023_140023
 """
 
 import argparse
@@ -26,14 +26,12 @@ def load_csv(path):
 
 
 def find_latest_pair(directory):
-    """在目录中找到最新的 waypoints/trajectory CSV 对"""
-    wp_files = sorted(glob.glob(os.path.join(directory, "waypoints_*.csv")))
-    tr_files = sorted(glob.glob(os.path.join(directory, "trajectory_*.csv")))
-    if not wp_files:
-        sys.exit(f"错误: 在 {directory} 中未找到 waypoints_*.csv")
+    """运行目录中最近一次有轨迹的规划：plan_<n>_input.csv 与 plan_<n>_trajectory.csv"""
+    tr_files = sorted(glob.glob(os.path.join(directory, "plan_*_trajectory.csv")),
+                      key=lambda path: int(os.path.basename(path).split("_")[1]))
     if not tr_files:
-        sys.exit(f"错误: 在 {directory} 中未找到 trajectory_*.csv")
-    return wp_files[-1], tr_files[-1]
+        sys.exit(f"错误: 在 {directory} 中未找到 plan_*_trajectory.csv")
+    return tr_files[-1].replace("_trajectory.csv", "_input.csv"), tr_files[-1]
 
 
 def plot(wp_path, tr_path):
@@ -121,16 +119,13 @@ def plot(wp_path, tr_path):
 def main():
     parser = argparse.ArgumentParser(
         description="PX4 Backtrack Debug 可视化 — 对比录制航点与返航轨迹")
-    parser.add_argument("waypoints", nargs="?", help="waypoints CSV 文件路径")
-    parser.add_argument("trajectory", nargs="?", help="trajectory CSV 文件路径")
-    parser.add_argument("--dir", default="", help="CSV 输出目录 (配合 --latest 使用)")
-    parser.add_argument("--latest", action="store_true",
-                        help="自动选取目录下最新的一组文件")
+    parser.add_argument("waypoints", nargs="?", help="规划输入 CSV（plan_<n>_input.csv）")
+    parser.add_argument("trajectory", nargs="?", help="轨迹 CSV（plan_<n>_trajectory.csv）")
+    parser.add_argument("--dir", default="", help="调试日志的运行目录，取最近一次有轨迹的规划")
     args = parser.parse_args()
 
-    if args.latest or args.dir:
-        d = args.dir if args.dir else os.path.expanduser("~/.ros/backtrack_debug")
-        wp_path, tr_path = find_latest_pair(d)
+    if args.dir:
+        wp_path, tr_path = find_latest_pair(os.path.expanduser(args.dir))
         print(f"Waypoints: {wp_path}")
         print(f"Trajectory: {tr_path}")
     elif args.waypoints and args.trajectory:

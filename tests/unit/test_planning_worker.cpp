@@ -1,13 +1,18 @@
 #include <gtest/gtest.h>
 
+#include <unistd.h>
+
 #include <chrono>
 #include <condition_variable>
+#include <filesystem>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include "px4_backtrack/application/planning_worker.hpp"
+#include "px4_backtrack/infrastructure/debug_dumper.hpp"
 
 namespace px4_backtrack::application {
 namespace {
@@ -204,6 +209,36 @@ TEST(PlanningWorkerTest, PlanReturnClassifiesResults) {
   EXPECT_EQ(fallback.status, PlanStatus::ReadyFallback);
   EXPECT_TRUE(fallback.fallback.isValid());
   EXPECT_FALSE(fallback.trajectory);
+}
+
+TEST(PlanningWorkerTest, DumpsInputEveryTimeAndTrajectoryWhenReady) {
+  // 规划 CSV 写到运行目录，按第几次规划编号；输入每次都写，轨迹在就绪时写（第 9.2 节，R-88）
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / ("plan_csv_test_" + std::to_string(::getpid()));
+  fs::create_directories(dir);
+  const auto dumper = std::make_shared<infrastructure::DebugDumper>(dir.string());
+  PlanningWorker worker(planReturn, false);
+
+  PlanningInput ok = inputWithPoints(31);
+  ok.plan = 1;
+  ok.dumper = dumper;
+  ok.debug_sample_dt = 0.1;
+  worker.request(ok);
+  worker.runPending();
+  ASSERT_TRUE(worker.takeResult());
+
+  PlanningInput failed = inputWithPoints(1);
+  failed.plan = 2;
+  failed.dumper = dumper;
+  worker.request(failed);
+  worker.runPending();
+  ASSERT_TRUE(worker.takeResult());
+
+  EXPECT_TRUE(fs::exists(dir / "plan_1_input.csv"));
+  EXPECT_TRUE(fs::exists(dir / "plan_1_trajectory.csv"));
+  EXPECT_TRUE(fs::exists(dir / "plan_2_input.csv"));
+  EXPECT_FALSE(fs::exists(dir / "plan_2_trajectory.csv"));
+  fs::remove_all(dir);
 }
 
 }  // namespace

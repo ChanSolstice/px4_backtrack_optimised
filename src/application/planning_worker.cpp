@@ -128,12 +128,15 @@ void PlanningWorker::execute(const PlanningInput& input, std::uint64_t generatio
     }
   }
 
-  // 导出在规划线程完成，之后再交出结果，控制线程不会与导出同时访问轨迹
+  // 导出在规划线程完成，之后再交出结果，控制线程不会与导出同时访问轨迹。输入每次都写，
+  // 规划失败时最需要它（R-88）
+  if (input.dumper) {
+    input.dumper->dumpInput(input.plan, input.points);
+  }
   if (result->status == domain::PlanStatus::Ready && (input.dumper || input.publisher)) {
     const auto states = result->trajectory->getTrajectory()->sample(input.debug_sample_dt);
     if (input.dumper) {
-      input.dumper->dumpWaypoints(input.points);
-      input.dumper->dumpTrajectory(states);
+      input.dumper->dumpTrajectory(input.plan, states);
     }
     if (input.publisher) {
       input.publisher->publishWaypoints(input.points);

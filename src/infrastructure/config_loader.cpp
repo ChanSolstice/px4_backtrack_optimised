@@ -103,9 +103,6 @@ application::UseCaseConfig ConfigLoader::loadFromROS(ros::NodeHandle& nh) {
   sm.rejoin_trigger_dist_m = rejoin.trigger_dist_m;
 
   // Debug/可视化
-  requireParam(nh, "debug_enable_csv_dump", c.debug_enable_csv_dump);
-  requireParam(nh, "debug_csv_output_dir", c.debug_csv_output_dir);
-  c.debug_csv_output_dir = expandHome(c.debug_csv_output_dir);
   requireParam(nh, "debug_trajectory_sample_dt", c.debug_trajectory_sample_dt);
   requireParam(nh, "debug_enable_rviz_publish", c.debug_enable_rviz_publish);
 

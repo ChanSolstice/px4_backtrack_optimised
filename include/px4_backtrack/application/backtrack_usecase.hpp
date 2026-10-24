@@ -60,8 +60,6 @@ struct UseCaseConfig {
   double cursor_window_m{};     ///< 游标搜索窗口 (m)（第 7.4 节）
 
   // Debug/可视化（由节点决定是否创建导出器）
-  bool debug_enable_csv_dump{};         ///< 启用CSV文件导出
-  std::string debug_csv_output_dir;     ///< CSV导出目录
   double debug_trajectory_sample_dt{};  ///< 轨迹采样步长 (s)
   bool debug_enable_rviz_publish{};     ///< 启用ROS可视化发布
 };
@@ -133,7 +131,7 @@ public:
   /// 调试日志是否已失败（R-72）
   void setDebugLogFailed(bool failed) { debug_log_failed_ = failed; }
 
-  /// 设置 CSV debug dumper（可选）
+  /// 设置规划 CSV 导出（可选，写到调试日志的运行目录）
   void setDebugDumper(std::shared_ptr<infrastructure::DebugDumper> dumper);
 
   /// 设置 ROS debug publisher（可选）
@@ -202,6 +200,7 @@ private:
   domain::RejoinPolicy rejoin_policy_;
   domain::PlanStatus plan_status_{domain::PlanStatus::None};
   double plan_submit_t_{0.0};    ///< 本次规划的提交时间
+  int plan_count_{0};            ///< 本次运行已提交的规划次数（规划 CSV 的编号）
   size_t plan_begin_{0};         ///< 规划用的连续段在录制中的起点，大于 0 表示有断点（D30）
   bool plan_timed_out_{false};   ///< 本任务的航点降级来自规划超时
   size_t cursor_{0};             ///< 游标：返航已经走到的录制点（第 7.4 节）

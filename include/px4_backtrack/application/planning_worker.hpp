@@ -32,6 +32,7 @@ namespace application {
 struct PlanningInput {
   std::vector<domain::RecordPoint> points;
   trajectory_core::TrajectoryConfig config;
+  int plan{0};                                           ///< 本次运行的第几次规划（规划 CSV 的编号）
   double debug_sample_dt{};                              ///< 导出轨迹的采样步长 (s)
   std::shared_ptr<infrastructure::DebugDumper> dumper;   ///< 可选：规划 CSV
   std::shared_ptr<adapters::DebugPublisher> publisher;   ///< 可选：RViz
@@ -61,7 +62,7 @@ PlanningResult planFallback(const std::vector<domain::RecordPoint>& points);
 ///
 /// 单工作线程，最多一个待处理请求；新请求替换尚未开始的请求。用代次号丢弃
 /// 过期结果：正在运行的求解无法终止，取消或有新请求时只丢弃它的结果。
-/// 规划成功后在规划线程导出 CSV 和 RViz。
+/// 在规划线程导出规划 CSV（输入每次都写，轨迹在就绪时写）和 RViz。
 class PlanningWorker {
 public:
   using Planner = std::function<PlanningResult(const PlanningInput&)>;

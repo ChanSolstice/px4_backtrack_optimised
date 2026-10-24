@@ -14,8 +14,6 @@
            value="$(find px4_backtrack_optimised)/config/trajectory_config.yaml" />
     <param name="debug_log_enable" value="true" />
     <param name="debug_log_dir" value="$(arg log_dir)" />
-    <param name="debug_enable_csv_dump" value="false" />
-    <param name="debug_csv_output_dir" value="$(arg log_dir)" />
     <remap from="/Odometry_px4" to="/mavros/local_position/odom" />
     <remap from="/mavros/rc/in" to="/sitl/rc_in" />
     <remap from="/mavros/battery" to="/sitl/battery" />
