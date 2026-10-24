@@ -13,7 +13,8 @@ namespace px4_backtrack::infrastructure {
 namespace {
 
 TEST(ConfigLoaderTest, ProductionTrajectoryConfigIsValid) {
-  EXPECT_NO_THROW(ConfigLoader::loadTrajectoryConfig(BACKTRACK_CONFIG_DIR "/trajectory_config.yaml"));
+  EXPECT_NO_THROW(
+      ConfigLoader::loadTrajectoryConfig(BACKTRACK_CONFIG_DIR "/trajectory_config.yaml"));
 }
 
 TEST(ConfigLoaderTest, InvalidTrajectoryConfigIsRejectedAtStartup) {
