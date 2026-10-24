@@ -108,8 +108,6 @@ public:
     require(out.record == (out.phase == MissionPhase::Recording ||
                            out.phase == MissionPhase::Exited),
             "STRUCT record", before, c, out);
-    require(out.mission_active == isMissionPhase(out.phase), "STRUCT mission_active",
-            before, c, out);
 
     // SC1：在地面不启动返航；任务中落地后不再起飞
     if (armed_flow && (from == MissionPhase::Recording || from == MissionPhase::Exited) &&
@@ -386,7 +384,7 @@ struct Snapshot {
   Conditions last;
 };
 
-using Signature = std::tuple<int, int, int, bool, bool, bool, int, uint64_t>;
+using Signature = std::tuple<int, int, int, bool, bool, int, uint64_t>;
 
 Signature signatureOf(const ReturnStateMachine& sm, const StepOutput& out) {
   // 区域状态、任务标志和与判定相关的告警，作为快照去重的依据
@@ -398,8 +396,7 @@ Signature signatureOf(const ReturnStateMachine& sm, const StepOutput& out) {
        (uint64_t{1} << static_cast<unsigned>(Alert::HandoverDirectLand)) |
        (uint64_t{1} << static_cast<unsigned>(Alert::MissionLanded)));
   return Signature(static_cast<int>(sm.phase()), static_cast<int>(sm.control()),
-                   static_cast<int>(sm.follow()), sm.mission().active,
-                   sm.mission().offboard_confirmed, sm.handoverDirect(),
+                   static_cast<int>(sm.follow()), sm.mission().active, sm.handoverDirect(),
                    static_cast<int>(out.mode_intent), alert_mask);
 }
 

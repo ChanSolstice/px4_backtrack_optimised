@@ -26,17 +26,6 @@ bool yawAligned(double yaw, double target) {
   return std::abs(error) <= kAlignYawToleranceRad;
 }
 
-/// 事件里的任务原因码
-const char* missionReasonCode(MissionReason reason) {
-  switch (reason) {
-    case MissionReason::Pilot: return "PILOT_REQUEST";
-    case MissionReason::LowBattery: return "LOW_BATTERY";
-    case MissionReason::LinkLost: return "LINK_LOST";
-    case MissionReason::None: break;
-  }
-  return "NONE";
-}
-
 std::string onOff(bool value) {
   return value ? "on" : "off";
 }
@@ -131,12 +120,12 @@ const char* followName(FollowMode follow) {
 
 const char* missionReasonName(MissionReason reason) {
   switch (reason) {
-    case MissionReason::Pilot: return "pilot";
-    case MissionReason::LowBattery: return "low_battery";
-    case MissionReason::LinkLost: return "link_lost";
+    case MissionReason::Pilot: return "PILOT_REQUEST";
+    case MissionReason::LowBattery: return "LOW_BATTERY";
+    case MissionReason::LinkLost: return "LINK_LOST";
     case MissionReason::None: break;
   }
-  return "none";
+  return "NONE";
 }
 
 const char* handoverReasonName(HandoverReason reason) {
@@ -562,7 +551,6 @@ bool ReturnStateMachine::updateControl(const Conditions& c, StepOutput& out) {
   switch (control_) {
     case ControlState::Acquiring:
       if (in_offboard) {
-        mission_.offboard_confirmed = true;
         setControl(ControlState::Owned, "4", "OFFBOARD_OBSERVED", out);
         return false;
       }
@@ -691,7 +679,6 @@ void ReturnStateMachine::startMission(const Conditions& c, bool enter_phase,
   mission_.start_mode = knownMode();
   mission_.start_link_lost = pending_.link_lost;
   mission_.start_battery_low = pending_.battery_low;
-  mission_.start_pilot = pending_.pilot;
 
   trigger_position_ = c.position;
   trigger_yaw_ = c.yaw;
@@ -706,19 +693,19 @@ void ReturnStateMachine::startMission(const Conditions& c, bool enter_phase,
   if (pending_.pilot) conditions += "pilot ";
   if (!conditions.empty()) conditions.pop_back();
   addEvent(out, EventType::Mission, "started", "", "", "7",
-           missionReasonCode(mission_.reason),
+           missionReasonName(mission_.reason),
            "id=" + std::to_string(mission_.id) + " conditions=" + conditions);
 
   if (!enter_phase) {
     return;
   }
   // 只要有链路丢失，就先悬停（D16）
-  setControl(ControlState::Acquiring, "7", missionReasonCode(mission_.reason), out);
+  setControl(ControlState::Acquiring, "7", missionReasonName(mission_.reason), out);
   if (pending_.link_lost) {
     hover_start_t_ = c.now;
-    setPhase(MissionPhase::Hover, "7", missionReasonCode(mission_.reason), out);
+    setPhase(MissionPhase::Hover, "7", missionReasonName(mission_.reason), out);
   } else {
-    setPhase(MissionPhase::Prepare, "7", missionReasonCode(mission_.reason), out);
+    setPhase(MissionPhase::Prepare, "7", missionReasonName(mission_.reason), out);
   }
 }
 
@@ -902,7 +889,6 @@ void ReturnStateMachine::computeOutputs(const Conditions& c, StepOutput& out) {
   out.follow = follow_;
   out.flight_id = flight_id_;
   out.mission_id = mission_.id;
-  out.mission_active = mission_.active;
 
   if (!c.odom_stale) {
     odom_hold_active_ = false;

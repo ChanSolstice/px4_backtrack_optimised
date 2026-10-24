@@ -98,6 +98,7 @@ bool isMissionPhase(MissionPhase phase);
 const char* reportedStateName(MissionPhase phase, FollowMode follow);
 const char* controlName(ControlState control);
 const char* followName(FollowMode follow);
+/// 任务原因码，如 "LOW_BATTERY"（事件和状态话题共用）
 const char* missionReasonName(MissionReason reason);
 const char* handoverReasonName(HandoverReason reason);
 
@@ -223,8 +224,7 @@ struct StepOutput {
   ControlState control{ControlState::None};
   FollowMode follow{FollowMode::OnPath};
   int flight_id{0};     ///< 飞行周期编号，从 1 开始
-  int mission_id{0};    ///< 本次飞行内的任务编号；没有任务时为 0
-  bool mission_active{false};  ///< 任务进行中（悬停到交接）
+  int mission_id{0};    ///< 本次飞行内最近一次任务的编号；没有任务时为 0
 
   // setpoint 与模式
   SetpointKind setpoint{SetpointKind::None};
@@ -248,11 +248,9 @@ struct MissionInfo {
   std::string start_mode;     ///< 开始时的飞控模式（规则 4c）
   bool start_link_lost{false};    ///< 开始时成立的条件
   bool start_battery_low{false};
-  bool start_pilot{false};
   std::optional<double> seen_link_lost_t;    ///< 任务中首次出现的条件及时间
   std::optional<double> seen_battery_low_t;
   std::optional<double> seen_pilot_t;
-  bool offboard_confirmed{false};  ///< 本任务内已观察到 OFFBOARD
 };
 
 // ============================================================================
@@ -280,7 +278,6 @@ public:
   /// 最近一次交接的原因和是否直接降落，只在 Handover 阶段有意义
   HandoverReason handoverReason() const { return handover_reason_; }
   bool handoverDirect() const { return handover_direct_; }
-  int flightId() const { return flight_id_; }
 
 private:
   /// 待启动的任务（触发后等待在空中、补点）

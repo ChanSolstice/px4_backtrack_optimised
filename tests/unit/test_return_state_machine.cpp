@@ -241,7 +241,7 @@ TEST(ReturnStateMachineTest, DisarmEndsMissionAndNewFlightRestartsMissionIds) {
   EXPECT_EQ(h.out.phase, MissionPhase::Disarmed);
   EXPECT_EQ(h.out.control, ControlState::None);
   EXPECT_TRUE(h.out.commands.cancel_planning);
-  EXPECT_FALSE(h.out.mission_active);
+  EXPECT_FALSE(h.sm.mission().active);
   EXPECT_TRUE(h.sawNamed(EventType::Mission, "ended"));
 
   h.c.battery.low = false;
@@ -284,7 +284,6 @@ TEST(ReturnStateMachineTest, LinkLossInRecordingHoversThenPrepares) {
   h.c.mode = "OFFBOARD";
   h.step();
   EXPECT_EQ(h.out.control, ControlState::Owned);
-  EXPECT_TRUE(h.sm.mission().offboard_confirmed);
 
   // 悬停 15 s（从任务开始算）后进入准备
   h.run(15.0 - 8 * kDt);
@@ -375,7 +374,7 @@ TEST(ReturnStateMachineTest, InsufficientPointsLandsAfterPendingTimeout) {
   h.step();          // 等待 3.0 s
   EXPECT_EQ(h.out.phase, MissionPhase::Handover);
   EXPECT_EQ(h.sm.handoverReason(), HandoverReason::InsufficientPoints);
-  EXPECT_TRUE(h.out.mission_active);
+  EXPECT_TRUE(h.sm.mission().active);
   // 不在 OFFBOARD：直接请求 AUTO.LAND，不发布
   EXPECT_EQ(h.out.mode_intent, ModeIntent::AutoLand);
   EXPECT_EQ(h.out.setpoint, SetpointKind::None);
@@ -459,7 +458,7 @@ TEST(ReturnStateMachineTest, ShortPressExitsMission) {
   h.step();
   EXPECT_EQ(h.out.phase, MissionPhase::Exited);
   EXPECT_EQ(h.out.control, ControlState::Yielded);
-  EXPECT_FALSE(h.out.mission_active);
+  EXPECT_FALSE(h.sm.mission().active);
   EXPECT_TRUE(h.out.record);
   EXPECT_TRUE(h.out.commands.cancel_planning);
   EXPECT_TRUE(h.out.commands.trail_cut);
@@ -1161,7 +1160,7 @@ TEST(ReturnStateMachineTest, ArrivalHoversThenStagedHandover) {
   h.step();
   EXPECT_EQ(h.out.phase, MissionPhase::FcuLanding);
   EXPECT_EQ(h.out.mode_intent, ModeIntent::None);
-  EXPECT_FALSE(h.out.mission_active);
+  EXPECT_FALSE(h.sm.mission().active);
 }
 
 TEST(ReturnStateMachineTest, ArrivalTimerOnlyRunsWhileOwned) {
@@ -1284,7 +1283,7 @@ TEST(ReturnStateMachineTest, AutoLandYieldIsLatchedAndReRequestedOnLinkLoss) {
   EXPECT_EQ(h.out.control, ControlState::FcuLanding);
   EXPECT_EQ(h.out.setpoint, SetpointKind::None);
   EXPECT_TRUE(h.out.commands.cancel_planning);
-  EXPECT_FALSE(h.out.mission_active);
+  EXPECT_FALSE(h.sm.mission().active);
 
   // 链路正常时飞手从 AUTO.LAND 接管：不再干预（D18）
   h.c.mode = "POSCTL";
