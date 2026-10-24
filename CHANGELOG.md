@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-10-23 — R7 上报与调试日志（R-88）
+
+### 行为
+
+- 新话题 `/px4_backtrack/status`（`std_msgs/String`，JSON，每拍一条）：`t`、`flight`、`state`、`control`、`mission`、`reason`、`mode_request`、`mode_result`、`alerts`。告警码第一次对外上报；原有三个话题不变。字段见前端对接文档第 2.3 节。
+- `trajectory_core` 配置在启动时校验，非法则节点退出；运行时不再处理配置非法（删除 `FailedConfig`）。
+- 调试日志：
+  - 只保留最近 `debug_log_keep_runs` 个运行目录（含本次，本次的目录不删除）；
+  - `debug_log_trace` 打开逐拍记录 `trace.csv`（约 30 MB/小时）：条件快照的全部字段和本拍输出，可以用 PlotJuggler 打开，也可以解析后回放到状态机复现当时的决策；
+  - 规划 CSV 写到运行目录：`plan_<n>_input.csv` 每次都写，`plan_<n>_trajectory.csv` 规划成功时写，提交规划的事件带 `plan=<n>`；
+  - `config` 事件记录 `trajectory_core` 的提交号（工作区里是 git 检出时）。
+- 启动文件可选录包：`record_bag:=true`，写到 `bag_dir`（默认 `~/.ros`），每 1 GB 分一个文件。
+- 新脚本 `scripts/analysis/show_debug_log.py` 按时间线查看事件；`plot_debug_csv.py` 改为 `--dir <运行目录>`。
+
+### 参数
+
+| 参数 | 值 | 说明 |
+| --- | --- | --- |
+| `debug_log_keep_runs` | 20 | 新增 |
+| `debug_log_trace` | false | 新增；SITL 中打开 |
+| `debug_enable_csv_dump`、`debug_csv_output_dir` | — | 删除：规划 CSV 跟随调试日志 |
+
+### 代码
+
+- **refactor(domain):** 删除没有地方读取的 `StepOutput::mission_active`、`MissionInfo::offboard_confirmed`、`start_pilot`、`flightId()`；任务原因只保留一种名称（事件里的原因码）
+- **feat(config):** 启动时校验 `trajectory_core` 配置；**refactor:** 删除运行时的配置非法处理
+- **feat:** 状态话题（`application/tick_report` 的 `statusJson`，`TickOutput` 增加任务原因和模式请求状态）
+- **feat(infra):** 运行目录的保留个数；**feat:** 规划 CSV 写到运行目录；**feat:** 逐拍记录与回放（`traceHeader`、`traceRow`、`parseTraceRow` 共用一份字段表）
+- **build:** 记录 `trajectory_core` 的提交号；**feat(launch):** `record_bag`；**feat(scripts):** `show_debug_log.py`
+
+### 测试
+
+- 单测：233 个（新增配置校验 2、调试日志 2、规划 CSV 1、状态话题 3（含 S22）、S31 逐拍回放 1；删除配置非法相关 2 个）；穷举快照 207 个、单拍检查 715392 次；SC8 随机序列剩 5 种卡住的情形
+- 错误注入：新增 6 项（共 90 项）
+- SITL：每个场景检查状态话题与 `/px4_backtrack/state` 一致、`trace.csv` 每行列数一致；S12、S26 通过，两份 `trace.csv` 离线回放 2364 拍、2206 拍全部一致
+- 全量验证（`b605911`）：amd64 单测返航 233 个、算法库 111 个全部通过（Summary 688）；错误注入 90 项全部发现；闭环 17 个场景 33 项全部通过
+
+### 文档
+
+- 方案：R-88（状态话题字段、逐拍记录格式、规划 CSV 命名、启动校验后删除配置非法、录包目录、删除没有读取的字段）；第 5.6、7.5、9.1、9.2、10 节同步
+- 系统总览、README、LLM_MAP、前端对接文档（新增第 2.3 节状态话题，告警码表）、单元测试文档、闭环仿真与 SITL 测试文档同步
+
 ## 2026-10-23 — 完整 SITL（R-86、R-87）
 
 R6 完成后在 PX4 v1.15.4 SITL（SIH）和 MAVROS 下运行本节点，回放方案第 11 节中涉及飞控交互的 12 个场景，全部通过。节点代码没有改动。
