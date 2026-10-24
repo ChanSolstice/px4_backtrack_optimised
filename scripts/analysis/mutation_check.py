@@ -35,6 +35,8 @@ COMPONENTS = {
                           ["test_main.cpp", "test_backtrack_usecase.cpp"], True),
     "planning_worker": (["application/planning_worker.cpp"],
                         ["test_main.cpp", "test_planning_worker.cpp"], True),
+    "tick_report": (["application/tick_report.cpp"], ["test_main.cpp", "test_backtrack_usecase.cpp"], True),
+    "debug_log": (["infrastructure/debug_log.cpp"], ["test_main.cpp", "test_debug_log.cpp"], True),
 }
 
 # (名称, 组件, 原文, 替换, 说明[, 原文出现次数，默认 1])
@@ -223,6 +225,24 @@ MUTATIONS = [
      'void PlanningWorker::cancel() {\n  std::lock_guard<std::mutex> lock(mutex_);\n  ++generation_;\n',
      'void PlanningWorker::cancel() {\n  std::lock_guard<std::mutex> lock(mutex_);\n',
      '取消后正在运行的求解仍交出结果'),
+    # R7：上报与调试日志
+    ('plan_input_only_when_ready', 'planning_worker',
+     '  if (input.dumper) {\n    input.dumper->dumpInput(',
+     '  if (input.dumper && result->status == domain::PlanStatus::Ready) {\n    input.dumper->dumpInput(',
+     '规划输入只在轨迹就绪时导出，失败时没有输入（R-88）'),
+    ('status_alerts_missing', 'tick_report', '    if (out.alerts.has(alert)) {', '    if (false) {',
+     '状态话题不上报告警（S22）'),
+    ('trace_field_missing', 'tick_report', '  f("plan_status", c.plan_status);\n', '',
+     '逐拍记录漏掉一个条件字段，回放时取默认值（S31）'),
+    ('trace_to_events_file', 'debug_log', '(line.trace ? trace_file_ : file_)', 'file_',
+     '逐拍记录写进 events.jsonl'),
+    ('keep_runs_counts_current', 'debug_log',
+     '  const bool other_run = name.rfind("run_", 0) == 0 && name != current.filename().string();',
+     '  const bool other_run = name.rfind("run_", 0) == 0;',
+     '保留时把本次的目录当作旧目录，时钟不准时会删掉本次的目录'),
+    ('keep_runs_off_by_one', 'debug_log',
+     'keep_runs > 1 ? static_cast<std::size_t>(keep_runs - 1) : 0', 'static_cast<std::size_t>(keep_runs)',
+     '保留个数不含本次，多留一个'),
 ]
 
 
