@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -30,6 +31,7 @@ protected:
     DebugLogConfig c;
     c.enable = enable;
     c.dir = base_.string();
+    c.keep_runs = 20;
     return c;
   }
 
@@ -141,6 +143,35 @@ TEST_F(DebugLogTest, RestartWithinSameSecondGetsNewDirectory) {
   DebugLog log(config(true), "run_20261021_101500");
   EXPECT_NE(log.runDir(), first);
   EXPECT_EQ(log.runDir(), (base_ / "run_20261021_101500_2").string());
+}
+
+TEST_F(DebugLogTest, KeepsOnlyRecentRuns) {
+  for (int i = 1; i <= 5; ++i) {
+    fs::create_directories(base_ / ("run_20261020_00000" + std::to_string(i)));
+  }
+  fs::create_directories(base_ / "notes");
+  std::ofstream((base_ / "run_list.txt").string()) << "x";
+
+  DebugLogConfig c = config(true);
+  c.keep_runs = 3;
+  {
+    DebugLog log(c, "run_20261021_101500");
+  }
+  std::vector<std::string> names;
+  for (const auto& entry : fs::directory_iterator(base_)) {
+    names.push_back(entry.path().filename().string());
+  }
+  std::sort(names.begin(), names.end());
+  // 其他目录和文件不动
+  EXPECT_EQ(names, (std::vector<std::string>{"notes", "run_20261020_000004", "run_20261020_000005",
+                                             "run_20261021_101500", "run_list.txt"}));
+
+  // 时钟不准、本次的目录名排在最前时也不删除本次的目录
+  c.keep_runs = 2;
+  DebugLog log(c, "run_19700101_000000");
+  EXPECT_TRUE(fs::exists(log.runDir()));
+  EXPECT_TRUE(fs::exists(base_ / "run_20261021_101500"));
+  EXPECT_FALSE(fs::exists(base_ / "run_20261020_000005"));
 }
 
 }  // namespace

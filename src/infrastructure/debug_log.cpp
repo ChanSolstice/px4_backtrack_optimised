@@ -1,10 +1,12 @@
 #include "px4_backtrack/infrastructure/debug_log.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 
 namespace px4_backtrack {
 namespace infrastructure {
@@ -42,6 +44,25 @@ std::string formatRecord(const LogRecord& record) {
   return out.str();
 }
 
+/// 删除更早的运行目录，连同本次只保留 keep_runs 个（按目录名排序）；本次的目录不删除，
+/// 系统时钟不准时目录名的顺序可能不对
+void removeOldRuns(const fs::path& base, const fs::path& current, int keep_runs) {
+  std::error_code ec;
+  std::vector<fs::path> runs;
+  for (const auto& entry : fs::directory_iterator(base, ec)) {
+    const std::string name = entry.path().filename().string();
+    const bool other_run = name.rfind("run_", 0) == 0 && name != current.filename().string();
+    if (other_run && entry.is_directory(ec)) {
+      runs.push_back(entry.path());
+    }
+  }
+  std::sort(runs.begin(), runs.end());
+  const std::size_t keep_others = keep_runs > 1 ? static_cast<std::size_t>(keep_runs - 1) : 0;
+  for (std::size_t i = 0; i + keep_others < runs.size(); ++i) {
+    fs::remove_all(runs[i], ec);
+  }
+}
+
 }  // namespace
 
 DebugLog::DebugLog(const DebugLogConfig& config, const std::string& run_name,
@@ -53,20 +74,21 @@ DebugLog::DebugLog(const DebugLogConfig& config, const std::string& run_name,
     return;
   }
 
-  const std::string base = config_.dir.empty() ? defaultDir() : config_.dir;
-  std::string dir = base + "/" + run_name;
+  const fs::path base = config_.dir.empty() ? defaultDir() : config_.dir;
+  fs::path dir = base / run_name;
   // 同一秒内重启时不与上一次的目录混在一起
   std::error_code ec;
   for (int suffix = 2; fs::exists(dir, ec); ++suffix) {
-    dir = base + "/" + run_name + "_" + std::to_string(suffix);
+    dir = base / (run_name + "_" + std::to_string(suffix));
   }
   fs::create_directories(dir, ec);
   if (ec) {
     failed_ = true;
     return;
   }
-  run_dir_ = dir;
-  file_.open(dir + "/events.jsonl", std::ios::out | std::ios::app);
+  removeOldRuns(base, dir, config_.keep_runs);
+  run_dir_ = dir.string();
+  file_.open(dir / "events.jsonl", std::ios::out | std::ios::app);
   if (!file_) {
     failed_ = true;
     return;

@@ -24,6 +24,7 @@ struct DebugLogConfig {
   // 运行时参数由 ConfigLoader 从 backtrack_params.yaml 注入。
   bool enable{};    ///< 是否写调试日志
   std::string dir;  ///< 日志根目录；空为 ~/.ros/backtrack_logs，非空必须是绝对路径
+  int keep_runs{};  ///< 保留的运行目录个数（含本次）
 };
 
 /// 写入 events.jsonl 的一条事件
@@ -40,7 +41,8 @@ struct LogRecord {
 
 /// 调试日志（重构方案第 9.2 节，D29）
 ///
-/// 每次节点启动建一个运行目录，事件一行一个写入 events.jsonl。写盘在后台线程，
+/// 每次节点启动建一个运行目录，事件一行一个写入 events.jsonl；只保留最近 keep_runs 个
+/// 运行目录（按目录名排序，本次的不删除）。写盘在后台线程，
 /// 控制线程只把一行文本放进有界队列；队列满时丢弃并计数，之后补写一条
 /// log_dropped。建目录或写文件失败时停止写日志（failed 为真），返航不受影响。
 /// 关闭时不建目录、不写文件。

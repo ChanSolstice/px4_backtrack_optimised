@@ -228,3 +228,6 @@ debug_log_enable: false
 
 # 调试日志根目录；留空为 ~/.ros/backtrack_logs，非空时为绝对路径或以 ~/ 开头
 debug_log_dir: "~/Projects/backtrack_ws/debug/"
+
+# 保留的运行目录个数（含本次）；启动时删除更早的 run_* 目录
+debug_log_keep_runs: 20

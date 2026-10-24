@@ -135,6 +135,7 @@ DebugLogConfig ConfigLoader::loadDebugLog(ros::NodeHandle& nh) {
   DebugLogConfig c;
   requireParam(nh, "debug_log_enable", c.enable);
   requireParam(nh, "debug_log_dir", c.dir);
+  requireParam(nh, "debug_log_keep_runs", c.keep_runs);
   c.dir = expandHome(c.dir);
   if (!c.dir.empty() && c.dir.front() != '/') {
     throw std::runtime_error("debug_log_dir must be an absolute path or start with ~/: " + c.dir);
