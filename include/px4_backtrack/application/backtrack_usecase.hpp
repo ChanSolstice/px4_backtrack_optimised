@@ -80,7 +80,9 @@ struct TickOutput {
   bool low_battery{false};                        ///< 低电量（/px4_backtrack/low_battery）
   domain::AlertSet alerts;                        ///< 告警
   int flight_id{0};                               ///< 飞行周期编号
-  int mission_id{0};                              ///< 任务编号，没有任务时为 0
+  int mission_id{0};                              ///< 本次飞行最近一次任务的编号，没有任务时为 0
+  domain::MissionReason mission_reason{domain::MissionReason::None};  ///< 该任务的原因
+  ModeRequestStatus mode_status;                  ///< 模式请求：当前意图和结果
   std::vector<domain::StepEvent> events;          ///< 本拍事件（状态机、规划、断流、模式请求）
 };
 

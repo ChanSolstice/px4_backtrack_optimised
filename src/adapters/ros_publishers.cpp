@@ -72,6 +72,7 @@ StatusPublisher::StatusPublisher(ros::NodeHandle& nh) {
   state_pub_ = nh.advertise<std_msgs::String>("/px4_backtrack/state", 10);
   rc_loss_pub_ = nh.advertise<std_msgs::Bool>("/status_rc_loss", 10);
   low_battery_pub_ = nh.advertise<std_msgs::Bool>("/px4_backtrack/low_battery", 10);
+  status_json_pub_ = nh.advertise<std_msgs::String>("/px4_backtrack/status", 10);
   ROS_INFO("[StatusPublisher] Initialized");
 }
 
@@ -91,6 +92,12 @@ void StatusPublisher::publishLowBattery(bool low_battery) {
   std_msgs::Bool msg;
   msg.data = low_battery;
   low_battery_pub_.publish(msg);
+}
+
+void StatusPublisher::publishStatus(const std::string& json) {
+  std_msgs::String msg;
+  msg.data = json;
+  status_json_pub_.publish(msg);
 }
 
 }  // namespace adapters

@@ -1,4 +1,5 @@
 #include "px4_backtrack/application/backtrack_usecase.hpp"
+#include "px4_backtrack/application/tick_report.hpp"
 #include "px4_backtrack/infrastructure/config_loader.hpp"
 #include "px4_backtrack/infrastructure/debug_dumper.hpp"
 #include "px4_backtrack/infrastructure/debug_log.hpp"
@@ -240,6 +241,7 @@ void BacktrackNode::timerCallback(const ros::TimerEvent&) {
   status_pub_->publishState(out.state);
   status_pub_->publishRCLoss(out.link_lost);
   status_pub_->publishLowBattery(out.low_battery);
+  status_pub_->publishStatus(application::statusJson(now, out));
   if (out.setpoint) {
     setpoint_pub_->publish(*out.setpoint);
   }

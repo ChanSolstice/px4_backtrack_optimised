@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "px4_backtrack/application/backtrack_usecase.hpp"
+#include "px4_backtrack/application/tick_report.hpp"
 
 namespace px4_backtrack::application {
 namespace {
@@ -127,6 +128,7 @@ public:
   bool rc_frames = true;
   bool ch7 = false;
   bool ch7_dip = false;  ///< 下一帧注入一次 CH7 按下
+  int ch18_normal = 1400;  ///< 链路正常时的 CH18（原生固件为 998 或 1998）
   double battery = 0.9;
 
   // 里程计
@@ -255,7 +257,7 @@ private:
       const bool pressed = link_ok ? (ch7 || ch7_dip) : (held_ch7_ || ch7_dip);
       ch7_dip = false;
       channels[6] = pressed ? 1100 : 1900;
-      channels[17] = link_ok ? 1400 : 800;
+      channels[17] = link_ok ? ch18_normal : 800;
       uc.onRc(t, channels);
     }
     uc.onBattery(t, battery);
@@ -1507,6 +1509,61 @@ TEST(BacktrackUseCaseTest, LongReturnRaisesNoProgressStall) {
     EXPECT_FALSE(hasEvent(s.events, EventType::Alert, "ESCALATED_LAND", "on")) << fallback;
     EXPECT_LT(s.pos.head<2>().norm(), 0.3) << fallback;
   }
+}
+
+// ============================================================================
+// 状态话题（R7，第 9.1 节）
+// ============================================================================
+
+TEST(BacktrackUseCaseTest, StatusJsonFormat) {
+  TickOutput out;
+  out.state = "ReturnActive";
+  out.control = ControlState::Owned;
+  out.flight_id = 1;
+  out.mission_id = 1;
+  out.mission_reason = domain::MissionReason::LowBattery;
+  out.mode_status.mode = "OFFBOARD";
+  out.mode_status.result = ModeRequestResult::Applied;
+  out.alerts.set(Alert::LowBattery);
+  out.alerts.set(Alert::LinkLost);
+  EXPECT_EQ(statusJson(1236.05, out),
+            "{\"t\":1236.050,\"flight\":1,\"state\":\"ReturnActive\",\"control\":\"owned\","
+            "\"mission\":1,\"reason\":\"LOW_BATTERY\",\"mode_request\":\"OFFBOARD\","
+            "\"mode_result\":\"applied\",\"alerts\":[\"LINK_LOST\",\"LOW_BATTERY\"]}");
+}
+
+TEST(BacktrackUseCaseTest, StatusReportsMissionAndModeRequest) {
+  Sim s;
+  s.flyOutbound();
+  EXPECT_NE(statusJson(s.t, s.out).find("\"state\":\"Recording\",\"control\":\"none\",\"mission\":0,"
+                                        "\"reason\":\"NONE\",\"mode_request\":\"\","
+                                        "\"mode_result\":\"none\",\"alerts\":[]"),
+            std::string::npos)
+      << statusJson(s.t, s.out);
+
+  s.battery = 0.10;
+  ASSERT_TRUE(s.runUntilState("ReturnActive", 5.0));
+  EXPECT_NE(statusJson(s.t, s.out).find("\"state\":\"ReturnActive\",\"control\":\"owned\","
+                                        "\"mission\":1,\"reason\":\"LOW_BATTERY\","
+                                        "\"mode_request\":\"OFFBOARD\",\"mode_result\":\"applied\","
+                                        "\"alerts\":[\"LOW_BATTERY\"]"),
+            std::string::npos)
+      << statusJson(s.t, s.out);
+}
+
+TEST(BacktrackUseCaseTest, StatusReportsCh18UnexpectedValue) {
+  // S22：原生固件的 CH18 正常值 998 不是 800、1400，状态话题上报 CH18_UNEXPECTED；
+  // 仍按阈值判定，不算失控
+  Sim s;
+  s.ch18_normal = 998;
+  s.flyOutbound();
+  EXPECT_FALSE(s.out.link_lost);
+  EXPECT_NE(statusJson(s.t, s.out).find("\"alerts\":[\"CH18_UNEXPECTED\"]"), std::string::npos)
+      << statusJson(s.t, s.out);
+
+  s.ch18_normal = 1400;
+  s.step();
+  EXPECT_EQ(statusJson(s.t, s.out).find("CH18_UNEXPECTED"), std::string::npos);
 }
 
 }  // namespace

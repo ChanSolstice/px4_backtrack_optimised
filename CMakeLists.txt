@@ -73,6 +73,7 @@ set(APPLICATION_SOURCES
   src/application/backtrack_usecase.cpp
   src/application/mode_commander.cpp
   src/application/planning_worker.cpp
+  src/application/tick_report.cpp
 )
 
 ## Adapters层源文件

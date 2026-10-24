@@ -170,6 +170,8 @@ TickOutput BacktrackUseCase::tick(double now) {
   out.alerts = step.alerts;
   out.flight_id = step.flight_id;
   out.mission_id = step.mission_id;
+  out.mission_reason = state_machine_.mission().reason;
+  out.mode_status = mode_commander_.status();
   return out;
 }
 

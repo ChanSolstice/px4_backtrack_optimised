@@ -56,11 +56,15 @@ public:
   /// @param low_battery 是否低电量
   void publishLowBattery(bool low_battery);
 
+  /// 发布状态 JSON（/px4_backtrack/status，重构方案第 9.1 节）
+  void publishStatus(const std::string& json);
+
 private:
   /// ROS发布者
   ros::Publisher state_pub_;
   ros::Publisher rc_loss_pub_;
   ros::Publisher low_battery_pub_;
+  ros::Publisher status_json_pub_;
 };
 
 }  // namespace adapters
