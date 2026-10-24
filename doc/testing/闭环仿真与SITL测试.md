@@ -12,7 +12,7 @@
 | SITL 飞控行为检查 | 重构方案依赖的 PX4 行为（N1、N2） | `scripts/sitl/run_sitl_checks.sh` | 第 3 节 |
 | SITL 返航场景 | 真实 PX4（SIH）和 MAVROS 下本节点的整体行为（方案第 11 节中涉及飞控交互的场景） | `scripts/sitl/run_sitl_checks.sh scenarios` | 第 4 节 |
 | 规划耗时基准 | 轨迹生成耗时随录制时长的增长 | `scripts/bench/run_gen_bench.sh` | 第 5 节 |
-| 台架、实飞 | 方案第 11 节的场景 | 清单按方案第 14.4、14.5 节编写，R8 定稿 | dev 版本的测试文档见[返航功能测试文档](返航功能测试文档.md)、[当前版本返航飞行测试清单](当前版本返航飞行测试清单.md) |
+| 台架、实飞 | 接收机和飞控参数的前提、方案第 11 节的场景在真机上的表现 | [实飞测试清单](实飞测试清单.md)（方案第 14.4、14.5 节） | dev 版本的测试文档见[返航功能测试文档](返航功能测试文档.md)、[当前版本返航飞行测试清单](当前版本返航飞行测试清单.md) |
 
 所有脚本都在 Docker 中运行，本机需要 sudo 时设置 `DOCKER="sudo docker"`。闭环场景、注入检查和基准复用 `scripts/docker/run_tests.sh` 留下的容器 `backtrack_noetic_<arch>`，先跑一次单测即可。
 
