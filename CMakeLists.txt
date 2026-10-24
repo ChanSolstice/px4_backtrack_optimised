@@ -130,7 +130,8 @@ target_link_libraries(backtrack_node
   ${catkin_LIBRARIES}
 )
 
-# 调试日志的 config 事件记录本模块的提交号（取不到时为 unknown）
+# 调试日志的 config 事件记录本模块和 trajectory_core 的提交号（取不到时为 unknown）。
+# trajectory_core 的提交号从它的头文件目录所在的源码检出中取
 execute_process(
   COMMAND git rev-parse --short HEAD
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -141,6 +142,20 @@ execute_process(
 if(BACKTRACK_GIT_REV)
   target_compile_definitions(backtrack_node PRIVATE BACKTRACK_GIT_REV="${BACKTRACK_GIT_REV}")
 endif()
+foreach(dir ${trajectory_core_INCLUDE_DIRS})
+  execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${dir}
+    OUTPUT_VARIABLE TRAJECTORY_CORE_GIT_REV
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(TRAJECTORY_CORE_GIT_REV)
+    target_compile_definitions(backtrack_node PRIVATE
+      TRAJECTORY_CORE_GIT_REV="${TRAJECTORY_CORE_GIT_REV}")
+    break()
+  endif()
+endforeach()
 
 #############
 ## Install ##

@@ -16,6 +16,9 @@
 #ifndef BACKTRACK_GIT_REV
 #define BACKTRACK_GIT_REV "unknown"
 #endif
+#ifndef TRAJECTORY_CORE_GIT_REV
+#define TRAJECTORY_CORE_GIT_REV "unknown"
+#endif
 
 namespace px4_backtrack {
 
@@ -171,7 +174,7 @@ BacktrackNode::BacktrackNode(ros::NodeHandle& nh, ros::NodeHandle& nh_private)
   debug_log_ = std::make_unique<infrastructure::DebugLog>(debug_log_config, runName());
   if (debug_log_->enabled()) {
     debug_log_->writeConfig(ros::Time::now().toSec(), privateParams(nh_private_),
-                            BACKTRACK_GIT_REV, "unknown");
+                            BACKTRACK_GIT_REV, TRAJECTORY_CORE_GIT_REV);
     debug_log_->writeTrace(ros::Time::now().toSec(), application::traceHeader());
     ROS_INFO("[BacktrackNode] Debug log: %s%s", debug_log_->runDir().c_str(),
              debug_log_->failed() ? " (FAILED)" : "");
