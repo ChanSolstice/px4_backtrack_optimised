@@ -2,13 +2,12 @@
 """在 PX4 SITL（SIH）中运行返航节点，回放方案第 11 节中涉及飞控交互的场景（方案第 14.3 节，R-86）。
 
 脚本扮演三个角色：
-- 飞手：MAVLink 摇杆（COM_RC_IN_MODE=1），在 POSCTL 下起飞、飞出航线；拨模式开关、地面站切模式
-  都用 /mavros/set_mode 模拟；
-- 接收机：50 Hz 向 /sitl/rc_in 发 18 个通道。CH7 按下 1100、松开 1900，CH18 正常 1400；失控时
-  CH18 = 800，CH7 保持失控瞬间的值，摇杆回中；
-- 电池：1 Hz 向 /sitl/battery 发电量。
-backtrack_sitl.launch 把节点的 /mavros/rc/in、/mavros/battery 重映射到这两个话题，里程计用
-/mavros/local_position/odom。判定看节点的状态话题、/mavros/state 和调试日志 events.jsonl；每个场景
+- 接收机：50 Hz 经 MAVROS 遥控覆盖（/mavros/rc/override）向 PX4 发 18 个通道。CH7 按下 1100、松开 1900，
+  CH18 正常 1400；失控时 CH18 = 800，CH7 保持失控瞬间的值，摇杆回中；接收机断线（F8）时停发。
+  PX4 按机载的 COM_RC_IN_MODE=0 把它当作遥控，再回传 RC_CHANNELS，节点读真实的 /mavros/rc/in（R-91）；
+- 飞手：用遥控的摇杆通道在 POSCTL 下起飞、飞出航线；拨模式开关、地面站切模式都用 /mavros/set_mode 模拟；
+- 电池：1 Hz 向 /sitl/battery 发电量，backtrack_sitl.launch 把节点的 /mavros/battery 重映射到这里。
+飞控的遥控和失控保护参数按机载值设置（R-90），里程计用 /mavros/local_position/odom。判定看节点的状态话题、/mavros/state 和调试日志 events.jsonl；每个场景
 还检查 JSON 状态话题与 /px4_backtrack/state 一致、逐拍记录 trace.csv 每行的列数与表头一致。
 
 用法：sitl_scenarios.py <场景编号> <调试日志目录>，由 scripts/sitl/run_sitl_checks.sh scenarios 调用。
@@ -25,7 +24,7 @@ import time
 
 import rospy
 from geometry_msgs.msg import PoseStamped
-from mavros_msgs.msg import ManualControl, ParamValue, PositionTarget, RCIn, State
+from mavros_msgs.msg import OverrideRCIn, ParamValue, PositionTarget, State
 from nav_msgs.msg import Path
 from mavros_msgs.srv import CommandBool, ParamSet, SetMode
 from sensor_msgs.msg import BatteryState
@@ -33,7 +32,16 @@ from std_msgs.msg import String
 
 CH7_PRESSED, CH7_RELEASED = 1100, 1900
 CH18_OK, CH18_LOST = 1400, 800
-THROTTLE_CENTER = 500  # MANUAL_CONTROL 油门回中：POSCTL 下保持高度
+PWM_CENTER = 1500
+THROTTLE_CENTER = 500  # 油门杆量范围 [0, 1000]，回中时 POSCTL 下保持高度
+# 与机载一致的遥控和失控保护参数（方案 R-90）。SITL 默认没有映射摇杆通道；RC_CHAN_CNT 为 0 时 PX4 认为遥控未校准
+MACHINE_PARAMS = [
+    ("COM_RC_IN_MODE", 0), ("RC_CHAN_CNT", 18), ("RC_MAP_ROLL", 1), ("RC_MAP_PITCH", 2), ("RC_MAP_THROTTLE", 3),
+    ("RC_MAP_YAW", 4),
+    ("RC_FAILS_THR", 0), ("COM_RC_OVERRIDE", 1), ("COM_RC_STICK_OV", 30.0), ("COM_RC_LOSS_T", 5.0),
+    ("NAV_RCL_ACT", 1), ("COM_RCL_EXCEPT", 5), ("COM_FAIL_ACT_T", 5.0), ("COM_OBL_RC_ACT", 0),
+    ("COM_OF_LOSS_T", 1.0), ("NAV_DLL_ACT", 0), ("COM_LOW_BAT_ACT", 0),
+]
 # SIH 中 OFFBOARD、AUTO.LAND 的位置保持误差约 0.3 m（平均）～0.7 m（最大），与本模块的 setpoint 格式无关
 # （只发位置时也一样），POSCTL 悬停在 0.1 m 以内。所以这两个距离只能放宽到这里
 LANDED_NEAR_M = 1.5    # 在返航终点附近降落、经过退出位置的水平距离上限
@@ -87,6 +95,7 @@ class World:
         self.track = []        # (t, 节点状态, 位置, setpoint)，写到日志目录供分析
         self.stick = [0, 0, THROTTLE_CENTER, 0]  # x 向前、y 向右、z 油门、r 偏航
         self.link_ok = True
+        self.rc_frames = True  # 接收机断线（F8）时为假，遥控帧完全中断
         self.ch7_pressed = False
         self.battery = 0.9
         self.first_failsafe_t = None  # 第一帧失控帧的时间（ROS 时间）
@@ -97,8 +106,7 @@ class World:
         rospy.Subscriber("/px4_backtrack/status", String, self._on_status)
         rospy.Subscriber("/px4_backtrack/debug/trajectory", Path, self._on_path)
         rospy.Subscriber("/mavros/setpoint_raw/local", PositionTarget, self._on_setpoint)
-        self._stick_pub = rospy.Publisher("/mavros/manual_control/send", ManualControl, queue_size=10)
-        self._rc_pub = rospy.Publisher("/sitl/rc_in", RCIn, queue_size=10)
+        self._rc_pub = rospy.Publisher("/mavros/rc/override", OverrideRCIn, queue_size=10)
         self._battery_pub = rospy.Publisher("/sitl/battery", BatteryState, queue_size=10)
         self._set_mode = service("/mavros/set_mode", SetMode)
         threading.Thread(target=self._stream, daemon=True).start()
@@ -177,8 +185,13 @@ class World:
         self.log("链路恢复" if ok else "链路丢失（接收机失控）")
         self.link_ok = ok
 
+    def stop_rc_frames(self):
+        """接收机断线（F8）：遥控帧完全中断"""
+        self.log("遥控帧中断（接收机断线）")
+        self.rc_frames = False
+
     def _stream(self):
-        """50 Hz 发摇杆和遥控帧，1 Hz 发电量。失控时接收机输出回中的摇杆，CH7 保持失控瞬间的值。"""
+        """50 Hz 发遥控帧，1 Hz 发电量。失控时接收机输出回中的摇杆，CH7 保持失控瞬间的值。"""
         rate = rospy.Rate(50)
         k = 0
         while not rospy.is_shutdown():
@@ -187,17 +200,15 @@ class World:
                 self._held_ch7 = self.ch7_pressed
             elif self.first_failsafe_t is None:
                 self.first_failsafe_t = rospy.get_time()
-            stick = ManualControl()
-            stick.x, stick.y, stick.z, stick.r = self.stick if link_ok else [0, 0, THROTTLE_CENTER, 0]
-            rc = RCIn()
-            rc.header.stamp = rospy.Time.now()
-            channels = [1500] * 18
+            x, y, z, r = self.stick if link_ok else [0, 0, THROTTLE_CENTER, 0]
+            channels = [PWM_CENTER] * 18
+            channels[0], channels[1], channels[3] = PWM_CENTER + y // 2, PWM_CENTER + x // 2, PWM_CENTER + r // 2
+            channels[2] = 1000 + z
             channels[6] = CH7_PRESSED if (self.ch7_pressed if link_ok else self._held_ch7) else CH7_RELEASED
             channels[17] = CH18_OK if link_ok else CH18_LOST
-            rc.channels = channels
             try:
-                self._stick_pub.publish(stick)
-                self._rc_pub.publish(rc)
+                if self.rc_frames:
+                    self._rc_pub.publish(OverrideRCIn(channels=channels))
                 if k % 50 == 0:
                     battery = BatteryState()
                     battery.header.stamp = rospy.Time.now()
@@ -234,15 +245,23 @@ class Events:
         return bool(self.find("alert", alert, "on"))
 
 
-def ulog_modes():
-    """本次飞行 PX4 ULog 中依次出现的飞行模式（上锁后 ULog 才写完）"""
+def ulog_data(topic):
+    """本次飞行 PX4 ULog 中一个话题的数据（上锁后 ULog 才写完）"""
     from pyulog import ULog
 
     path = max(glob.glob("/px4/build/px4_sitl_default/rootfs/log/*/*.ulg"), key=os.path.getmtime)
-    status = ULog(path, ["vehicle_status"]).data_list[0].data
-    names = {1: "ALTCTL", 2: "POSCTL", 4: "AUTO.LOITER", 14: "OFFBOARD", 18: "AUTO.LAND"}
+    return ULog(path, [topic]).data_list[0].data
+
+
+def ulog_modes():
+    """本次飞行 PX4 ULog 中，解锁期间依次出现的飞行模式"""
+    names = {1: "ALTCTL", 2: "POSCTL", 4: "AUTO.LOITER", 5: "AUTO.RTL", 12: "DESCEND", 14: "OFFBOARD",
+             18: "AUTO.LAND"}
+    status = ulog_data("vehicle_status")
     modes = []
-    for nav in status["nav_state"]:
+    for nav, arming in zip(status["nav_state"], status["arming_state"]):
+        if arming != 2:  # ARMING_STATE_ARMED
+            continue
         name = names.get(int(nav), str(int(nav)))
         if not modes or modes[-1] != name:
             modes.append(name)
@@ -281,7 +300,8 @@ class Checks:
 
 def take_off(w, airborne=True):
     """POSCTL 下解锁（油门最低），起飞到约 3 m，等到节点开始录制；返回录制起点"""
-    set_param("COM_RC_IN_MODE", 1)        # 只用 MAVLink 摇杆
+    for name, value in MACHINE_PARAMS:
+        set_param(name, value)
     set_param("COM_DISARM_PRFLT", -1.0)   # 在地面解锁后不自动上锁（S13）
     if not wait_until(lambda: w.position is not None, 120):
         raise PrepareError("没有本地位置")
@@ -586,8 +606,55 @@ def s27(w, c, log_dir):
           f"申请 {len(offboard)} 次，飞控 {w.fcu.mode}")
 
 
+def check_rc_frame_loss(w, c, log_dir, stop_t):
+    """F8 的共同检查：本模块判定链路丢失、不退出；飞控判定了 RC 丢失，在 OFFBOARD 中不响应；
+    交接后进入的 Hold 被本模块重新请求 AUTO.LAND 接管，不来回切换；在返航终点附近降落"""
+    check_landed_at_start(w, c, timeout_s=200)
+    ev = Events(log_dir)
+    lost = ev.find("alert", "LINK_LOST", "on", after=stop_t)
+    delay = lost[0]["t"] - stop_t if lost else math.inf
+    c.add("帧中断后判定链路丢失", delay < 1.0, f"{delay:.2f} s")
+    exited = ev.find("state", to="Exited")
+    c.add("任务不被非预期结束", not exited, "退出" if exited else "未退出")
+    autoland = ev.requests("AUTO.LAND", after=stop_t)
+    land_t = autoland[0]["t"] if autoland else math.inf
+    left = [e for e in ev.find("fcu", after=stop_t) if e["t"] < land_t and e.get("from") == "OFFBOARD"]
+    c.add("返航中飞控不响应 RC 丢失", not left, f"请求 AUTO.LAND 之前离开 OFFBOARD {len(left)} 次")
+    time.sleep(2.0)  # ULog 在上锁后写完
+    c.add("飞控判定了 RC 丢失", any(ulog_data("failsafe_flags")["manual_control_signal_lost"]),
+          "failsafe_flags.manual_control_signal_lost")
+    modes = ulog_modes()
+    tail = modes[len(modes) - modes[::-1].index("OFFBOARD"):]
+    c.add("交接后的 Hold 被接管，不来回切换", "AUTO.LAND" in tail and tail.count("AUTO.LOITER") <= 1,
+          "ULog 中的模式：" + " → ".join(tail))
+    return modes
+
+
+def f8a(w, c, log_dir):
+    """F8a：低电量返航中遥控帧完全中断（接收机断线）：继续返航，交接后的 Hold 被接管"""
+    take_off(w)
+    fly_outbound(w)
+    start_low_battery_return(w)
+    time.sleep(3.0)
+    stop_t = rospy.get_time()
+    w.stop_rc_frames()
+    check_rc_frame_loss(w, c, log_dir, stop_t)
+
+
+def f8b(w, c, log_dir):
+    """F8b：录制中遥控帧完全中断：在飞控判定 RC 丢失（5 s）之前取得 OFFBOARD，悬停后返航降落"""
+    take_off(w)
+    fly_outbound(w)
+    stop_t = rospy.get_time()
+    w.stop_rc_frames()
+    modes = check_rc_frame_loss(w, c, log_dir, stop_t)
+    first = modes.index("OFFBOARD")
+    c.add("飞控判定 RC 丢失之前取得 OFFBOARD", modes[first - 1] == "POSCTL",
+          "ULog 中的模式：" + " → ".join(modes[:first + 1]))
+
+
 SCENARIOS = {"S1": s1, "S4": s4, "S6": s6, "S7": s7, "S11": s11, "S12": s12, "S13": s13,
-             "S15": s15, "S18": s18, "S21": s21, "S26": s26, "S27": s27}
+             "S15": s15, "S18": s18, "S21": s21, "S26": s26, "S27": s27, "F8a": f8a, "F8b": f8b}
 
 
 def main():

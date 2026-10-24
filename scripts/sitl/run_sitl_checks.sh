@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 在 Docker 中编译 PX4 SITL（SIH 四旋翼，无 Gazebo），配合 MAVROS：
 # - check：确认重构方案依赖的飞控行为（系统性分析 N1、N2）；
-# - scenarios：在同一个容器里编译并运行返航节点，回放方案第 11 节中涉及飞控交互的场景（第 14.3 节）。
+# - scenarios：在同一个容器里编译并运行返航节点，回放方案第 11 节中涉及飞控交互的场景和 F8（第 14.3 节）。
 # 用法：scripts/sitl/run_sitl_checks.sh [build|check|all]，默认 all
 #       scripts/sitl/run_sitl_checks.sh scenarios [场景编号 ...]，不带编号运行全部场景
 # 环境变量：
@@ -31,7 +31,7 @@ CORE_REF="${CORE_REF:-origin/dev}"
 CORE_EXPORT="$WORK/trajectory_core"
 IMAGE="backtrack-px4-sitl:${PX4_REF}"
 CONTAINER="backtrack_px4_sitl"
-SCENARIOS=(S1 S4 S6 S7 S11 S12 S13 S15 S18 S21 S26 S27)
+SCENARIOS=(S1 S4 S6 S7 S11 S12 S13 S15 S18 S21 S26 S27 F8a F8b)
 
 # SITL 用到的子模块；NuttX、Gazebo 等不需要的不拉
 SUBMODULES=(

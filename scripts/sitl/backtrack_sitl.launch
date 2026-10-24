@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <!-- SITL 场景（方案第 14.3 节，R-86）：MAVROS 连接 PX4 SIH，返航节点使用机载参数文件，只打开调试日志和逐拍记录。
-     遥控和电量由场景脚本发布，里程计用 MAVROS 的本地位置。 -->
+     遥控由场景脚本经 MAVROS 遥控覆盖送进 PX4，节点读 PX4 回传的 /mavros/rc/in；电量由场景脚本发布，
+     里程计用 MAVROS 的本地位置。 -->
 <launch>
   <arg name="log_dir" />
 
@@ -16,7 +17,6 @@
     <param name="debug_log_dir" value="$(arg log_dir)" />
     <param name="debug_log_trace" value="true" />
     <remap from="/Odometry_px4" to="/mavros/local_position/odom" />
-    <remap from="/mavros/rc/in" to="/sitl/rc_in" />
     <remap from="/mavros/battery" to="/sitl/battery" />
   </node>
 </launch>
