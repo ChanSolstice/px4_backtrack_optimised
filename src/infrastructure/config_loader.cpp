@@ -144,7 +144,12 @@ DebugLogConfig ConfigLoader::loadDebugLog(ros::NodeHandle& nh) {
 
 trajectory_core::TrajectoryConfig ConfigLoader::loadTrajectoryConfig(const std::string& path) {
   ROS_INFO("[ConfigLoader] Loading trajectory_core config from: %s", path.c_str());
-  return trajectory_core::TrajectoryConfig::loadFromYaml(path);
+  const auto config = trajectory_core::TrajectoryConfig::loadFromYaml(path);
+  // 启动时校验，运行时不再处理配置非法（第 7.5 节，R-88）
+  if (!config.validate()) {
+    throw std::runtime_error("invalid trajectory_core config: " + path);
+  }
+  return config;
 }
 
 }  // namespace infrastructure

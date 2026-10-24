@@ -246,6 +246,19 @@ if(CATKIN_ENABLE_TESTING)
     )
   endif()
 
+  catkin_add_gtest(test_config_loader
+    tests/unit/test_main.cpp
+    tests/unit/test_config_loader.cpp
+  )
+  if(TARGET test_config_loader)
+    target_link_libraries(test_config_loader
+      ${PROJECT_NAME}_lib
+      ${catkin_LIBRARIES}
+    )
+    target_compile_definitions(test_config_loader PRIVATE
+      BACKTRACK_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
+  endif()
+
   catkin_add_gtest(test_battery_monitor
     tests/unit/test_main.cpp
     tests/unit/test_battery_monitor.cpp
