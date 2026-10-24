@@ -17,16 +17,16 @@
 - 返航卡住时按超时升级（方案第 8.1 节）：准备 30 s、重新申请 10 s、进度停滞 60 s。超时后电量正常时保持并告警；确认低电量时先尝试继续返航，仍不能继续才原地降落（D32）。计时只在里程计新鲜时累计。
 - 到点悬停 5 s 后降落交接：链路正常时经 POSCTL 请求 AUTO.LAND，链路丢失时直接请求；飞控进入 AUTO.LAND 后让步到上锁。
 - 模式请求在单独线程中异步调用，未生效时每 1 s 重发，3 s 未生效告警。
-- 发布状态字符串、链路丢失和低电量；事件写 rosout，可选写入调试日志（`events.jsonl`）。
-- 可选导出规划 CSV，并在 rviz 中查看录制点和返航轨迹。
+- 发布状态字符串、链路丢失、低电量，以及 JSON 状态话题（控制权、任务、模式请求、告警码）；事件写 rosout，可选写入调试日志（事件、逐拍记录、规划 CSV）。
+- 可选在 rviz 中查看录制点和返航轨迹，可选用 rosbag 录原始话题。
 
 ## 仓库现状
 
 当前仓库的主实现是 C++ 版本，入口为 [`src/backtrack_node.cpp`](src/backtrack_node.cpp)。
 
-本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线、R4 后台规划、R5 退出后截断轨迹、R5b 安全距离（D30）、R5c 原地悬停时找点接上（D33）、R6 超时与升级已完成，节点运行的是新状态机，dev 的暂停/恢复语义已删除。R7 上报与调试日志完善、R8 文档与部署还没有实施，现在与方案的差距见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+本分支（`feat/return-state-policy`）按[返航触发与状态机重构方案](doc/design/返航触发与状态机重构方案.md)分阶段实施（方案第 13 节）。R1 条件层、R2 状态机核心、R3 UseCase 接线、R4 后台规划、R5 退出后截断轨迹、R5b 安全距离（D30）、R5c 原地悬停时找点接上（D33）、R6 超时与升级、R7 上报与调试日志已完成，节点运行的是新状态机，dev 的暂停/恢复语义已删除。R8 文档与部署还没有实施，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
 
-本分支还没有实飞。完整 SITL 已完成（PX4 v1.15.4 SIH，12 个场景全部通过，见[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)第 4 节）；按方案，R7 完成并通过台架检查后再上实飞。
+本分支还没有实飞。完整 SITL 已完成（PX4 v1.15.4 SIH，12 个场景全部通过，见[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)第 4 节）；按方案，通过台架检查（方案第 14.4 节）后再上实飞。
 
 ## 架构概览
 
@@ -72,6 +72,7 @@
 | `/px4_backtrack/state` | `std_msgs/String` | 状态字符串，含义见[前端对接文档](doc/reference/前端对接开发文档.md)第 3 节 |
 | `/status_rc_loss` | `std_msgs/Bool` | 链路丢失：CH18 失控帧累计 1 s 或 RC 消息中断 0.35 s 时为 `true`，持续正常 2 s 后回到 `false` |
 | `/px4_backtrack/low_battery` | `std_msgs/Bool` | 低电量，确认后锁存到下一次解锁 |
+| `/px4_backtrack/status` | `std_msgs/String` | JSON，每拍一条：状态、控制权、任务编号和原因、模式请求、告警码，字段见[前端对接文档](doc/reference/前端对接开发文档.md) |
 | `/px4_backtrack/debug/waypoints` | `visualization_msgs/MarkerArray` | 录制航点可视化（latched，需启用 `debug_enable_rviz_publish`） |
 | `/px4_backtrack/debug/trajectory` | `nav_msgs/Path` | 返航轨迹可视化（latched，需启用 `debug_enable_rviz_publish`） |
 
@@ -85,7 +86,7 @@
 
 - 坐标约定使用 ENU；`SetpointPublisher` 将 ENU 值直接填入 `FRAME_LOCAL_NED` 的 `PositionTarget`，依赖 MAVROS 完成坐标转换。
 - `/Odometry_px4` 的 pose 位于父 ENU，twist 按 `nav_msgs/Odometry` 语义位于 `child_frame_id`；订阅适配器会先将线速度旋转到父 ENU，再交给终点和回归判定。
-- 告警码目前只出现在事件中（rosout 和调试日志）；JSON 状态话题 `/px4_backtrack/status` 在 R7 加入。
+- 告警码在 `/px4_backtrack/status` 中上报，也写 rosout 和调试日志。
 
 ## 配置
 
@@ -109,7 +110,7 @@
 - 回归：`rejoin_trigger_dist_m`、`rejoin_success_dist_m`、`rejoin_v_max_m_s`、`rejoin_lookahead_time_s`、`rejoin_trigger_hold_s`、`rejoin_success_hold_s`
 - 降落：`landing_hover_s`
 - 轨迹配置路径：`trajectory_config_path`
-- 调试：`debug_enable_csv_dump`、`debug_csv_output_dir`、`debug_trajectory_sample_dt`、`debug_enable_rviz_publish`、`debug_log_enable`、`debug_log_dir`
+- 调试：`debug_trajectory_sample_dt`、`debug_enable_rviz_publish`、`debug_log_enable`、`debug_log_dir`、`debug_log_keep_runs`、`debug_log_trace`
 
 几点约定：
 
@@ -158,41 +159,33 @@ source devel/setup.bash
 roslaunch px4_backtrack_optimised backtrack.launch
 ```
 
-`launch/backtrack.launch` 会加载 [`config/backtrack_params.yaml`](config/backtrack_params.yaml)。参数没有代码默认值，调整时直接修改该 YAML。
+`launch/backtrack.launch` 会加载 [`config/backtrack_params.yaml`](config/backtrack_params.yaml)。参数没有代码默认值，调整时直接修改该 YAML；缺少参数或 `trajectory_config.yaml` 校验不通过时节点启动失败。
+
+需要原始话题时加上 `record_bag:=true`，用 `rosbag record` 录输入、setpoint 和本模块的话题，每 1 GB 分一个文件。`bag_dir` 默认 `~/.ros`，须已存在：
+
+```bash
+roslaunch px4_backtrack_optimised backtrack.launch record_bag:=true bag_dir:=$HOME/Projects/backtrack_ws/debug
+```
 
 ## 调试与可视化
 
-三类调试输出都由 `backtrack_params.yaml` 开关控制。当前配置打开了 CSV 导出和 rviz 发布，关闭了调试日志。
+调试日志和 rviz 发布由 `backtrack_params.yaml` 开关控制，录包见上面的启动参数。当前配置打开了 rviz 发布，关闭了调试日志。
 
 ### 调试日志
 
-设置 `debug_log_enable: true` 后，节点每次启动在 `debug_log_dir`（留空为 `~/.ros/backtrack_logs`，非空时为绝对路径或以 `~/` 开头）下建一个运行目录 `run_YYYYMMDD_HHMMSS/`，把事件一行一个写入 `events.jsonl`：
+设置 `debug_log_enable: true` 后，节点每次启动在 `debug_log_dir`（留空为 `~/.ros/backtrack_logs`，非空时为绝对路径或以 `~/` 开头）下建一个运行目录 `run_YYYYMMDD_HHMMSS/`，只保留最近 `debug_log_keep_runs`（20）个。写盘在后台线程；写失败时停止写日志并告警 `DEBUG_LOG_FAILED`，返航不受影响。试飞期间建议打开。目录里有：
 
-- 第一行是生效参数和本模块的提交号；
-- 之后是状态转换（带规则编号和原因）、飞控模式和解锁变化、条件边沿、CH7 指令、任务开始与结束、规划的提交、结果、超时和取消、模式请求、自身断流，以及告警的出现和消失；
-- 写盘在后台线程；写失败时停止写日志并告警 `DEBUG_LOG_FAILED`，返航不受影响。
-
-试飞期间建议打开。逐拍记录、保留策略和查看脚本在 R7 加入，目前日志目录不会自动清理。
-
-### CSV 文件导出
-
-设置 `debug_enable_csv_dump: true` 后，轨迹生成成功时自动将录制航点和采样轨迹写入 CSV：
-
-- 输出目录默认为 `~/.ros/backtrack_debug/`，可通过 `debug_csv_output_dir` 指定
-- 文件名带时间戳：`waypoints_YYYYMMDD_HHMMSS.csv`、`trajectory_YYYYMMDD_HHMMSS.csv`
-- 采样步长由 `debug_trajectory_sample_dt` 控制（当前 0.1 s）
-
-使用 Python 脚本查看：
+- `events.jsonl`：第一行是生效参数和本模块、`trajectory_core` 的提交号；之后是状态转换（带规则编号和原因）、飞控模式和解锁变化、条件边沿、CH7 指令、任务开始与结束、规划的提交、结果、超时和取消、模式请求、自身断流，以及告警的出现和消失；
+- `trace.csv`（`debug_log_trace: true` 时，约 30 MB/小时）：每拍一行，条件快照和本拍输出，可以用 PlotJuggler 打开，也可以回放到状态机复现当时的决策；
+- `plan_<n>_input.csv`、`plan_<n>_trajectory.csv`：第 n 次规划的输入（每次都写）和采样轨迹（规划成功时写，采样步长 `debug_trajectory_sample_dt`）。
 
 ```bash
-# 自动选取最新一组文件
-python3 scripts/plot_debug_csv.py --latest
+# 按时间线查看事件；-t 按类型过滤，-m 只看某个任务
+python3 scripts/analysis/show_debug_log.py ~/Projects/backtrack_ws/debug/run_20261023_140023 -t state,control,alert
 
-# 指定文件
-python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
+# 绘制最近一次规划的输入和轨迹（依赖 matplotlib、numpy）
+python3 scripts/plot_debug_csv.py --dir ~/Projects/backtrack_ws/debug/run_20261023_140023
 ```
-
-脚本依赖 `matplotlib` 和 `numpy`，绘制 3D 路径对比、俯视图、高度剖面和偏航剖面。
 
 ### rviz 实时可视化
 
@@ -216,17 +209,17 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 ├── include/px4_backtrack/       # 头文件，分层同 src/
 ├── src/
 │   ├── adapters/                # ROS 订阅、发布、异步 set_mode、可视化
-│   ├── application/             # BacktrackUseCase、ModeCommander
+│   ├── application/             # BacktrackUseCase、ModeCommander、后台规划、上报格式
 │   ├── domain/                  # 条件层、ReturnStateMachine、录制、轨迹会话、航点降级、回归
 │   ├── infrastructure/          # 参数加载、调试日志、规划 CSV 导出
 │   └── backtrack_node.cpp
-├── tests/unit/                  # gtest 单测（16 个文件，见单元测试文档）
+├── tests/unit/                  # gtest 单测（17 个文件，见单元测试文档）
 ├── scripts/
 │   ├── docker/                  # ROS Noetic 容器编译与单测
-│   ├── analysis/                # 闭环危害场景、错误注入检查
+│   ├── analysis/                # 闭环危害场景、错误注入检查、调试日志查看
 │   ├── bench/                   # 轨迹生成耗时基准
-│   ├── sitl/                    # PX4 SITL 飞控行为检查
-│   └── plot_debug_csv.py        # 调试 CSV 绘图
+│   ├── sitl/                    # PX4 SITL 飞控行为检查和返航场景
+│   └── plot_debug_csv.py        # 规划 CSV 绘图
 └── doc/
     ├── README.md                # 文档导航
     ├── reference/               # 系统说明、前端对接
@@ -240,11 +233,11 @@ python3 scripts/plot_debug_csv.py waypoints.csv trajectory.csv
 
 | 层次 | 命令 | 说明 |
 | --- | --- | --- |
-| 单元测试 | `scripts/docker/run_tests.sh amd64` | 在全新的 ROS Noetic 容器中编译并运行全部单测（205 个）和 trajectory_core 的单测；参数换成 `arm64` 时在 QEMU 中按机载架构复核（本机编译加单测约 30 分钟） |
-| 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误（61 种） |
-| 闭环危害场景 | `scripts/analysis/run_hazard_scenarios.sh amd64` | 假飞控驱动真实 `BacktrackUseCase`，场景 H01–H14 |
+| 单元测试 | `scripts/docker/run_tests.sh amd64` | 在全新的 ROS Noetic 容器中编译并运行全部单测（233 个）和 trajectory_core 的单测；参数换成 `arm64` 时在 QEMU 中按机载架构复核（本机编译加单测约 30 分钟） |
+| 错误注入 | `scripts/analysis/run_mutation_check.sh amd64` | 检验单测能否发现典型错误（90 种） |
+| 闭环危害场景 | `scripts/analysis/run_hazard_scenarios.sh amd64` | 假飞控驱动真实 `BacktrackUseCase`，场景 H01–H16 |
 | 规划耗时 | `scripts/bench/run_gen_bench.sh amd64 10 30` | 轨迹生成耗时随录制时长的增长 |
-| SITL | `scripts/sitl/run_sitl_checks.sh` | PX4 v1.15.4 SITL 中确认方案依赖的飞控行为（N1、N2） |
+| SITL | `scripts/sitl/run_sitl_checks.sh [check\|scenarios]` | PX4 v1.15.4 SITL 中确认方案依赖的飞控行为（N1、N2），运行本节点回放 12 个返航场景 |
 
 本机需要 sudo 运行 Docker 时设置 `DOCKER="sudo docker"`。后三类复用单元测试留下的容器，先跑一次单元测试。方法与执行记录见[单元测试文档](doc/testing/单元测试文档.md)和[闭环仿真与 SITL 测试](doc/testing/闭环仿真与SITL测试.md)。
 

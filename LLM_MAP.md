@@ -10,8 +10,8 @@
 4. 所有状态转移都在 [`return_state_machine.cpp`](src/domain/return_state_machine.cpp) 的 `step()` 中完成，规则编号对应方案第 6.3 节。不要在 UseCase 里改状态或加分支。
 5. 条件层（`link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor`）只做检测，输出电平和带编号的按键指令，是否响应由状态机决定。
 6. 设计变化先改方案文档，并在第 15 节记一条审核记录（R-xx），再改代码；用户已确认的决策是 D1–D33。
-7. 本分支实施到 R6（D30 安全距离、D33 找点接上、第 8.1 节超时升级）。JSON 状态话题和日志保留（R7）还没有做，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
-8. 参数全部在 [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 中必填，代码中没有默认值；新增参数要同时改 config 结构体、[`config_loader.cpp`](src/infrastructure/config_loader.cpp) 和 YAML。
+7. 本分支实施到 R7（D30 安全距离、D33 找点接上、第 8.1 节超时升级、JSON 状态话题和调试日志完善）。剩下 R8 文档与部署，见[系统总览](doc/reference/SYSTEM_OVERVIEW.md)第 9 节。
+8. 参数全部在 [`config/backtrack_params.yaml`](config/backtrack_params.yaml) 中必填，代码中没有默认值；新增参数要同时改 config 结构体、[`config_loader.cpp`](src/infrastructure/config_loader.cpp) 和 YAML。`trajectory_core` 的配置在启动时校验，非法则节点退出，运行时不处理配置非法。
 9. 用户要求整体简洁、避免过度防御：不加初值已保证的标志、不重复复位、不为小概率场景堆保护；不了解下方环境时，悬停优先于降落。
 
 ## 每个控制周期
@@ -28,10 +28,11 @@
 
 ### 入口与应用层
 
-- [`src/backtrack_node.cpp`](src/backtrack_node.cpp)：加载参数、创建适配器和 UseCase、驱动控制周期、写事件。
+- [`src/backtrack_node.cpp`](src/backtrack_node.cpp)：加载参数、创建适配器和 UseCase、驱动控制周期、发布状态话题、写事件和逐拍记录。
 - [`backtrack_usecase`](src/application/backtrack_usecase.cpp)：条件组装、命令执行、setpoint 计算、自身断流判定（R-69）、偏离与回归的持续判定。
 - [`mode_commander`](src/application/mode_commander.cpp)：模式请求的发送、重发、生效观察和失败告警（方案第 7.7 节，R-70）。
-- [`planning_worker`](src/application/planning_worker.cpp)：后台规划线程、失败分类与航点降级、规划成功后的 CSV 和 RViz 导出（方案第 7.5 节，R-76）。单测用不启动线程的方式，由 `runPending()` 决定结果到达的时刻。
+- [`planning_worker`](src/application/planning_worker.cpp)：后台规划线程、失败分类与航点降级、规划 CSV（输入每次、轨迹在就绪时）和 RViz 导出（方案第 7.5 节，R-76）。单测用不启动线程的方式，由 `runPending()` 决定结果到达的时刻。
+- [`tick_report`](src/application/tick_report.cpp)：状态话题 `/px4_backtrack/status` 的 JSON；逐拍记录 `trace.csv` 的表头、行和解析（`parseTraceRow` 用于回放到 `step()`）。条件快照的列只有一份字段表 `forEachConditionField`，`Conditions` 加字段时要加在这里（方案第 9 节，R-88）。
 
 ### 领域层
 
@@ -59,11 +60,11 @@
 ### 适配层与基础设施
 
 - [`ros_subscribers`](src/adapters/ros_subscribers.cpp)：`/mavros/state`（含 `connected`）、`/mavros/extended_state`、`/Odometry_px4`（速度旋转到父 ENU）、`/mavros/rc/in`、`/mavros/battery`。
-- [`ros_publishers`](src/adapters/ros_publishers.cpp)：`/mavros/setpoint_raw/local`、`/px4_backtrack/state`、`/status_rc_loss`、`/px4_backtrack/low_battery`。
+- [`ros_publishers`](src/adapters/ros_publishers.cpp)：`/mavros/setpoint_raw/local`、`/px4_backtrack/state`、`/status_rc_loss`、`/px4_backtrack/low_battery`、`/px4_backtrack/status`。
 - [`ros_services`](src/adapters/ros_services.cpp)：异步 `set_mode`。
-- [`debug_publishers`](src/adapters/debug_publishers.cpp)、[`debug_dumper`](src/infrastructure/debug_dumper.cpp)：规划结果的可视化和 CSV。
-- [`config_loader`](src/infrastructure/config_loader.cpp)：参数必填。
-- [`debug_log`](src/infrastructure/debug_log.cpp)：调试日志（运行目录、`events.jsonl`、后台写线程、有界队列）。
+- [`debug_publishers`](src/adapters/debug_publishers.cpp)、[`debug_dumper`](src/infrastructure/debug_dumper.cpp)：规划结果的可视化；规划 CSV 写到调试日志的运行目录（`plan_<n>_input.csv`、`plan_<n>_trajectory.csv`）。
+- [`config_loader`](src/infrastructure/config_loader.cpp)：参数必填，启动时校验 `trajectory_core` 配置。
+- [`debug_log`](src/infrastructure/debug_log.cpp)：调试日志（运行目录及保留个数、`events.jsonl`、`trace.csv`、后台写线程、有界队列）。
 
 ### Scripts
 
@@ -71,7 +72,8 @@
 - [`scripts/analysis/`](scripts/analysis/)：闭环危害场景（假飞控驱动真实 UseCase，H01–H16）和错误注入检查，复用上面的容器。
 - [`scripts/bench/`](scripts/bench/)：轨迹生成耗时基准。
 - [`scripts/sitl/`](scripts/sitl/)：PX4 v1.15.4 SITL（SIH）中确认方案依赖的飞控行为（N1、N2），以及运行本节点回放方案第 11 节的场景（`run_sitl_checks.sh scenarios`）。
-- [`scripts/plot_debug_csv.py`](scripts/plot_debug_csv.py)：规划 CSV 绘图。
+- [`scripts/analysis/show_debug_log.py`](scripts/analysis/show_debug_log.py)：按时间线查看 `events.jsonl`。
+- [`scripts/plot_debug_csv.py`](scripts/plot_debug_csv.py)：规划 CSV 绘图（`--dir <运行目录>`）。
 
 ## 行为语义上的关键点
 
@@ -109,7 +111,7 @@
 
 ### 7. 规划失败的分流
 
-点过近 → 原地降落；配置非法 → 保持；其他失败 → 航点降级；航点降级也失败 → 原地降落；点数不足 → 最多等 3 s 补点，仍不足则原地降落；规划 30 s 未完成 → 丢弃结果，在控制线程构建航点降级。规划在后台线程，控制周期不等它；悬停期间到达的结果在悬停结束后才处理（D3）。
+点过近 → 原地降落；其他失败 → 航点降级；航点降级也失败 → 原地降落；点数不足 → 最多等 3 s 补点，仍不足则原地降落；规划 30 s 未完成 → 丢弃结果，在控制线程构建航点降级。规划在后台线程，控制周期不等它；悬停期间到达的结果在悬停结束后才处理（D3）。
 
 ### 8. Rejoin 是同一路径跟随器的低速模式
 
@@ -137,7 +139,7 @@
 | 改模式请求 | `mode_commander.cpp`、`ros_services.cpp` |
 | 改话题名或消息类型 | `ros_subscribers`、`ros_publishers`、`backtrack_node.cpp`、`launch/backtrack.launch`，并同步前端对接文档 |
 | 改参数 | 对应 config 结构体、`config_loader.cpp`、`backtrack_params.yaml`；闭环场景的 `productionConfig()` 和单测的 `makeConfig()` |
-| 改调试日志 | `debug_log.cpp`、`backtrack_node.cpp` |
+| 改调试日志 | `debug_log.cpp`、`backtrack_node.cpp`；逐拍记录和状态话题的格式在 `tick_report.cpp`，同步前端对接文档 |
 
 ## 文档可信度排序
 
@@ -146,7 +148,7 @@
 3. [`doc/reference/SYSTEM_OVERVIEW.md`](doc/reference/SYSTEM_OVERVIEW.md)：当前实现的说明
 4. [`doc/testing/`](doc/testing/)：测试方法和执行记录
 
-重构要达到的行为（R7、R8 还没有实现）以方案为准。`doc/testing/` 中注明"只适用于 dev"的文档不描述当前行为。
+重构要达到的行为（R8 还没有实现）以方案为准。`doc/testing/` 中注明"只适用于 dev"的文档不描述当前行为。
 
 ## 容易踩坑的地方
 
@@ -163,8 +165,8 @@
 - [`test_link_monitor`](tests/unit/test_link_monitor.cpp)、[`test_pilot_input`](tests/unit/test_pilot_input.cpp)、[`test_battery_monitor`](tests/unit/test_battery_monitor.cpp)、[`test_airborne_monitor`](tests/unit/test_airborne_monitor.cpp)：条件层
 - [`test_return_state_machine`](tests/unit/test_return_state_machine.cpp)：状态机场景
 - [`test_return_state_machine_invariants`](tests/unit/test_return_state_machine_invariants.cpp)：随机游走和单步穷举，检查安全约束 SC1–SC7、SC9
-- [`test_backtrack_usecase`](tests/unit/test_backtrack_usecase.cpp)：UseCase 闭环场景，用简化的飞控与链路模型覆盖方案第 11 节的场景
-- [`test_mode_commander`](tests/unit/test_mode_commander.cpp)、[`test_planning_worker`](tests/unit/test_planning_worker.cpp)、[`test_debug_log`](tests/unit/test_debug_log.cpp)：模式请求、后台规划、调试日志
+- [`test_backtrack_usecase`](tests/unit/test_backtrack_usecase.cpp)：UseCase 闭环场景，用简化的飞控与链路模型覆盖方案第 11 节的场景；也包括状态话题的 JSON（S22）和逐拍记录回放（S31）
+- [`test_mode_commander`](tests/unit/test_mode_commander.cpp)、[`test_planning_worker`](tests/unit/test_planning_worker.cpp)、[`test_debug_log`](tests/unit/test_debug_log.cpp)、[`test_config_loader`](tests/unit/test_config_loader.cpp)：模式请求、后台规划、调试日志、配置校验
 - [`test_trajectory_session`](tests/unit/test_trajectory_session.cpp)、[`test_rejoin_policy`](tests/unit/test_rejoin_policy.cpp)、[`test_waypoint_fallback_session`](tests/unit/test_waypoint_fallback_session.cpp)、[`test_recording_buffer`](tests/unit/test_recording_buffer.cpp)、[`test_path_yaw`](tests/unit/test_path_yaw.cpp)、[`test_ros_subscribers`](tests/unit/test_ros_subscribers.cpp)：执行层与适配
 
 运行：`DOCKER="sudo docker" scripts/docker/run_tests.sh amd64`；之后 `scripts/analysis/run_mutation_check.sh amd64`、`scripts/analysis/run_hazard_scenarios.sh amd64`。

@@ -1,6 +1,6 @@
 # 系统总览
 
-本文按代码现状说明 `px4_backtrack_optimised` 的目标、接口、处理流程和模块划分，适用于 `feat/return-state-policy` 分支实施到 R6 的版本（2026-10-23）。设计依据和完整规则见[返航触发与状态机重构方案](../design/返航触发与状态机重构方案.md)（下称"方案"）；还没有实现的部分见第 9 节。
+本文按代码现状说明 `px4_backtrack_optimised` 的目标、接口、处理流程和模块划分，适用于 `feat/return-state-policy` 分支实施到 R7 的版本（2026-10-23）。设计依据和完整规则见[返航触发与状态机重构方案](../design/返航触发与状态机重构方案.md)（下称"方案"）；还没有实现的部分见第 9 节。
 
 ## 1. 目标与边界
 
@@ -34,10 +34,18 @@
 | `/px4_backtrack/state` | `std_msgs/String` | 状态字符串（第 6.2 节） |
 | `/status_rc_loss` | `std_msgs/Bool` | 链路丢失：CH18 漏桶确认或 RC 消息超时，恢复后清除 |
 | `/px4_backtrack/low_battery` | `std_msgs/Bool` | 低电量，锁存到新的飞行周期 |
+| `/px4_backtrack/status` | `std_msgs/String`（JSON） | 每拍一条：状态、控制权、飞行周期和任务编号、任务原因、模式请求的意图和结果、告警码（方案第 9.1 节） |
 | `/px4_backtrack/debug/waypoints`、`/px4_backtrack/debug/trajectory` | `MarkerArray`、`nav_msgs/Path` | 可选：录制点和返航轨迹（latched） |
 | `/mavros/set_mode` | `mavros_msgs/SetMode`（服务） | 请求 `OFFBOARD`、`POSCTL`、`AUTO.LAND`，在单独线程中异步调用 |
 
-告警（第 6.4 节）目前只出现在事件中：rosout 打印告警出现，调试日志记录出现和消失。JSON 状态话题 `/px4_backtrack/status` 在 R7 加入。
+告警（第 6.4 节）在 `/px4_backtrack/status` 中按告警码列出；rosout 打印告警出现，调试日志记录出现和消失。状态话题示例：
+
+```json
+{"t":1236.050,"flight":1,"state":"ReturnActive","control":"owned","mission":1,
+ "reason":"LOW_BATTERY","mode_request":"OFFBOARD","mode_result":"applied","alerts":["LINK_LOST","LOW_BATTERY"]}
+```
+
+`mission` 是本次飞行最近一次任务的编号（没有为 0），`reason` 为 `PILOT_REQUEST` / `LOW_BATTERY` / `LINK_LOST` / `NONE`；`mode_request` 是当前模式意图（没有为空串），`mode_result` 为 `none` / `pending` / `applied` / `failed`。
 
 ### 2.3 坐标与 setpoint 约定
 
@@ -70,7 +78,7 @@
 6. 跟随阶段且持有控制权时，按实际位置推进路径进度，更新偏离和回归判定。
 7. 按 setpoint 策略计算目标；记录本拍是否发布（自身断流判定）。
 8. 把模式意图交给 `ModeCommander`，得到本拍要发出的请求。
-9. 发布状态、setpoint，异步发出模式请求；事件写 rosout 和调试日志。
+9. 发布状态（含 JSON 状态话题）、setpoint，异步发出模式请求；事件写 rosout 和调试日志，打开逐拍记录时再写一行 `trace.csv`。
 
 执行层的事实（偏离、到点等）因此比位置晚一拍（50 ms），对持续判定没有影响（R-71）。
 
@@ -78,19 +86,20 @@
 
 | 层 | 文件 | 职责 |
 | --- | --- | --- |
-| 入口 | `src/backtrack_node.cpp` | 加载参数、创建适配器和 UseCase、驱动控制周期、把事件写到 rosout 和调试日志 |
+| 入口 | `src/backtrack_node.cpp` | 加载参数、创建适配器和 UseCase、驱动控制周期、发布状态话题、把事件和逐拍记录写到 rosout 和调试日志 |
 | 应用 | `application/backtrack_usecase` | 组装条件、调用状态机、执行命令、计算 setpoint；不访问 ROS |
 | 应用 | `application/mode_commander` | 模式请求的发送、重发、观察生效和失败告警（第 7.4 节） |
-| 应用 | `application/planning_worker` | 后台规划：单工作线程，失败分类与航点降级，规划成功后导出 CSV 和 RViz（第 7.2 节） |
+| 应用 | `application/planning_worker` | 后台规划：单工作线程，失败分类与航点降级，导出规划 CSV 和 RViz（第 7.2 节） |
+| 应用 | `application/tick_report` | 每拍的上报格式：状态话题的 JSON；逐拍记录的表头、行和解析（共用一份字段表） |
 | 领域·条件层 | `domain/link_monitor`、`pilot_input`、`battery_monitor`、`airborne_monitor` | 只做检测，输出电平和带编号的按键指令（第 5 节） |
 | 领域·决策 | `domain/return_conditions.hpp`、`return_state_machine` | 条件快照；三个并行区域的状态机（第 6 节） |
 | 领域·执行 | `domain/recording_buffer`、`trajectory_session`、`waypoint_fallback_session`、`rejoin_policy`、`path_yaw` | 录制、规划、路径跟随、航点降级、回归限速、切向 yaw（第 7 节） |
 | 适配 | `adapters/ros_subscribers`、`ros_publishers`、`ros_services`、`debug_publishers` | ROS 消息转换、异步 `set_mode`、可视化 |
-| 基础设施 | `infrastructure/config_loader`、`debug_log`、`debug_dumper` | 参数加载（全部必填）、调试日志、规划 CSV |
+| 基础设施 | `infrastructure/config_loader`、`debug_log`、`debug_dumper` | 参数加载（全部必填，启动时校验 `trajectory_core` 配置）、调试日志、规划 CSV |
 
 ## 4. 参数
 
-运行参数全部在 [`config/backtrack_params.yaml`](../../config/backtrack_params.yaml)，代码中没有默认值，缺少任何一项时节点启动失败；`publish_hz` 由节点读取。`trajectory_core` 的参数在 [`config/trajectory_config.yaml`](../../config/trajectory_config.yaml)，说明见该库的参数配置指南。各参数的含义和建议值见方案第 10 节。
+运行参数全部在 [`config/backtrack_params.yaml`](../../config/backtrack_params.yaml)，代码中没有默认值，缺少任何一项时节点启动失败；`publish_hz` 由节点读取。`trajectory_core` 的参数在 [`config/trajectory_config.yaml`](../../config/trajectory_config.yaml)，说明见该库的参数配置指南；启动时校验，非法时节点同样启动失败。各参数的含义和建议值见方案第 10 节。
 
 ## 5. 条件层
 
@@ -155,7 +164,7 @@
 
 ### 6.4 告警与事件
 
-告警是电平（方案第 9.1 节的告警码），每拍由状态机统一计算，出现和消失都作为事件记录。事件包括三个区域的转换（带规则编号和原因）、飞控模式和解锁变化、条件边沿、CH7 指令、任务开始与结束、找点接上、规划的提交、结果、超时和取消、模式请求和自身断流。
+告警是电平（方案第 9.1 节的告警码），每拍由状态机统一计算，在状态话题中上报，出现和消失都作为事件记录。事件包括三个区域的转换（带规则编号和原因）、飞控模式和解锁变化、条件边沿、CH7 指令、任务开始与结束、找点接上、规划的提交、结果、超时和取消、模式请求和自身断流。
 
 ### 6.5 安全距离（D30）
 
@@ -191,22 +200,20 @@
 
 规划线程中的步骤：
 
-1. 校验 `trajectory_core` 配置；
-2. 空间抽稀：间距 `max(min_point_dist_m, ds_m × 0.5)`，距离不足的中间点直接丢弃，保留真实末点，用来压缩悬停形成的密集点；
-3. 逆序，按至少 0.20 m 的稳定弦长估计每点的返航切向 yaw；
-4. 时间戳镜像为 `t_end − t`，保持单调递增并保留原始采样间隔（只用于时间质量诊断，执行不按时间推进）；
-5. 调用 `trajectory_core` 生成轨迹，按下表处理结果；其他失败在规划线程构建航点降级；
-6. 规划成功且打开了导出时，在规划线程写 CSV、发布可视化话题，之后再交出结果。
+1. 空间抽稀：间距 `max(min_point_dist_m, ds_m × 0.5)`，距离不足的中间点直接丢弃，保留真实末点，用来压缩悬停形成的密集点；
+2. 逆序，按至少 0.20 m 的稳定弦长估计每点的返航切向 yaw；
+3. 时间戳镜像为 `t_end − t`，保持单调递增并保留原始采样间隔（只用于时间质量诊断，执行不按时间推进）；
+4. 调用 `trajectory_core` 生成轨迹，按下表处理结果；其他失败在规划线程构建航点降级；
+5. 打开调试日志时在规划线程写规划 CSV：输入每次都写，轨迹在就绪时写；打开可视化时发布录制点和轨迹。之后再交出结果。
 
 | 结果 | 规划状态 | 状态机的处理 |
 | --- | --- | --- |
 | 成功 | `Ready` | 准备阶段对准起始切向后开始跟随 |
 | 点过近（起终点重合） | `FailedTooClose` | 原地降落；有断点时原地悬停（第 6.5 节） |
-| 配置非法 | `FailedConfig` | 保持，由准备超时兜底（低电量时原地降落）；R7 起启动时校验 |
 | 其他失败 | `ReadyFallback` | 航点降级：逆序稀疏航点，逐点位置目标 |
 | 航点降级也构建失败 | `FailedFallback` | 原地降落；有断点时原地悬停 |
 
-失控任务的规划在 15 s 悬停期间进行，结果在悬停结束后才处理（D3）；30 分钟录制的规划约 4.7 s（本机），在悬停内完成。
+`trajectory_core` 的配置在启动时校验，非法则节点退出，运行时不会出现配置非法（R-88）。失控任务的规划在 15 s 悬停期间进行，结果在悬停结束后才处理（D3）；30 分钟录制的规划约 4.7 s（本机），在悬停内完成。
 
 ### 7.3 路径跟随
 
@@ -227,16 +234,17 @@ UseCase 记录每拍是否发布 setpoint：只在连续发布期间计算间隔
 ## 8. 调试与观测
 
 - **rosout：** 区域转换、飞控模式变化、任务和规划事件打 INFO；告警出现、模式请求失败、断流打 WARN。
-- **调试日志（`debug_log_enable`）：** 每次启动建一个运行目录 `<debug_log_dir>/run_<时间>/`，事件一行一个写入 `events.jsonl`，第一行是生效参数和本模块的提交号。写盘在后台线程，写失败时停止写日志并告警 `DEBUG_LOG_FAILED`，返航不受影响。逐拍记录、保留策略和查看脚本在 R7 加入。
-- **规划导出（`debug_enable_csv_dump`、`debug_enable_rviz_publish`）：** 规划成功后在规划线程把录制点和采样轨迹写入 `~/.ros/backtrack_debug/` 的 CSV（`scripts/plot_debug_csv.py` 绘图），并发布到可视化话题。CSV 改写到调试日志的运行目录在 R7 实现。
+- **状态话题 `/px4_backtrack/status`：** 见第 2.2 节。
+- **调试日志（`debug_log_enable`）：** 每次启动建一个运行目录 `<debug_log_dir>/run_<时间>/`，只保留最近 `debug_log_keep_runs`（20）个（含本次，按目录名排序，本次的目录不删除）。写盘在后台线程，写失败时停止写日志并告警 `DEBUG_LOG_FAILED`，返航不受影响。目录里有：
+  - `events.jsonl`：事件一行一个，第一行是生效参数和本模块、`trajectory_core` 的提交号（取不到为 unknown）；用 `scripts/analysis/show_debug_log.py <运行目录>` 按时间线查看，`-t` 按类型过滤、`-m` 只看某个任务；
+  - `trace.csv`（`debug_log_trace`，约 30 MB/小时）：每拍一行，条件快照的全部字段和本拍的上报状态、控制权、模式意图、setpoint 种类、告警位、实际 setpoint、`tick()` 耗时。可以用 PlotJuggler 打开；`application::parseTraceRow()` 解析后逐拍回放到 `ReturnStateMachine::step()`，复现当时的决策（S31）；
+  - `plan_<n>_input.csv`、`plan_<n>_trajectory.csv`：第 n 次规划的输入和采样轨迹（提交规划的事件带 `plan=<n>`），`scripts/plot_debug_csv.py --dir <运行目录>` 绘图。
+- **可视化（`debug_enable_rviz_publish`）：** 规划成功后发布录制点和返航轨迹。
+- **录包：** `roslaunch px4_backtrack_optimised backtrack.launch record_bag:=true [bag_dir:=<目录>]` 用 `rosbag record` 录输入、setpoint 和本模块的话题，默认写到 `~/.ros`，每 1 GB 分一个文件。
 
 ## 9. 与方案的差距
 
-按方案第 13 节，以下内容尚未实现：
-
-| 阶段 | 内容 | 现在的表现 |
-| --- | --- | --- |
-| R7 | JSON 状态话题、调试日志的逐拍记录和保留策略、查看脚本、录包、规划 CSV 写到运行目录、启动时校验 `trajectory_core` 配置 | 告警只在事件中；日志目录不自动清理；规划 CSV 仍写到 `~/.ros/backtrack_debug/` |
+R1–R7 已实施。按方案第 13 节，剩下 R8：README、LLM_MAP、本文、前端对接和测试文档的定稿，部署说明（固定 `trajectory_core` 版本，D13），SITL 和实飞测试清单。之后按方案第 14.4 节做台架检查，再上实飞。
 
 ## 10. 真相来源
 
