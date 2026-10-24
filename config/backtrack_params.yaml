@@ -227,5 +227,5 @@ debug_log_dir: "~/Projects/backtrack_ws/debug/"
 # 保留的运行目录个数（含本次）；启动时删除更早的 run_* 目录
 debug_log_keep_runs: 20
 
-# 逐拍记录 trace.csv（约 40 MB/小时）：每拍的条件快照和输出，可用 PlotJuggler 打开，也可以回放到状态机
+# 逐拍记录 trace.csv（约 30 MB/小时）：每拍的条件快照和输出，可用 PlotJuggler 打开，也可以回放到状态机
 debug_log_trace: false
